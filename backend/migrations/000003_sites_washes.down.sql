@@ -1,0 +1,22 @@
+-- +migrate Down
+DROP INDEX IF EXISTS idx_wash_assignments_wash_user;
+DROP INDEX IF EXISTS idx_wash_assignments_user_id;
+DROP INDEX IF EXISTS idx_wash_assignments_wash_id;
+DROP TABLE IF EXISTS wash_assignments;
+DROP INDEX IF EXISTS idx_wash_items_service_id;
+DROP INDEX IF EXISTS idx_wash_items_wash_id;
+DROP TABLE IF EXISTS wash_items;
+DROP INDEX IF EXISTS idx_washes_idempotency_key;
+DROP INDEX IF EXISTS idx_washes_created_at;
+DROP INDEX IF EXISTS idx_washes_status;
+DROP INDEX IF EXISTS idx_washes_reference;
+DROP INDEX IF EXISTS idx_washes_site_id;
+DROP INDEX IF EXISTS idx_washes_organization_id;
+DROP TABLE IF EXISTS washes;
+DROP INDEX IF EXISTS idx_customers_organization_id;
+DROP TABLE IF EXISTS customers;
+DROP INDEX IF EXISTS idx_sites_organization_name;
+DROP INDEX IF EXISTS idx_sites_organization_id;
+DROP TABLE IF EXISTS sites;
+DROP TYPE IF EXISTS wash_payment_status;
+DROP TYPE IF EXISTS wash_status;

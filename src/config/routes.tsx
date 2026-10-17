@@ -16,7 +16,7 @@ export const routes: RouteObject[] = [
   // Root redirect to dashboard
   { path: "/", element: <Navigate to="/dashboard" replace /> },
   // WashPilot CI core routes
-  { path: "/dashboard", lazy: page(() => import("@/app/dashboard/page")) },
+  { path: "/dashboard", lazy: page(() => import("@/pages/dashboard")) },
   { path: "/onboarding", lazy: page(() => import("@/app/onboarding/page")) },
   { path: "/washes", lazy: page(() => import("@/app/washes/page")) },
   { path: "/cash-drawer", lazy: page(() => import("@/app/cash-drawer/page")) },

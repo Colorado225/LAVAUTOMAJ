@@ -1,0 +1,222 @@
+import * as React from "react"
+import { useNavigate } from "react-router-dom"
+import { useApi } from "@/lib/api"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Badge } from "@/components/ui/badge"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import type {
+  CatalogTemplate,
+  CustomService,
+  SelectedService,
+  ServicesData,
+} from "@/lib/onboarding-api"
+import { saveStage } from "./save-stage"
+import type { OnboardingWizardProps } from "./onboarding-wizard"
+
+const CATEGORY_LABELS: Record<string, string> = {
+  exterieur: "Extérieur",
+  interieur: "Intérieur",
+  complet: "Complet",
+  detailing: "Detailing",
+  "deux-roues": "Deux-roues",
+  utilitaire: "Utilitaire",
+}
+
+const formatXOF = (cents: number | null | undefined) =>
+  cents == null ? "—"
+    : `${(cents / 100).toLocaleString("fr-CI")} F CFA`
+
+export function ServicesStep({ progress, onDone }: OnboardingWizardProps) {
+  const navigate = useNavigate()
+  const saved = progress?.services_data
+  const { data: catalog, loading, error } = useApi<CatalogTemplate[]>(
+    "/api/v1/service-catalog"
+  )
+  const [selected, setSelected] = React.useState<SelectedService[]>(
+    saved?.selected ?? []
+  )
+  const [custom, setCustom] = React.useState<CustomService[]>(
+    saved?.custom ?? []
+  )
+  const [newName, setNewName] = React.useState("")
+  const [newPrice, setNewPrice] = React.useState("")
+  const [saving, setSaving] = React.useState(false)
+  const [serverError, setServerError] = React.useState<string | null>(null)
+
+  const grouped = React.useMemo(() => {
+    const map = new Map<string, CatalogTemplate[]>()
+    for (const t of catalog ?? []) {
+      const list = map.get(t.category) ?? []
+      list.push(t)
+      map.set(t.category, list)
+    }
+    return map
+  }, [catalog])
+
+  function toggle(t: CatalogTemplate) {
+    setSelected((prev) => {
+      const exists = prev.some((s) => s.template_id === t.id)
+      if (exists) return prev.filter((s) => s.template_id !== t.id)
+      return [...prev, { template_id: t.id, name: t.name, price_cents: t.price_cents }]
+    })
+  }
+
+  function addCustom() {
+    const name = newName.trim()
+    if (name.length < 2) return
+    if (custom.some((c) => c.name.toLowerCase() === name.toLowerCase())) return
+    const price = newPrice ? Math.round(parseFloat(newPrice) * 100) : null
+    setCustom((prev) => [...prev, { name, category: "autre", price_cents: price }])
+    setNewName("")
+    setNewPrice("")
+  }
+
+  async function save(quit: boolean) {
+    if (quit) {
+      navigate("/dashboard")
+      return
+    }
+    setSaving(true)
+    setServerError(null)
+    try {
+      const res = await saveStage("services", {
+        selected,
+        custom,
+      } satisfies ServicesData)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || `Erreur ${res.status}`)
+      }
+      onDone()
+    } catch (err) {
+      setServerError(err instanceof Error ? err.message : "Erreur inconnue")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Catalogue de services</CardTitle>
+        <CardDescription>
+          Sélectionnez les prestations que votre station propose. Vous pourrez
+          les modifier à tout moment.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-6">
+        {loading && (
+          <div className="grid gap-3 md:grid-cols-2">
+            {[...Array(6)].map((_, i) => (
+              <Skeleton key={i} className="h-12 w-full" />
+            ))}
+          </div>
+        )}
+        {error && <p className="text-destructive text-sm">{error}</p>}
+
+        {[...grouped.entries()].map(([category, items]) => (
+          <div key={category} className="flex flex-col gap-2">
+            <p className="text-sm font-medium text-muted-foreground">
+              {CATEGORY_LABELS[category] ?? category}
+            </p>
+            <div className="grid gap-2 md:grid-cols-2">
+              {items.map((t) => {
+                const checked = selected.some((s) => s.template_id === t.id)
+                return (
+                  <label
+                    key={t.id}
+                    className="flex items-center gap-3 rounded-lg border p-3 cursor-pointer hover:bg-muted/50 has-[[data-state=checked]]:border-primary"
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={() => toggle(t)}
+                    />
+                    <span className="flex-1 text-sm">{t.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {formatXOF(t.price_cents)}
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+
+        {/* « Autre service » : prestation personnalisée, exclusivement rattachée à la station (§5) */}
+        <div className="flex flex-col gap-2 rounded-lg border border-dashed p-4">
+          <p className="text-sm font-medium">Autre service</p>
+          <p className="text-xs text-muted-foreground">
+            Ajoutez une prestation propre à votre station (elle ne modifiera pas
+            le catalogue général).
+          </p>
+          <FieldGroup className="grid gap-2 md:grid-cols-[1fr_140px_auto]">
+            <Field>
+              <FieldLabel htmlFor="custom-name" className="sr-only">Nom du service</FieldLabel>
+              <Input
+                id="custom-name"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="Nom du service personnalisé"
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="custom-price" className="sr-only">Prix indicatif</FieldLabel>
+              <Input
+                id="custom-price"
+                inputMode="numeric"
+                value={newPrice}
+                onChange={(e) => setNewPrice(e.target.value)}
+                placeholder="Prix (F CFA)"
+              />
+            </Field>
+            <Button type="button" variant="outline" onClick={addCustom}>
+              Ajouter
+            </Button>
+          </FieldGroup>
+          {custom.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {custom.map((c, i) => (
+                <Badge key={i} variant="secondary" className="gap-1">
+                  {c.name}
+                  {c.price_cents != null && ` — ${formatXOF(c.price_cents)}`}
+                  <button
+                    type="button"
+                    aria-label={`Retirer ${c.name}`}
+                    className="ml-1 text-muted-foreground hover:text-foreground"
+                    onClick={() => setCustom((prev) => prev.filter((_, j) => j !== i))}
+                  >
+                    ×
+                  </button>
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {serverError && <p className="text-destructive text-sm">{serverError}</p>}
+
+        <div className="flex items-center justify-between gap-2">
+          <Button variant="ghost" onClick={() => save(true)} disabled={saving}>
+            Enregistrer et quitter
+          </Button>
+          <Button
+            onClick={() => save(false)}
+            disabled={saving || (selected.length === 0 && custom.length === 0)}
+          >
+            {saving ? "Enregistrement…" : "Continuer"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}

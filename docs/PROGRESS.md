@@ -41,19 +41,20 @@ Critère de validation PHASE 1 : un utilisateur authentifié ne peut accéder qu
 - [x] **Basic Dashboard** : Page `/dashboard` créée (placeholder, PHASE 3 affinera les indicateurs).
 - [-] **Responsive Design** : Tailwind mobile-first en place, à affiner sur les nouvelles pages.
 - [-] **UI States** : États chargement/erreur/liste vide à implémenter avec les fonctionnalités.
-- [-] **Clerk Login Pages** : Pages auth existantes (`sign-in`, `sign-up`, `forgot-password`) à intégrer avec Clerk SDK.
+- [-] **Clerk Login Pages** : ClerkProvider intégré (App.tsx), `.env` frontend créé avec `VITE_CLERK_PUBLISHABLE_KEY`, couche API `src/lib/api.ts` (`useApi` hook avec token Clerk).
 - [-] **Frontend Permissions** : Système de permissions frontend à mettre en place (PHASE 3+).
 
 Critère de validation PHASE 2 : build réussi, navigation stable, aucun lien majeur cassé. ✅ Vérifié.
 
 ## PHASE 3 — Catalogue et lavages
 
-[-] **Service Catalog** : Migration 000002 appliquée, modèles Go, stores et endpoints API implémentés (`GET/POST/PATCH/POST deactivate /api/v1/service-categories`, `GET/POST/PATCH/POST deactivate /api/v1/services`).
+[-] **Service Catalog** : Migration 000002 appliquée, modèles Go, stores et endpoints API implémentés (`GET/POST/PATCH/POST deactivate /api/v1/service-categories`, `GET/POST/PATCH/POST deactivate /api/v1/services`). Page frontend `/services` affichant le catalogue depuis l'API.
 - [x] Modèles Go : `VehicleCategory`, `ServiceCategory`, `Service`
 - [x] Stores : `vehicle_categories.go`, `service_categories.go`, `services.go`
 - [x] Endpoints API avec isolation par `organization_id` et vérification Clerk
-- [ ] Frontend : pages catalogue et formulaire de nouveau lavage à implémenter
-[-] **Vehicle Categories** : Même traitement que le service catalog (voir ci-dessus).
+- [x] Frontend : page `/services` consommant l'API via `useApi`
+- [x] Navigation : sidebar + command-search mis à jour
+[-] **Vehicle Categories** : Même traitement (voir ci-dessus). Page frontend `/vehicle-categories` créée.
 - [ ] **"New Wash" Form** : Créer le formulaire d'enregistrement d'un nouveau lavage.
 - [ ] **Wash History** : Afficher l'historique des lavages.
 - [ ] **Wash Details** : Afficher le détail d'un lavage.
@@ -63,12 +64,40 @@ Critère de validation PHASE 2 : build réussi, navigation stable, aucun lien ma
 
 ## PHASE 4 — Paiements et caisse
 
-- [ ] **Payment Recording** : Enregistrer les paiements.
-- [ ] **Cash Sessions** : Gérer les sessions de caisse (ouverture, clôture).
-- [ ] **Cash Movements** : Suivre les mouvements de caisse.
-- [ ] **Discrepancy Calculation** : Calculer et afficher les écarts de caisse.
-- [ ] **Expense Recording** : Enregistrer les dépenses.
-- [ ] **Financial History** : Afficher l'historique des opérations financières.
+[-] **Payment Recording** : Migration 000004 (`payments`) appliquée, modèle `Payment`, store `payment_store`, endpoints `GET/POST /api/v1/payments` avec isolation `organization_id`.
+- [x] Modèles Go : `Payment`, `PaymentMethod`, `PaymentStatus`
+- [x] Store : `payment_store.go`
+- [x] Endpoints API avec isolation et vérification Clerk
+
+[-] **Cash Sessions** : Migration 000004 (`cash_sessions`, `cash_movements`) appliquée, modèles `CashSession`, `CashMovement`, stores, endpoints `POST /cash-sessions/open`, `GET /cash-sessions/current`, `GET/POST /cash-sessions/{id}/movements`, `POST /cash-sessions/{id}/close`.
+- [x] Modèles Go : `CashSession`, `CashMovement`, `CashSessionStatus`, `CashMovementType`
+- [x] Stores : `cash_session_store.go`, `cash_movement_store.go`
+- [x] Endpoints API avec isolation (une session ouverte par site)
+
+[-] **Expense Recording** : Migration 000004 (`expenses`, `expense_categories`) appliquée, modèles `Expense`, `ExpenseCategory`, stores, endpoints `GET/POST/GET/POST /expenses`.
+- [x] Modèles Go : `Expense`, `ExpenseCategory`, `ExpenseStatus`
+- [x] Stores : `expense_category_store.go`, `expense_store.go`
+- [x] Endpoints API avec isolation
+
+[-] **Discrepancy Calculation** : Clôture calcule l'écart (compté - théorique) et le stocke.
+
+[-] **Frontend** : Pages `/cash-drawer`, `/expenses`, `/washes` créées, consommant l'API via `useApi` avec token Clerk.
+- [x] Page cash-drawer (sessions, soldes, écarts, mouvements)
+- [x] Page expenses (liste des dépenses)
+- [x] Page washes (liste des lavages)
+- [x] Navigation sidebar + command-search (Caisse, Dépenses, Lavages déjà présents)
+
+Critère de validation PHASE 4 : montants du rapport, encaissements et solde de caisse correspondent aux mêmes opérations sources sans double comptabilisation. ⬅️ En cours (tests à écrire).
+
+## PHASE 5 — Rapports et équipe
+
+- [ ] **Daily Reports** : Générer les rapports journaliers.
+- [ ] **Periodical Reports** : Générer les rapports par période (hebdomadaire, mensuel).
+- [ ] **Service Performance Reports** : Analyser la performance des prestations.
+- [ ] **Employee Performance Indicators** : Suivre la performance des employés.
+- [ ] **Report Filters** : Ajouter des filtres aux rapports.
+- [ ] **CSV Export** : Permettre l'export des données en CSV (selon les permissions).
+- [ ] **Team Management** : Gérer les collaborateurs.
 
 ## PHASE 5 — Rapports et équipe
 

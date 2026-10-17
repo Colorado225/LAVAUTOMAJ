@@ -3,6 +3,18 @@ import { useEffect, useState } from "react"
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080"
 
+/** Récupère un jeton de session Clerk (utilisé par les formulaires hors hook). */
+export async function getClerkToken(): Promise<string | null> {
+  // Clerk expose getToken via useAuth ; pour les composants hors provider hook,
+  // on passe par l'instance window.Clerk (injectée par clerk-react).
+  const clerk = (window as unknown as {
+    Clerk?: { session?: { getToken: () => Promise<string | null> } }
+  }).Clerk
+  return clerk?.session?.getToken() ?? null
+}
+
+export { API_BASE_URL }
+
 export interface UseApiResult<T> {
   data: T | null
   loading: boolean

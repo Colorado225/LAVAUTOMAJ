@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 	"washpilot-ci-backend/internal/config"
 	"washpilot-ci-backend/internal/database"
 	"washpilot-ci-backend/internal/logger"
@@ -20,36 +22,48 @@ import (
 )
 
 var (
-	ErrNoClaims      = errors.New("no claims in context")
+	ErrNoClaims       = errors.New("no claims in context")
 	ErrNoCustomClaims = errors.New("no custom claims")
-	ErrNoOrg         = errors.New("no org_id in claims")
-	ErrOrgNotFound   = errors.New("organization not found")
+	ErrNoOrg          = errors.New("no org_id in claims")
+	ErrOrgNotFound    = errors.New("organization not found")
 )
 
 type ApiServer struct {
-	listenAddr        string
-	db                *sqlx.DB
-	userStore         *stores.UserStore
-	organizationStore *stores.OrganizationStore
+	listenAddr           string
+	db                   *sqlx.DB
+	userStore            *stores.UserStore
+	organizationStore    *stores.OrganizationStore
 	vehicleCategoryStore *stores.VehicleCategoryStore
 	serviceCategoryStore *stores.ServiceCategoryStore
-	serviceStore       *stores.ServiceStore
-	config             *config.Config
-	logger             *slog.Logger
-	router             http.Handler
+	serviceStore         *stores.ServiceStore
+	paymentStore         *stores.PaymentStore
+	cashSessionStore     *stores.CashSessionStore
+	cashMovementStore    *stores.CashMovementStore
+	expenseCategoryStore *stores.ExpenseCategoryStore
+	expenseStore         *stores.ExpenseStore
+	onboardingStore      *stores.OnboardingStore
+	config               *config.Config
+	logger               *slog.Logger
+	router               http.Handler
 }
 
 func NewApiServer(listenAddr string, db *sqlx.DB, cfg *config.Config, logger *slog.Logger) *ApiServer {
 	server := &ApiServer{
-		listenAddr:        listenAddr,
-		db:                db,
-		userStore:         stores.NewUserStore(db),
-		organizationStore: stores.NewOrganizationStore(db),
+		listenAddr:           listenAddr,
+		db:                   db,
+		userStore:            stores.NewUserStore(db),
+		organizationStore:    stores.NewOrganizationStore(db),
 		vehicleCategoryStore: stores.NewVehicleCategoryStore(db),
 		serviceCategoryStore: stores.NewServiceCategoryStore(db),
-		serviceStore:       stores.NewServiceStore(db),
-		config:             cfg,
-		logger:             logger,
+		serviceStore:         stores.NewServiceStore(db),
+		paymentStore:         stores.NewPaymentStore(db),
+		cashSessionStore:     stores.NewCashSessionStore(db),
+		cashMovementStore:    stores.NewCashMovementStore(db),
+		expenseCategoryStore: stores.NewExpenseCategoryStore(db),
+		expenseStore:         stores.NewExpenseStore(db),
+		onboardingStore:      stores.NewOnboardingStore(db),
+		config:               cfg,
+		logger:               logger,
 	}
 	server.setupRouter()
 	return server
@@ -94,7 +108,35 @@ func (s *ApiServer) setupRouter() {
 		r.Patch("/services/{serviceID}", s.handleUpdateService)
 		r.Post("/services/{serviceID}/deactivate", s.handleDeactivateService)
 
+		// Payments
+		r.Get("/payments", s.handleListPayments)
+		r.Post("/payments", s.handleCreatePayment)
+
+		// Cash sessions
+		r.Post("/cash-sessions/open", s.handleOpenCashSession)
+		r.Get("/cash-sessions/current", s.handleGetCurrentCashSession)
+		r.Get("/cash-sessions/{sessionID}/movements", s.handleListCashMovements)
+		r.Post("/cash-sessions/{sessionID}/movements", s.handleAddCashMovement)
+		r.Post("/cash-sessions/{sessionID}/close", s.handleCloseCashSession)
+
+		// Expenses
+		r.Get("/expenses", s.handleListExpenses)
+		r.Post("/expenses", s.handleCreateExpense)
+		r.Get("/expenses/{expenseID}", s.handleGetExpense)
+		r.Post("/expenses/{expenseID}/cancel", s.handleCancelExpense)
+
 		r.Get("/users", s.handleListUsers)
+		r.Get("/dashboard/metrics", s.handleGetDashboardMetrics)
+
+		// Onboarding (docs/WORKFLOW.md)
+		r.Get("/onboarding/status", s.handleOnboardingStatus)
+		r.Get("/onboarding/progress", s.handleGetOnboardingProgress)
+		r.Put("/onboarding/progress", s.handleSaveOnboardingProgress)
+		r.Get("/onboarding/summary", s.handleOnboardingSummary)
+		r.Post("/onboarding/confirm", s.handleConfirmOnboarding)
+		r.Get("/plans", s.handleListPlans)
+		r.Get("/service-catalog", s.handleListServiceCatalog)
+		r.Get("/workers", s.handleListWorkers)
 
 		// Admin-only routes
 		r.Group(func(r chi.Router) {
@@ -106,6 +148,71 @@ func (s *ApiServer) setupRouter() {
 	})
 
 	s.router = r
+}
+
+func (s *ApiServer) handleGetDashboardMetrics(w http.ResponseWriter, r *http.Request) {
+	claims, ok := clerk.SessionClaimsFromContext(r.Context())
+	if !ok {
+		s.logger.Error("could not retrieve claims from context")
+		http.Error(w, "could not retrieve claims", http.StatusInternalServerError)
+		return
+	}
+
+	customClaims, ok := claims.Custom.(map[string]interface{})
+	if !ok {
+		s.logger.Error("could not assert custom claims")
+		http.Error(w, "could not assert custom claims", http.StatusInternalServerError)
+		return
+	}
+
+	orgID, ok := customClaims["org_id"]
+	if !ok {
+		s.logger.Warn("user is not part of an organization", "user_id", claims.Subject)
+		http.Error(w, "user is not part of an organization", http.StatusForbidden)
+		return
+	}
+	clerkOrgID := orgID.(string)
+	if clerkOrgID == "" {
+		s.logger.Warn("user is not part of an organization", "user_id", claims.Subject)
+		http.Error(w, "user is not part of an organization", http.StatusForbidden)
+		return
+	}
+
+	org, err := s.organizationStore.GetByClerkID(r.Context(), clerkOrgID)
+	if err != nil {
+		s.logger.Error("failed to retrieve organization", "error", err, "clerk_org_id", clerkOrgID)
+		http.Error(w, "failed to retrieve organization", http.StatusInternalServerError)
+		return
+	}
+	if org == nil {
+		s.logger.Warn("organization not found in system", "clerk_org_id", clerkOrgID)
+		http.Error(w, "organization not found in system", http.StatusForbidden)
+		return
+	}
+
+	var totalOrders int
+	err = s.db.GetContext(r.Context(), &totalOrders, `SELECT COUNT(*) FROM orders WHERE organization_id = $1`, org.ID)
+	if err != nil {
+		s.logger.Error("failed to count orders", "error", err, "organization_id", org.ID)
+		http.Error(w, "failed to compute metrics", http.StatusInternalServerError)
+		return
+	}
+
+	var totalRevenue int
+	err = s.db.GetContext(r.Context(), &totalRevenue, `SELECT COALESCE(SUM(amount), 0) FROM orders WHERE organization_id = $1 AND status = 'completed'`, org.ID)
+	if err != nil {
+		s.logger.Error("failed to sum revenue", "error", err, "organization_id", org.ID)
+		http.Error(w, "failed to compute metrics", http.StatusInternalServerError)
+		return
+	}
+
+	metrics := map[string]interface{}{
+		"total_orders":  totalOrders,
+		"total_revenue": totalRevenue,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(metrics)
 }
 
 func (s *ApiServer) Run() {
@@ -190,6 +297,65 @@ func (s *ApiServer) getOrganizationIDFromClaims(r *http.Request) (uuid.UUID, err
 		return uuid.Nil, ErrOrgNotFound
 	}
 	return org.ID, nil
+}
+
+// getOrgFromContext — résout l'organisation complète pour les handlers
+// d'onboarding, avec auto-provisionnement si l'org Clerk est inconnue en base
+// (première connexion : le workflow d'inscription doit toujours pouvoir démarrer).
+func (s *ApiServer) getOrgFromContext(w http.ResponseWriter, r *http.Request) (*models.Organization, bool) {
+	claims, ok := clerk.SessionClaimsFromContext(r.Context())
+	if !ok {
+		s.logger.Error("could not retrieve claims from context")
+		http.Error(w, "could not retrieve claims", http.StatusInternalServerError)
+		return nil, false
+	}
+	customClaims, ok := claims.Custom.(map[string]interface{})
+	if !ok {
+		s.logger.Error("could not assert custom claims")
+		http.Error(w, "could not assert custom claims", http.StatusInternalServerError)
+		return nil, false
+	}
+	clerkOrgID, ok := customClaims["org_id"]
+	if !ok || clerkOrgID == "" {
+		http.Error(w, "user is not part of an organization", http.StatusForbidden)
+		return nil, false
+	}
+	org, err := s.organizationStore.GetByClerkID(r.Context(), clerkOrgID.(string))
+	if err != nil {
+		s.logger.Error("failed to retrieve organization", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, false
+	}
+	if org == nil {
+		// Auto-provisionnement minimal — le nom sera affiné à l'étape 1 de
+		// l'onboarding. Aucune donnée métier n'est encore accessible.
+		org, err = s.onboardingStore.CreateOrganization(r.Context(), clerkOrgID.(string), "Nouvelle station")
+		if err != nil {
+			s.logger.Error("failed to auto-provision organization", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return nil, false
+		}
+	}
+	return org, true
+}
+
+// hasEntitlement vérifie si l'organisation possède la fonctionnalité donnée
+// selon son abonnement actif.
+func (s *ApiServer) hasEntitlement(ctx context.Context, orgID uuid.UUID, key string) bool {
+	sub, plan, err := s.onboardingStore.GetActiveSubscription(ctx, orgID)
+	if err != nil || sub == nil || plan == nil {
+		return false
+	}
+	switch sub.State {
+	case models.SubStateActive, models.SubStateTrialing:
+	default:
+		return false
+	}
+	var features map[string]bool
+	if err := json.Unmarshal(plan.Features, &features); err != nil {
+		return false
+	}
+	return features[key]
 }
 
 func (s *ApiServer) requireOrg(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
@@ -452,11 +618,11 @@ func (s *ApiServer) handleListServices(w http.ResponseWriter, r *http.Request) {
 }
 
 type createServiceRequest struct {
-	CategoryID     *string `json:"category_id"`
-	Name           string  `json:"name"`
-	PriceCents     int64   `json:"price_cents"`
+	CategoryID      *string `json:"category_id"`
+	Name            string  `json:"name"`
+	PriceCents      int64   `json:"price_cents"`
 	DurationMinutes *int    `json:"duration_minutes"`
-	IsActive       *bool   `json:"is_active"`
+	IsActive        *bool   `json:"is_active"`
 }
 
 func (s *ApiServer) handleCreateService(w http.ResponseWriter, r *http.Request) {
@@ -487,13 +653,13 @@ func (s *ApiServer) handleCreateService(w http.ResponseWriter, r *http.Request) 
 		isActive = *req.IsActive
 	}
 	svc := &models.Service{
-		ID:             uuid.New(),
-		OrganizationID: orgID,
-		CategoryID:     categoryID,
-		Name:           req.Name,
-		PriceCents:     req.PriceCents,
+		ID:              uuid.New(),
+		OrganizationID:  orgID,
+		CategoryID:      categoryID,
+		Name:            req.Name,
+		PriceCents:      req.PriceCents,
 		DurationMinutes: req.DurationMinutes,
-		IsActive:       isActive,
+		IsActive:        isActive,
 	}
 	if err := s.serviceStore.Create(r.Context(), svc); err != nil {
 		s.logger.Error("failed to create service", "error", err, "organization_id", orgID)
@@ -506,11 +672,11 @@ func (s *ApiServer) handleCreateService(w http.ResponseWriter, r *http.Request) 
 }
 
 type updateServiceRequest struct {
-	CategoryID     *string `json:"category_id"`
-	Name           string  `json:"name"`
-	PriceCents     int64   `json:"price_cents"`
+	CategoryID      *string `json:"category_id"`
+	Name            string  `json:"name"`
+	PriceCents      int64   `json:"price_cents"`
 	DurationMinutes *int    `json:"duration_minutes"`
-	IsActive       *bool   `json:"is_active"`
+	IsActive        *bool   `json:"is_active"`
 }
 
 func (s *ApiServer) handleUpdateService(w http.ResponseWriter, r *http.Request) {
@@ -584,6 +750,469 @@ func (s *ApiServer) handleDeactivateService(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ---------- Payments ----------
+
+type createPaymentRequest struct {
+	WashID      *string `json:"wash_id"`
+	AmountCents int64   `json:"amount_cents"`
+	Method      string  `json:"method"`
+	Reference   *string `json:"reference"`
+	ReceivedAt  *string `json:"received_at"`
+}
+
+func (s *ApiServer) handleListPayments(w http.ResponseWriter, r *http.Request) {
+	orgID, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	items, err := s.paymentStore.ListByOrganization(r.Context(), orgID)
+	if err != nil {
+		s.logger.Error("failed to list payments", "error", err, "organization_id", orgID)
+		http.Error(w, "failed to list payments", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(items)
+}
+
+func (s *ApiServer) handleCreatePayment(w http.ResponseWriter, r *http.Request) {
+	orgID, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	var req createPaymentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.AmountCents <= 0 {
+		http.Error(w, "amount_cents must be positive", http.StatusBadRequest)
+		return
+	}
+	method := models.PaymentMethod(req.Method)
+	switch method {
+	case models.PaymentMethodCash, models.PaymentMethodOrangeMoney, models.PaymentMethodMTNMoMo, models.PaymentMethodMoovMoney, models.PaymentMethodWave, models.PaymentMethodOther:
+	default:
+		http.Error(w, "invalid payment method", http.StatusBadRequest)
+		return
+	}
+	var washID *uuid.UUID
+	if req.WashID != nil && *req.WashID != "" {
+		wid, err := uuid.Parse(*req.WashID)
+		if err != nil {
+			http.Error(w, "invalid wash ID", http.StatusBadRequest)
+			return
+		}
+		washID = &wid
+	}
+	p := &models.Payment{
+		ID:             uuid.New(),
+		OrganizationID: orgID,
+		WashID:         washID,
+		AmountCents:    req.AmountCents,
+		Method:         method,
+		Status:         models.PaymentStatusPending,
+		Reference:      req.Reference,
+		AuthorID:       orgID,
+	}
+	if err := s.paymentStore.Create(r.Context(), p); err != nil {
+		s.logger.Error("failed to create payment", "error", err, "organization_id", orgID)
+		http.Error(w, "failed to create payment", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(p)
+}
+
+// ---------- Cash sessions ----------
+
+type openCashSessionRequest struct {
+	SiteID             string `json:"site_id"`
+	OpeningAmountCents int64  `json:"opening_amount_cents"`
+}
+
+func (s *ApiServer) handleOpenCashSession(w http.ResponseWriter, r *http.Request) {
+	orgID, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	var req openCashSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	siteID, err := uuid.Parse(req.SiteID)
+	if err != nil {
+		http.Error(w, "invalid site ID", http.StatusBadRequest)
+		return
+	}
+	existing, err := s.cashSessionStore.GetOpenBySite(r.Context(), siteID)
+	if err != nil {
+		s.logger.Error("failed to check existing cash session", "error", err, "site_id", siteID)
+		http.Error(w, "failed to check existing cash session", http.StatusInternalServerError)
+		return
+	}
+	if existing != nil {
+		http.Error(w, "a cash session is already open for this site", http.StatusConflict)
+		return
+	}
+	cs := &models.CashSession{
+		ID:                      uuid.New(),
+		OrganizationID:          orgID,
+		SiteID:                  siteID,
+		UserID:                  orgID,
+		OpeningAmountCents:      req.OpeningAmountCents,
+		TheoreticalBalanceCents: req.OpeningAmountCents,
+		Status:                  models.CashSessionStatusOpen,
+	}
+	if err := s.cashSessionStore.Create(r.Context(), cs); err != nil {
+		s.logger.Error("failed to open cash session", "error", err, "organization_id", orgID)
+		http.Error(w, "failed to open cash session", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(cs)
+}
+
+func (s *ApiServer) handleGetCurrentCashSession(w http.ResponseWriter, r *http.Request) {
+	_, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	siteID := r.URL.Query().Get("site_id")
+	if siteID == "" {
+		http.Error(w, "site_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+	sid, err := uuid.Parse(siteID)
+	if err != nil {
+		http.Error(w, "invalid site ID", http.StatusBadRequest)
+		return
+	}
+	cs, err := s.cashSessionStore.GetOpenBySite(r.Context(), sid)
+	if err != nil {
+		s.logger.Error("failed to get current cash session", "error", err, "site_id", sid)
+		http.Error(w, "failed to get current cash session", http.StatusInternalServerError)
+		return
+	}
+	if cs == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"message": "no open cash session for this site"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cs)
+}
+
+type addCashMovementRequest struct {
+	Type        string  `json:"type"`
+	AmountCents int64   `json:"amount_cents"`
+	Source      string  `json:"source"`
+	ReferenceID *string `json:"reference_id"`
+	Description *string `json:"description"`
+}
+
+func (s *ApiServer) handleAddCashMovement(w http.ResponseWriter, r *http.Request) {
+	orgID, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	sessionID := chi.URLParam(r, "sessionID")
+	id, err := uuid.Parse(sessionID)
+	if err != nil {
+		http.Error(w, "invalid session ID", http.StatusBadRequest)
+		return
+	}
+	var req addCashMovementRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	movType := models.CashMovementType(req.Type)
+	switch movType {
+	case models.CashMovementTypeEntry, models.CashMovementTypeExit:
+	default:
+		http.Error(w, "invalid movement type", http.StatusBadRequest)
+		return
+	}
+	if req.AmountCents <= 0 {
+		http.Error(w, "amount_cents must be positive", http.StatusBadRequest)
+		return
+	}
+	var refID *uuid.UUID
+	if req.ReferenceID != nil && *req.ReferenceID != "" {
+		rid, err := uuid.Parse(*req.ReferenceID)
+		if err != nil {
+			http.Error(w, "invalid reference ID", http.StatusBadRequest)
+			return
+		}
+		refID = &rid
+	}
+	cm := &models.CashMovement{
+		ID:             uuid.New(),
+		OrganizationID: orgID,
+		CashSessionID:  id,
+		Type:           movType,
+		AmountCents:    req.AmountCents,
+		Source:         req.Source,
+		ReferenceID:    refID,
+		Description:    req.Description,
+		AuthorID:       orgID,
+	}
+	if err := s.cashMovementStore.Create(r.Context(), cm); err != nil {
+		s.logger.Error("failed to add cash movement", "error", err, "organization_id", orgID)
+		http.Error(w, "failed to add cash movement", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(cm)
+}
+
+type closeCashSessionRequest struct {
+	CountedAmountCents int64   `json:"counted_amount_cents"`
+	DiscrepancyReason  *string `json:"discrepancy_reason"`
+}
+
+func (s *ApiServer) handleCloseCashSession(w http.ResponseWriter, r *http.Request) {
+	orgID, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	sessionID := chi.URLParam(r, "sessionID")
+	id, err := uuid.Parse(sessionID)
+	if err != nil {
+		http.Error(w, "invalid session ID", http.StatusBadRequest)
+		return
+	}
+	var req closeCashSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	cs, err := s.cashSessionStore.GetByID(r.Context(), id)
+	if err != nil {
+		s.logger.Error("failed to get cash session", "error", err, "cash_session_id", id)
+		http.Error(w, "failed to get cash session", http.StatusInternalServerError)
+		return
+	}
+	if cs == nil || cs.OrganizationID != orgID {
+		http.Error(w, "cash session not found", http.StatusNotFound)
+		return
+	}
+	if cs.Status == models.CashSessionStatusClosed {
+		http.Error(w, "cash session already closed", http.StatusConflict)
+		return
+	}
+	now := time.Now()
+	cs.CountedAmountCents = &req.CountedAmountCents
+	if req.CountedAmountCents != cs.TheoreticalBalanceCents {
+		diff := req.CountedAmountCents - cs.TheoreticalBalanceCents
+		cs.DiscrepancyCents = &diff
+		cs.DiscrepancyReason = req.DiscrepancyReason
+	}
+	cs.Status = models.CashSessionStatusClosed
+	cs.ClosedAt = &now
+	cs.ClosedByID = &orgID
+	if err := s.cashSessionStore.Update(r.Context(), cs); err != nil {
+		s.logger.Error("failed to close cash session", "error", err, "cash_session_id", id)
+		http.Error(w, "failed to close cash session", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cs)
+}
+
+func (s *ApiServer) handleListCashMovements(w http.ResponseWriter, r *http.Request) {
+	orgID, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	sessionID := chi.URLParam(r, "sessionID")
+	id, err := uuid.Parse(sessionID)
+	if err != nil {
+		http.Error(w, "invalid session ID", http.StatusBadRequest)
+		return
+	}
+	items, err := s.cashMovementStore.ListBySession(r.Context(), id)
+	if err != nil {
+		s.logger.Error("failed to list cash movements", "error", err, "cash_session_id", id)
+		http.Error(w, "failed to list cash movements", http.StatusInternalServerError)
+		return
+	}
+	// Filtrer par organisation pour l'isolation
+	var filtered []models.CashMovement
+	for _, m := range items {
+		if m.OrganizationID == orgID {
+			filtered = append(filtered, m)
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(filtered)
+}
+
+// ---------- Expenses ----------
+
+type createExpenseRequest struct {
+	SiteID        *string `json:"site_id"`
+	Category      string  `json:"category"`
+	AmountCents   int64   `json:"amount_cents"`
+	ExpenseDate   *string `json:"expense_date"`
+	PaymentMethod string  `json:"payment_method"`
+	Beneficiary   *string `json:"beneficiary"`
+	Description   *string `json:"description"`
+	Reference     *string `json:"reference"`
+	CashSessionID *string `json:"cash_session_id"`
+}
+
+func (s *ApiServer) handleListExpenses(w http.ResponseWriter, r *http.Request) {
+	orgID, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	items, err := s.expenseStore.ListByOrganization(r.Context(), orgID)
+	if err != nil {
+		s.logger.Error("failed to list expenses", "error", err, "organization_id", orgID)
+		http.Error(w, "failed to list expenses", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(items)
+}
+
+func (s *ApiServer) handleCreateExpense(w http.ResponseWriter, r *http.Request) {
+	orgID, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	var req createExpenseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Category == "" {
+		http.Error(w, "category is required", http.StatusBadRequest)
+		return
+	}
+	if req.AmountCents <= 0 {
+		http.Error(w, "amount_cents must be positive", http.StatusBadRequest)
+		return
+	}
+	method := models.PaymentMethod(req.PaymentMethod)
+	switch method {
+	case models.PaymentMethodCash, models.PaymentMethodOrangeMoney, models.PaymentMethodMTNMoMo, models.PaymentMethodMoovMoney, models.PaymentMethodWave, models.PaymentMethodOther:
+	default:
+		http.Error(w, "invalid payment method", http.StatusBadRequest)
+		return
+	}
+	var siteID *uuid.UUID
+	if req.SiteID != nil && *req.SiteID != "" {
+		sid, err := uuid.Parse(*req.SiteID)
+		if err != nil {
+			http.Error(w, "invalid site ID", http.StatusBadRequest)
+			return
+		}
+		siteID = &sid
+	}
+	var expenseDate time.Time
+	if req.ExpenseDate != nil && *req.ExpenseDate != "" {
+		ed, err := time.Parse("2006-01-02", *req.ExpenseDate)
+		if err != nil {
+			http.Error(w, "invalid expense_date (YYYY-MM-DD)", http.StatusBadRequest)
+			return
+		}
+		expenseDate = ed
+	} else {
+		expenseDate = time.Now()
+	}
+	var cashSessionID *uuid.UUID
+	if req.CashSessionID != nil && *req.CashSessionID != "" {
+		csid, err := uuid.Parse(*req.CashSessionID)
+		if err != nil {
+			http.Error(w, "invalid cash_session_id", http.StatusBadRequest)
+			return
+		}
+		cashSessionID = &csid
+	}
+	e := &models.Expense{
+		ID:             uuid.New(),
+		OrganizationID: orgID,
+		SiteID:         siteID,
+		Category:       req.Category,
+		AmountCents:    req.AmountCents,
+		ExpenseDate:    expenseDate,
+		PaymentMethod:  method,
+		Beneficiary:    req.Beneficiary,
+		Description:    req.Description,
+		AuthorID:       orgID,
+		Reference:      req.Reference,
+		Status:         models.ExpenseStatusRecorded,
+		CashSessionID:  cashSessionID,
+	}
+	if err := s.expenseStore.Create(r.Context(), e); err != nil {
+		s.logger.Error("failed to create expense", "error", err, "organization_id", orgID)
+		http.Error(w, "failed to create expense", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(e)
+}
+
+func (s *ApiServer) handleGetExpense(w http.ResponseWriter, r *http.Request) {
+	orgID, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	expenseID := chi.URLParam(r, "expenseID")
+	id, err := uuid.Parse(expenseID)
+	if err != nil {
+		http.Error(w, "invalid expense ID", http.StatusBadRequest)
+		return
+	}
+	items, err := s.expenseStore.ListByOrganization(r.Context(), orgID)
+	if err != nil {
+		s.logger.Error("failed to list expenses for get", "error", err, "organization_id", orgID)
+		http.Error(w, "failed to get expense", http.StatusInternalServerError)
+		return
+	}
+	var found *models.Expense
+	for i := range items {
+		if items[i].ID == id {
+			found = &items[i]
+			break
+		}
+	}
+	if found == nil {
+		http.Error(w, "expense not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(found)
+}
+
+func (s *ApiServer) handleCancelExpense(w http.ResponseWriter, r *http.Request) {
+	orgID, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	expenseID := chi.URLParam(r, "expenseID")
+	id, err := uuid.Parse(expenseID)
+	if err != nil {
+		http.Error(w, "invalid expense ID", http.StatusBadRequest)
+		return
+	}
+	if err := s.expenseStore.Cancel(r.Context(), id, orgID); err != nil {
+		s.logger.Error("failed to cancel expense", "error", err, "organization_id", orgID)
+		http.Error(w, "failed to cancel expense", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func main() {
 	logger := logger.New("info")
 
@@ -600,7 +1229,14 @@ func main() {
 	}
 	defer conn.Close()
 
-	server := NewApiServer(":8080", conn, cfg, logger)
+	listenAddr := os.Getenv("PORT")
+	if listenAddr == "" {
+		listenAddr = ":8080"
+	}
+	if listenAddr[0] != ':' {
+		listenAddr = ":" + listenAddr
+	}
+	server := NewApiServer(listenAddr, conn, cfg, logger)
 	server.Run()
 }
 

@@ -17,7 +17,7 @@ CREATE TABLE users (
     first_name VARCHAR(100),
     last_name VARCHAR(100),
     email VARCHAR(255) UNIQUE NOT NULL,
-    role user_role NOT NULL DEFAULT 'employee',
+    role user_role NOT NULL DEFAULT 'washer',
     status user_status NOT NULL DEFAULT 'invited',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

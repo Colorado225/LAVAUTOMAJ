@@ -1,0 +1,123 @@
+import * as React from "react"
+import { useNavigate } from "react-router-dom"
+import { useApi } from "@/lib/api"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Check, Info } from "lucide-react"
+import { cn } from "@/lib/utils"
+import type { Plan } from "@/lib/onboarding-api"
+import { saveStage } from "./save-stage"
+import type { OnboardingWizardProps } from "./onboarding-wizard"
+
+const formatXOF = (cents: number) =>
+  cents === 0 ? "Gratuit" : `${(cents / 100).toLocaleString("fr-CI")} F CFA / mois`
+
+export function PlanStep({ progress, onDone }: OnboardingWizardProps) {
+  const navigate = useNavigate()
+  const { data: plans, loading, error } = useApi<Plan[]>("/api/v1/plans")
+  const [selectedCode, setSelectedCode] = React.useState<string | null>(
+    progress?.plan_code ?? null
+  )
+  const [saving, setSaving] = React.useState(false)
+  const [serverError, setServerError] = React.useState<string | null>(null)
+
+  async function save(quit: boolean) {
+    if (quit) {
+      navigate("/dashboard")
+      return
+    }
+    setSaving(true)
+    setServerError(null)
+    try {
+      // Le corps `data` n'est pas utilisé pour cette étape ; le plan_code
+      // porte la sélection. La validation serveur reste la source de vérité.
+      const res = await saveStage("plan", { plan: selectedCode }, selectedCode ?? undefined)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || `Erreur ${res.status}`)
+      }
+      onDone()
+    } catch (err) {
+      setServerError(err instanceof Error ? err.message : "Erreur inconnue")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Choisissez votre forfait</CardTitle>
+        <CardDescription>
+          Pour un forfait payant, la sélection n'est pas un paiement : votre
+          abonnement sera en attente de confirmation.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {loading && (
+          <div className="grid gap-4 md:grid-cols-3">
+            {[...Array(3)].map((_, i) => (
+              <Skeleton key={i} className="h-48 w-full" />
+            ))}
+          </div>
+        )}
+        {error && <p className="text-destructive text-sm">{error}</p>}
+
+        <div className="grid gap-4 md:grid-cols-3">
+          {(plans ?? []).map((p) => (
+            <button
+              key={p.code}
+              type="button"
+              onClick={() => setSelectedCode(p.code)}
+              className={cn(
+                "flex flex-col gap-3 rounded-lg border p-4 text-left transition-colors hover:bg-muted/50",
+                selectedCode === p.code && "border-primary bg-primary/5"
+              )}
+              aria-pressed={selectedCode === p.code}
+            >
+              <div className="flex items-center justify-between">
+                <p className="font-semibold">{p.name}</p>
+                {selectedCode === p.code && <Check className="size-4 text-primary" />}
+              </div>
+              <p className="text-sm text-muted-foreground">{p.description}</p>
+              <p className="text-lg font-bold">{formatXOF(p.price_cents)}</p>
+              <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
+                {p.features.map((f) => (
+                  <li key={f} className="flex items-center gap-1.5">
+                    <Check className="size-3 text-primary" /> {f}
+                  </li>
+                ))}
+              </ul>
+            </button>
+          ))}
+        </div>
+
+        {selectedCode && selectedCode !== "free" && (
+          <p className="flex items-start gap-2 rounded-lg bg-muted p-3 text-xs text-muted-foreground">
+            <Info className="mt-0.5 size-4 shrink-0" />
+            Votre abonnement {plans?.find((p) => p.code === selectedCode)?.name} sera
+            créé avec l'état « en attente ». Un administrateur validera le paiement.
+          </p>
+        )}
+
+        {serverError && <p className="text-destructive text-sm">{serverError}</p>}
+
+        <div className="flex items-center justify-between gap-2">
+          <Button variant="ghost" onClick={() => save(true)} disabled={saving}>
+            Enregistrer et quitter
+          </Button>
+          <Button onClick={() => save(false)} disabled={saving || !selectedCode}>
+            {saving ? "Enregistrement…" : "Continuer"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}

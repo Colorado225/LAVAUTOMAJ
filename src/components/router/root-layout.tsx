@@ -1,6 +1,7 @@
-import { Outlet, useNavigation } from "react-router-dom"
-
+import { Outlet, useNavigation, Navigate } from "react-router-dom"
+import { SignedIn, SignedOut } from "@clerk/clerk-react"
 import { LoadingSpinner } from "@/components/ui/loading-spinner"
+import { OnboardingGate } from "@/components/router/onboarding-gate"
 
 /** Thin top bar shown while the next route's code is loading. */
 function RouteProgress() {
@@ -20,7 +21,19 @@ export function RootLayout() {
   return (
     <>
       {navigation.state === "loading" && <RouteProgress />}
-      <Outlet />
+      {/*
+        Garde d'authentification globale (§2-§3 du WORKFLOW) : un visiteur
+        non connecté est renvoyé vers la connexion ; un compte non configuré
+        est renvoyé vers l'onboarding par OnboardingGate.
+      */}
+      <SignedOut>
+        <Navigate to="/auth/sign-in" replace />
+      </SignedOut>
+      <SignedIn>
+        <OnboardingGate>
+          <Outlet />
+        </OnboardingGate>
+      </SignedIn>
     </>
   )
 }

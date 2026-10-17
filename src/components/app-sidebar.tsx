@@ -15,6 +15,7 @@ import {
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { Logo } from "@/components/logo"
+import { useOnboardingStatus } from "@/lib/onboarding-api"
 import { SidebarNotification } from "@/components/sidebar-notification"
 
 import { NavMain } from "@/components/nav-main"
@@ -143,6 +144,11 @@ const data = {
 }
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  // Dashboard dynamique (§10 du WORKFLOW) : nom réel de la station depuis le
+  // serveur ; repli discret tant que la station n'est pas configurée.
+  const { data: status } = useOnboardingStatus()
+  const stationName = status?.station?.name ?? status?.org_name ?? "WashPilot CI"
+  const stationCity = status?.station?.city
   return (
     <Sidebar {...props}>
       <SidebarHeader>
@@ -153,8 +159,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 <Logo size={24} className="text-current" />
               </div>
               <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-medium">WashPilot CI</span>
-                <span className="truncate text-xs">Gestion de station de lavage</span>
+                <span className="truncate font-medium">{stationName}</span>
+                <span className="truncate text-xs">
+                  {stationCity ?? "Gestion de station de lavage"}
+                </span>
               </div>
             </SidebarMenuButton>
           </SidebarMenuItem>

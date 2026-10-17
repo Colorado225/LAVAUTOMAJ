@@ -1,12 +1,16 @@
 package main
 
 import (
+	"log"
 	"os"
 	"testing"
 	"washpilot-ci-backend/internal/config"
 	"washpilot-ci-backend/internal/database"
 	"washpilot-ci-backend/internal/logger"
 
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -23,12 +27,22 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	// Here, you would typically connect to a separate test database.
-	// For now, we'll use the same one, but this should be changed.
 	testDB, err = database.Connect(cfg.DatabaseURL)
 	if err != nil {
 		logger.Error("Failed to connect to test database", "error", err)
 		os.Exit(1)
+	}
+
+	migPath := "file://" + mustRepoMigrationsPath()
+	mig, err := migrate.New(
+		migPath,
+		cfg.DatabaseURL,
+	)
+	if err != nil {
+		log.Fatalf("could not create migrate instance: %v", err)
+	}
+	if err := mig.Up(); err != nil && err != migrate.ErrNoChange {
+		log.Fatalf("could not run up migrations: %v", err)
 	}
 
 	testServer = NewApiServer(":8081", testDB, cfg, logger)
@@ -37,6 +51,17 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 
 	// Teardown
+	// ⚠️ SÉCURITÉ : pas de mig.Down() ici. Le teardown destructeur a déjà
+	// supprimé toutes les tables de la base configurée lors d'un précédent
+	// run. Les tests s'exécutent contre la base de l'environnement : ne
+	// jamais y exécuter de migration descendante. Le nettoyage éventuel se
+	// fait par un TEST_DATABASE_URL dédié et un outil de reset explicite.
+	if os.Getenv("ALLOW_MIGRATION_DOWN") == "1" {
+		if err := mig.Down(); err != nil && err != migrate.ErrNoChange {
+			log.Fatalf("could not run down migrations: %v", err)
+		}
+	}
+
 	testDB.Close()
 	os.Exit(code)
 }
