@@ -1,113 +1,146 @@
-"use client"
+import { motion, useReducedMotion } from "framer-motion"
+import { ArrowDown, ArrowRight, CarFront, Check, MapPin, Smartphone, WalletCards } from "lucide-react"
+import { Link } from "react-router-dom"
 
-import { ArrowRight, Play, Star } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { DotPattern } from "@/components/dot-pattern"
-import { assetUrl, getAppUrl } from "@/lib/utils"
+const reassurance = [
+  "Simple à utiliser",
+  "Pensé pour le terrain ivoirien",
+  "Accessible sur téléphone",
+]
 
 export function HeroSection() {
+  const motionPreference = useReducedMotion()
+  const reduceMotion = motionPreference !== false
+
   return (
-    <section
-      id="hero"
-      className="relative overflow-hidden bg-gradient-to-b from-background to-background/80 pt-16 sm:pt-20 pb-16"
-    >
-      {/* Background Pattern */}
-      <div className="absolute inset-0">
-        {/* Dot pattern overlay using reusable component */}
-        <DotPattern className="opacity-100" size="md" fadeStyle="ellipse" />
-      </div>
-
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 relative">
-        <div className="mx-auto max-w-4xl text-center">
-          {/* Announcement Badge */}
-          <div className="mb-8 flex justify-center">
-            <Badge variant="outline" className="px-4 py-2 border-foreground">
-              <Star className="fill-current" />
-              New: Premium Template Collection
-              <ArrowRight />
-            </Badge>
+    <section id="hero" className="relative isolate overflow-hidden bg-[#081b38] text-white">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_78%_36%,rgba(37,99,235,0.35),transparent_42%)]" />
+      <div className="pointer-events-none absolute -left-28 top-20 size-80 rounded-full bg-blue-700/20 blur-3xl" />
+      <div className="relative mx-auto grid max-w-7xl items-center gap-12 px-4 pb-20 pt-14 sm:px-6 sm:pb-24 sm:pt-20 lg:grid-cols-[1.02fr_0.98fr] lg:gap-10 lg:px-8 lg:pb-28 lg:pt-20">
+        <motion.div
+          initial={reduceMotion ? false : { opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: reduceMotion ? 0 : 0.5, ease: "easeOut" }}
+          className="relative z-10"
+        >
+          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.07] px-4 py-2 text-[11px] font-bold uppercase tracking-[0.14em] text-blue-100 shadow-lg shadow-black/10 backdrop-blur sm:text-xs">
+            <MapPin className="size-3.5 text-sky-300" aria-hidden="true" />
+            Pour les gérants de stations de lavage
           </div>
-
-          {/* Main Headline */}
-          <h1 className="mb-6 text-4xl font-bold tracking-tight sm:text-6xl lg:text-7xl">
-            Build Better
-            <span className="bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-              {" "}
-              Web Applications{" "}
+          <p className="mb-4 max-w-[55ch] text-xs font-semibold leading-5 text-sky-200 sm:text-sm">
+            La solution de gestion pensée pour les stations de lavage en Côte d’Ivoire
+          </p>
+          <h1 className="max-w-[17ch] text-[2.35rem] font-extrabold leading-[1.04] tracking-[-0.055em] text-balance sm:text-5xl lg:text-[3.65rem]">
+            Vous lavez des voitures toute la journée. Mais savez-vous vraiment{" "}
+            <span className="bg-gradient-to-r from-sky-200 via-blue-200 to-white bg-clip-text text-transparent">
+              combien vous gagnez ?
             </span>
-            with Ready-Made Components
           </h1>
-
-          {/* Subheading */}
-          <p className="mx-auto mb-10 max-w-2xl text-lg text-muted-foreground sm:text-xl">
-            Accelerate your development with our curated collection of blocks,
-            templates, landing pages, and admin dashboards. From free components
-            to complete solutions, built with shadcn/ui.
+          <p className="mt-4 text-sm font-extrabold text-sky-200 sm:text-base">
+            Plus de contrôle. Moins de zones d’ombre. Une station mieux pilotée.
+          </p>
+          <p className="mt-5 max-w-[58ch] text-base leading-7 text-blue-100/80 sm:text-lg sm:leading-8">
+            Gérez vos lavages, suivez vos recettes et gardez vos dépenses en vue avec une application simple, accessible depuis votre téléphone.
+          </p>
+          <p className="mt-3 max-w-[58ch] text-sm leading-6 text-blue-100/65">
+            Plus de contrôle sur vos opérations, sans promesse de gains miracles : des repères clairs à partir des données que vous enregistrez.
           </p>
 
-          {/* CTA Buttons */}
-          <div className="flex flex-col gap-4 sm:flex-row sm:justify-center">
-            <Button
-              size="lg"
-              className="text-base cursor-pointer"
-              nativeButton={false}
-              render={<a href={getAppUrl("/auth/sign-up")} />}
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <Link
+              to="/auth/sign-up"
+              className="group inline-flex min-h-[54px] items-center justify-center gap-2 rounded-2xl bg-white px-6 text-sm font-extrabold text-[#0b2a55] shadow-xl shadow-black/20 transition duration-200 hover:-translate-y-0.5 hover:bg-blue-50 hover:shadow-2xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white/35 motion-reduce:transition-none"
             >
-              Get Started Free
-              <ArrowRight data-icon="inline-end" />
-            </Button>
-            <Button
-              variant="outline"
-              size="lg"
-              className="text-base cursor-pointer"
-              nativeButton={false}
-              render={<a href="#" />}
+              Je veux reprendre le contrôle de mes recettes
+              <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" aria-hidden="true" />
+            </Link>
+            <a
+              href="#comment-ca-marche"
+              className="inline-flex min-h-[50px] items-center justify-center gap-2 rounded-2xl border border-white/20 px-5 text-sm font-semibold text-white transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white/25 motion-reduce:transition-none"
             >
-              <Play data-icon="inline-start" />
-              Watch Demo
-            </Button>
+              Découvrir comment ça marche <ArrowDown className="size-4" aria-hidden="true" />
+            </a>
           </div>
-        </div>
 
-        {/* Hero Image/Visual */}
-        <div className="mx-auto mt-20 max-w-6xl">
-          <div className="relative group">
-            {/* Top background glow effect - positioned above the image */}
-            <div className="absolute top-2 lg:-top-8 left-1/2 transform -translate-x-1/2 w-[90%] mx-auto h-24 lg:h-80 bg-primary/50 rounded-full blur-3xl"></div>
+          <ul className="mt-7 flex flex-col gap-2.5 text-xs font-medium text-blue-100/75 sm:flex-row sm:flex-wrap sm:gap-x-5 sm:gap-y-3 sm:text-[13px]">
+            {reassurance.map((item) => (
+              <li key={item} className="flex items-center gap-2">
+                <span className="grid size-4 place-items-center rounded-full bg-emerald-400/15 text-emerald-300">
+                  <Check className="size-3" aria-hidden="true" />
+                </span>
+                {item}
+              </li>
+            ))}
+          </ul>
+        </motion.div>
 
-            <div className="relative rounded-xl border bg-card shadow-2xl">
-              {/* Light mode dashboard image */}
-              <img
-                src={assetUrl("dashboard-light.png")}
-                alt="Dashboard Preview - Light Mode"
-                className="w-full rounded-xl object-cover block dark:hidden"
-              />
+        <motion.div
+          initial={reduceMotion ? false : { opacity: 0, scale: 0.98, y: 10 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ duration: reduceMotion ? 0 : 0.58, delay: reduceMotion ? 0 : 0.08, ease: "easeOut" }}
+          className="relative mx-auto w-full max-w-[610px] lg:mx-0"
+        >
+          <div className="absolute -inset-4 rounded-[34px] bg-blue-500/20 blur-2xl" />
+          <div className="relative aspect-[4/3] overflow-hidden rounded-[28px] border border-white/15 bg-[#12315b] shadow-[0_30px_90px_rgba(0,0,0,0.38)] sm:aspect-[5/4]">
+            <img
+              src="/images/wash-station.jpg"
+              alt="Une équipe travaille dans une station de lavage moderne en Côte d’Ivoire."
+              className="absolute inset-0 size-full object-cover"
+              loading="eager"
+              decoding="async"
+            />
+            <div className="absolute inset-0 bg-gradient-to-br from-[#071a36]/10 via-[#071a36]/5 to-[#071a36]/75" />
+            <div className="absolute left-4 right-4 top-4 flex items-center justify-between gap-2 sm:left-6 sm:right-6 sm:top-6">
+              <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-[#0b2145]/45 px-3 py-2 text-[10px] font-bold text-white shadow-lg backdrop-blur-xl sm:text-xs">
+                <MapPin className="size-3.5 text-sky-200" aria-hidden="true" />
+                Abidjan · Côte d’Ivoire
+              </span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/15 px-3 py-2 text-[10px] font-bold text-white backdrop-blur-xl sm:text-xs">
+                <Smartphone className="size-3.5" aria-hidden="true" />
+                Mobile & ordinateur
+              </span>
+            </div>
 
-              {/* Dark mode dashboard image */}
-              <img
-                src={assetUrl("dashboard-dark.png")}
-                alt="Dashboard Preview - Dark Mode"
-                className="w-full rounded-xl object-cover hidden dark:block"
-              />
-
-              {/* Bottom fade effect - gradient overlay that fades the image to background */}
-              <div className="absolute bottom-0 left-0 w-full h-32 md:h-40 lg:h-48 bg-gradient-to-b from-background/0 via-background/70 to-background rounded-b-xl"></div>
-
-              {/* Overlay play button for demo */}
-              <div className="absolute inset-0 flex items-center justify-center">
-                <Button
-                  size="lg"
-                  className="rounded-full size-16 p-0 cursor-pointer hover:scale-105 transition-transform"
-                  nativeButton={false}
-                  render={<a href="#" aria-label="Watch demo video" />}
-                >
-                  <Play className="size-6 fill-current" />
-                </Button>
+            <div className="absolute bottom-4 left-4 right-4 rounded-2xl border border-white/25 bg-white/90 p-4 text-[#102342] shadow-2xl shadow-blue-950/25 backdrop-blur-xl sm:bottom-6 sm:left-6 sm:right-6 sm:p-5">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs font-bold text-[#102342] sm:text-sm">
+                  <span className="grid size-8 place-items-center rounded-xl bg-blue-50 text-blue-700">
+                    <WalletCards className="size-4" aria-hidden="true" />
+                  </span>
+                  Un aperçu de votre activité
+                </div>
+                <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wide text-amber-700 sm:text-[10px]">
+                  Exemple
+                </span>
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-slate-100 bg-white p-3">
+                  <div className="flex items-center gap-1.5 text-[10px] font-medium text-slate-500 sm:text-xs">
+                    <CarFront className="size-3.5 text-blue-600" aria-hidden="true" />
+                    Lavages enregistrés
+                  </div>
+                  <p className="mt-1.5 text-lg font-extrabold tracking-tight text-[#102342] sm:text-xl">24</p>
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-white p-3">
+                  <div className="flex items-center gap-1.5 text-[10px] font-medium text-slate-500 sm:text-xs">
+                    <WalletCards className="size-3.5 text-emerald-600" aria-hidden="true" />
+                    Recettes confirmées
+                  </div>
+                  <p className="mt-1.5 truncate text-lg font-extrabold tracking-tight text-[#102342] sm:text-xl">186 500 XOF</p>
+                </div>
+              </div>
+              <p className="mt-3 text-[9px] leading-4 text-slate-400 sm:text-[10px]">
+                Chiffres fictifs utilisés uniquement pour illustrer l’interface.
+              </p>
             </div>
           </div>
-        </div>
+          <div className="absolute -bottom-4 -right-2 hidden items-center gap-2 rounded-2xl border border-white/15 bg-[#0b2145]/80 px-4 py-3 text-xs font-semibold text-white shadow-xl backdrop-blur-xl sm:flex sm:-right-5">
+            <span className="grid size-8 place-items-center rounded-xl bg-sky-300/15 text-sky-200">
+              <CarFront className="size-4" aria-hidden="true" />
+            </span>
+            Lavages · Recettes · Caisse
+          </div>
+        </motion.div>
       </div>
     </section>
   )

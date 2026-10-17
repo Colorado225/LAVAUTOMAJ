@@ -19,6 +19,23 @@ import type { OnboardingWizardProps } from "./onboarding-wizard"
 const formatXOF = (cents: number) =>
   cents === 0 ? "Gratuit" : `${(cents / 100).toLocaleString("fr-CI")} F CFA / mois`
 
+const FEATURE_LABELS: Record<string, string> = {
+  "sites.multiple": "Gestion multi-stations",
+  "reports.advanced": "Rapports avancés",
+  "reports.export": "Export des rapports",
+  "employees.advanced": "Gestion avancée de l’équipe",
+  "cash.reconciliation": "Rapprochement de caisse",
+  "audit.advanced": "Journal d’audit avancé",
+  "analytics.consolidated": "Analyses consolidées",
+}
+
+function getPlanFeatures(features: Plan["features"]): string[] {
+  if (Array.isArray(features)) return features
+  return Object.entries(features)
+    .filter(([, enabled]) => enabled)
+    .map(([key]) => FEATURE_LABELS[key] ?? key)
+}
+
 export function PlanStep({ progress, onDone }: OnboardingWizardProps) {
   const navigate = useNavigate()
   const { data: plans, loading, error } = useApi<Plan[]>("/api/v1/plans")
@@ -89,7 +106,7 @@ export function PlanStep({ progress, onDone }: OnboardingWizardProps) {
               <p className="text-sm text-muted-foreground">{p.description}</p>
               <p className="text-lg font-bold">{formatXOF(p.price_cents)}</p>
               <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
-                {p.features.map((f) => (
+                {getPlanFeatures(p.features).map((f) => (
                   <li key={f} className="flex items-center gap-1.5">
                     <Check className="size-3 text-primary" /> {f}
                   </li>

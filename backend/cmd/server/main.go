@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 	"washpilot-ci-backend/internal/config"
 	"washpilot-ci-backend/internal/database"
@@ -33,6 +34,8 @@ type ApiServer struct {
 	db                   *sqlx.DB
 	userStore            *stores.UserStore
 	organizationStore    *stores.OrganizationStore
+	siteStore            *stores.SiteStore
+	washStore            *stores.WashStore
 	vehicleCategoryStore *stores.VehicleCategoryStore
 	serviceCategoryStore *stores.ServiceCategoryStore
 	serviceStore         *stores.ServiceStore
@@ -53,6 +56,8 @@ func NewApiServer(listenAddr string, db *sqlx.DB, cfg *config.Config, logger *sl
 		db:                   db,
 		userStore:            stores.NewUserStore(db),
 		organizationStore:    stores.NewOrganizationStore(db),
+		siteStore:            stores.NewSiteStore(db),
+		washStore:            stores.NewWashStore(db),
 		vehicleCategoryStore: stores.NewVehicleCategoryStore(db),
 		serviceCategoryStore: stores.NewServiceCategoryStore(db),
 		serviceStore:         stores.NewServiceStore(db),
@@ -126,6 +131,11 @@ func (s *ApiServer) setupRouter() {
 		r.Post("/expenses/{expenseID}/cancel", s.handleCancelExpense)
 
 		r.Get("/users", s.handleListUsers)
+		r.Get("/sites", s.handleListSites)
+		r.Get("/washes", s.handleListWashes)
+		r.Post("/washes", s.handleCreateWash)
+		r.Get("/washes/{washID}", s.handleGetWash)
+		r.Post("/washes/{washID}/cancel", s.handleCancelWash)
 		r.Get("/dashboard/metrics", s.handleGetDashboardMetrics)
 
 		// Onboarding (docs/WORKFLOW.md)
@@ -151,66 +161,38 @@ func (s *ApiServer) setupRouter() {
 }
 
 func (s *ApiServer) handleGetDashboardMetrics(w http.ResponseWriter, r *http.Request) {
-	claims, ok := clerk.SessionClaimsFromContext(r.Context())
+	orgID, ok := s.requireOrg(w, r)
 	if !ok {
-		s.logger.Error("could not retrieve claims from context")
-		http.Error(w, "could not retrieve claims", http.StatusInternalServerError)
 		return
 	}
 
-	customClaims, ok := claims.Custom.(map[string]interface{})
-	if !ok {
-		s.logger.Error("could not assert custom claims")
-		http.Error(w, "could not assert custom claims", http.StatusInternalServerError)
-		return
-	}
-
-	orgID, ok := customClaims["org_id"]
-	if !ok {
-		s.logger.Warn("user is not part of an organization", "user_id", claims.Subject)
-		http.Error(w, "user is not part of an organization", http.StatusForbidden)
-		return
-	}
-	clerkOrgID := orgID.(string)
-	if clerkOrgID == "" {
-		s.logger.Warn("user is not part of an organization", "user_id", claims.Subject)
-		http.Error(w, "user is not part of an organization", http.StatusForbidden)
-		return
-	}
-
-	org, err := s.organizationStore.GetByClerkID(r.Context(), clerkOrgID)
-	if err != nil {
-		s.logger.Error("failed to retrieve organization", "error", err, "clerk_org_id", clerkOrgID)
-		http.Error(w, "failed to retrieve organization", http.StatusInternalServerError)
-		return
-	}
-	if org == nil {
-		s.logger.Warn("organization not found in system", "clerk_org_id", clerkOrgID)
-		http.Error(w, "organization not found in system", http.StatusForbidden)
-		return
-	}
-
-	var totalOrders int
-	err = s.db.GetContext(r.Context(), &totalOrders, `SELECT COUNT(*) FROM orders WHERE organization_id = $1`, org.ID)
-	if err != nil {
-		s.logger.Error("failed to count orders", "error", err, "organization_id", org.ID)
+	var totalWashes int64
+	if err := s.db.GetContext(r.Context(), &totalWashes,
+		`SELECT COUNT(*) FROM washes WHERE organization_id = $1 AND status <> $2`, orgID, models.WashStatusCancelled); err != nil {
+		s.logger.Error("failed to count washes", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to compute metrics", http.StatusInternalServerError)
 		return
 	}
 
-	var totalRevenue int
-	err = s.db.GetContext(r.Context(), &totalRevenue, `SELECT COALESCE(SUM(amount), 0) FROM orders WHERE organization_id = $1 AND status = 'completed'`, org.ID)
-	if err != nil {
-		s.logger.Error("failed to sum revenue", "error", err, "organization_id", org.ID)
+	var totalRevenue int64
+	if err := s.db.GetContext(r.Context(), &totalRevenue, `
+		SELECT COALESCE(SUM(p.amount_cents), 0)
+		FROM payments p
+		WHERE p.organization_id = $1 AND p.status = $2
+		  AND (p.wash_id IS NULL OR EXISTS (
+			SELECT 1 FROM washes w
+			WHERE w.id = p.wash_id AND w.organization_id = p.organization_id AND w.status <> $3
+		  ))`,
+		orgID, models.PaymentStatusVerified, models.WashStatusCancelled); err != nil {
+		s.logger.Error("failed to sum verified payments", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to compute metrics", http.StatusInternalServerError)
 		return
 	}
 
-	metrics := map[string]interface{}{
-		"total_orders":  totalOrders,
-		"total_revenue": totalRevenue,
+	metrics := map[string]int64{
+		"total_washes":        totalWashes,
+		"total_revenue_cents": totalRevenue,
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(metrics)
 }
@@ -465,9 +447,9 @@ func (s *ApiServer) handleConfirmOnboarding(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		s.logger.Error("onboarding: confirmation failed", "error", err, "org_id", org.ID)
 		status := http.StatusInternalServerError
-		if errors.Is(err, errors.New("onboarding incomplet : les conditions obligatoires ne sont pas satisfaites")) ||
-			errors.Is(err, errors.New("forfait sélectionné introuvable ou inactif")) ||
-			errors.Is(err, errors.New("aucune progression d'onboarding")) {
+		if errors.Is(err, stores.ErrOnboardingIncomplete) ||
+			errors.Is(err, stores.ErrSelectedPlanUnavailable) ||
+			errors.Is(err, stores.ErrOnboardingProgressMissing) {
 			status = http.StatusBadRequest
 		}
 		http.Error(w, err.Error(), status)
@@ -528,8 +510,6 @@ func (s *ApiServer) handleListWorkers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(items)
 }
 
-var _ = uuid.Nil // retention de l'import si refactor futur
-
 func (s *ApiServer) Run() {
 	s.logger.Info("Starting server", "address", s.listenAddr)
 	if err := http.ListenAndServe(s.listenAddr, s.router); err != nil {
@@ -539,72 +519,66 @@ func (s *ApiServer) Run() {
 }
 
 func (s *ApiServer) handleListUsers(w http.ResponseWriter, r *http.Request) {
-	claims, ok := clerk.SessionClaimsFromContext(r.Context())
+	orgID, ok := s.requireOrg(w, r)
 	if !ok {
-		s.logger.Error("could not retrieve claims from context")
-		http.Error(w, "could not retrieve claims", http.StatusInternalServerError)
 		return
 	}
-
-	customClaims, ok := claims.Custom.(map[string]interface{})
-	if !ok {
-		s.logger.Error("could not assert custom claims")
-		http.Error(w, "could not assert custom claims", http.StatusInternalServerError)
-		return
-	}
-
-	orgID, ok := customClaims["org_id"]
-	if !ok {
-		s.logger.Warn("user is not part of an organization", "user_id", claims.Subject)
-		http.Error(w, "user is not part of an organization", http.StatusForbidden)
-		return
-	}
-	clerkOrgID := orgID.(string)
-	if clerkOrgID == "" {
-		s.logger.Warn("user is not part of an organization", "user_id", claims.Subject)
-		http.Error(w, "user is not part of an organization", http.StatusForbidden)
-		return
-	}
-
-	// We need a way to get our internal org ID from the clerk org ID.
-	org, err := s.organizationStore.GetByClerkID(r.Context(), clerkOrgID)
+	users, err := s.userStore.ListByOrganization(r.Context(), orgID)
 	if err != nil {
-		s.logger.Error("failed to retrieve organization", "error", err, "clerk_org_id", clerkOrgID)
-		http.Error(w, "failed to retrieve organization", http.StatusInternalServerError)
-		return
-	}
-	if org == nil {
-		s.logger.Warn("organization not found in system", "clerk_org_id", clerkOrgID)
-		http.Error(w, "organization not found in system", http.StatusForbidden)
-		return
-	}
-
-	users, err := s.userStore.ListByOrganization(r.Context(), org.ID)
-	if err != nil {
-		s.logger.Error("failed to list users", "error", err, "organization_id", org.ID)
+		s.logger.Error("failed to list users", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to list users", http.StatusInternalServerError)
 		return
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(users)
 }
 
-// getOrganizationIDFromClaims extrait l'organisation interne à partir des claims Clerk.
-func (s *ApiServer) getOrganizationIDFromClaims(r *http.Request) (uuid.UUID, error) {
+// clerkOrganizationFromRequest extracts the signed Clerk session and active
+// organization claim without trusting client-provided identifiers.
+func clerkOrganizationFromRequest(r *http.Request) (*clerk.SessionClaims, string, error) {
 	claims, ok := clerk.SessionClaimsFromContext(r.Context())
 	if !ok {
-		return uuid.Nil, ErrNoClaims
+		return nil, "", ErrNoClaims
 	}
 	customClaims, ok := claims.Custom.(map[string]interface{})
 	if !ok {
-		return uuid.Nil, ErrNoCustomClaims
+		return nil, "", ErrNoCustomClaims
 	}
-	clerkOrgID, ok := customClaims["org_id"]
+	clerkOrgID, ok := customClaims["org_id"].(string)
 	if !ok || clerkOrgID == "" {
-		return uuid.Nil, ErrNoOrg
+		return nil, "", ErrNoOrg
 	}
-	org, err := s.organizationStore.GetByClerkID(r.Context(), clerkOrgID.(string))
+	return claims, clerkOrgID, nil
+}
+
+func roleFromClerkClaims(claims *clerk.SessionClaims) models.UserRole {
+	if claims != nil {
+		if customClaims, ok := claims.Custom.(map[string]interface{}); ok {
+			if role, ok := customClaims["org_role"].(string); ok && role == "org:admin" {
+				return models.RoleOwner
+			}
+		}
+	}
+	// Least privilege for ordinary members; applications can promote them
+	// through a separately authorized role-management flow.
+	return models.RoleWasher
+}
+
+func (s *ApiServer) ensureInternalUser(r *http.Request, orgID uuid.UUID, claims *clerk.SessionClaims) (*models.User, error) {
+	if claims == nil || claims.Subject == "" {
+		return nil, errors.New("missing Clerk user subject")
+	}
+	return s.userStore.GetOrCreateMembership(r.Context(), orgID, claims.Subject, roleFromClerkClaims(claims))
+}
+
+// getOrganizationIDFromClaims maps the active Clerk organization to the
+// tenant's internal UUID.
+func (s *ApiServer) getOrganizationIDFromClaims(r *http.Request) (uuid.UUID, error) {
+	_, clerkOrgID, err := clerkOrganizationFromRequest(r)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	org, err := s.organizationStore.GetByClerkID(r.Context(), clerkOrgID)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -614,42 +588,38 @@ func (s *ApiServer) getOrganizationIDFromClaims(r *http.Request) (uuid.UUID, err
 	return org.ID, nil
 }
 
-// getOrgFromContext — résout l'organisation complète pour les handlers
-// d'onboarding, avec auto-provisionnement si l'org Clerk est inconnue en base
-// (première connexion : le workflow d'inscription doit toujours pouvoir démarrer).
+// getOrgFromContext resolves the tenant for onboarding. A Clerk organization
+// may not yet have an internal row; provision it once, then provision the
+// authenticated user's membership before any foreign-key-backed writes.
 func (s *ApiServer) getOrgFromContext(w http.ResponseWriter, r *http.Request) (*models.Organization, bool) {
-	claims, ok := clerk.SessionClaimsFromContext(r.Context())
-	if !ok {
-		s.logger.Error("could not retrieve claims from context")
-		http.Error(w, "could not retrieve claims", http.StatusInternalServerError)
-		return nil, false
-	}
-	customClaims, ok := claims.Custom.(map[string]interface{})
-	if !ok {
-		s.logger.Error("could not assert custom claims")
-		http.Error(w, "could not assert custom claims", http.StatusInternalServerError)
-		return nil, false
-	}
-	clerkOrgID, ok := customClaims["org_id"]
-	if !ok || clerkOrgID == "" {
-		http.Error(w, "user is not part of an organization", http.StatusForbidden)
-		return nil, false
-	}
-	org, err := s.organizationStore.GetByClerkID(r.Context(), clerkOrgID.(string))
+	claims, clerkOrgID, err := clerkOrganizationFromRequest(r)
 	if err != nil {
-		s.logger.Error("failed to retrieve organization", "error", err)
+		status := http.StatusForbidden
+		if errors.Is(err, ErrNoClaims) {
+			status = http.StatusUnauthorized
+		}
+		http.Error(w, "active organization is required", status)
+		return nil, false
+	}
+
+	org, err := s.organizationStore.GetByClerkID(r.Context(), clerkOrgID)
+	if err != nil {
+		s.logger.Error("failed to retrieve organization", "error", err, "clerk_org_id", clerkOrgID)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return nil, false
 	}
 	if org == nil {
-		// Auto-provisionnement minimal — le nom sera affiné à l'étape 1 de
-		// l'onboarding. Aucune donnée métier n'est encore accessible.
-		org, err = s.onboardingStore.CreateOrganization(r.Context(), clerkOrgID.(string), "Nouvelle station")
+		org, err = s.onboardingStore.CreateOrganization(r.Context(), clerkOrgID, "Nouvelle station")
 		if err != nil {
-			s.logger.Error("failed to auto-provision organization", "error", err)
+			s.logger.Error("failed to auto-provision organization", "error", err, "clerk_org_id", clerkOrgID)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return nil, false
 		}
+	}
+	if _, err := s.ensureInternalUser(r, org.ID, claims); err != nil {
+		s.logger.Error("failed to provision organization membership", "error", err, "organization_id", org.ID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, false
 	}
 	return org, true
 }
@@ -673,14 +643,245 @@ func (s *ApiServer) hasEntitlement(ctx context.Context, orgID uuid.UUID, key str
 	return features[key]
 }
 
-func (s *ApiServer) requireOrg(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+func (s *ApiServer) requireActor(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
 	orgID, err := s.getOrganizationIDFromClaims(r)
 	if err != nil {
-		s.logger.Warn("organization not resolved from claims", "error", err, "user_id", r.Context().Value(clerk.SessionClaims{}))
-		http.Error(w, "organization not found", http.StatusForbidden)
-		return uuid.Nil, false
+		status := http.StatusForbidden
+		if errors.Is(err, ErrNoClaims) {
+			status = http.StatusUnauthorized
+		}
+		s.logger.Warn("organization not resolved from claims", "error", err)
+		http.Error(w, "active organization is required", status)
+		return uuid.Nil, uuid.Nil, false
 	}
-	return orgID, true
+	claims, _, err := clerkOrganizationFromRequest(r)
+	if err != nil {
+		http.Error(w, "active organization is required", http.StatusForbidden)
+		return uuid.Nil, uuid.Nil, false
+	}
+	user, err := s.ensureInternalUser(r, orgID, claims)
+	if err != nil {
+		s.logger.Error("failed to provision organization membership", "error", err, "organization_id", orgID)
+		http.Error(w, "could not provision organization membership", http.StatusInternalServerError)
+		return uuid.Nil, uuid.Nil, false
+	}
+	return orgID, user.ID, true
+}
+
+func (s *ApiServer) requireOrg(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	orgID, _, ok := s.requireActor(w, r)
+	return orgID, ok
+}
+
+// ---------- Sites and washes ----------
+
+func (s *ApiServer) handleListSites(w http.ResponseWriter, r *http.Request) {
+	orgID, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	sites, err := s.siteStore.ListByOrganization(r.Context(), orgID)
+	if err != nil {
+		s.logger.Error("failed to list sites", "error", err, "organization_id", orgID)
+		http.Error(w, "failed to list sites", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(sites)
+}
+
+func (s *ApiServer) handleListWashes(w http.ResponseWriter, r *http.Request) {
+	orgID, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	washes, err := s.washStore.ListByOrganization(r.Context(), orgID)
+	if err != nil {
+		s.logger.Error("failed to list washes", "error", err, "organization_id", orgID)
+		http.Error(w, "failed to list washes", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(washes)
+}
+
+type createWashItemRequest struct {
+	ServiceID string `json:"service_id"`
+	Quantity  int    `json:"quantity"`
+}
+
+type createWashRequest struct {
+	SiteID            string                 `json:"site_id"`
+	VehicleCategoryID string                 `json:"vehicle_category_id"`
+	Items             []createWashItemRequest `json:"items"`
+	WorkerIDs         []string               `json:"worker_ids"`
+	PaymentMethod     string                 `json:"payment_method"`
+	AmountReceived    int64                  `json:"amount_received_cents"`
+	CashSessionID     *string                `json:"cash_session_id"`
+}
+
+func (s *ApiServer) handleCreateWash(w http.ResponseWriter, r *http.Request) {
+	orgID, actorID, ok := s.requireActor(w, r)
+	if !ok {
+		return
+	}
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		http.Error(w, "Idempotency-Key header is required", http.StatusBadRequest)
+		return
+	}
+
+	var req createWashRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	siteID, err := uuid.Parse(req.SiteID)
+	if err != nil {
+		http.Error(w, "invalid site_id", http.StatusBadRequest)
+		return
+	}
+	vehicleCategoryID, err := uuid.Parse(req.VehicleCategoryID)
+	if err != nil {
+		http.Error(w, "invalid vehicle_category_id", http.StatusBadRequest)
+		return
+	}
+	items := make([]stores.WashItemInput, 0, len(req.Items))
+	for _, item := range req.Items {
+		serviceID, err := uuid.Parse(item.ServiceID)
+		if err != nil {
+			http.Error(w, "invalid service_id", http.StatusBadRequest)
+			return
+		}
+		items = append(items, stores.WashItemInput{ServiceID: serviceID, Quantity: item.Quantity})
+	}
+	workerIDs := make([]uuid.UUID, 0, len(req.WorkerIDs))
+	for _, rawID := range req.WorkerIDs {
+		workerID, err := uuid.Parse(rawID)
+		if err != nil {
+			http.Error(w, "invalid worker_id", http.StatusBadRequest)
+			return
+		}
+		workerIDs = append(workerIDs, workerID)
+	}
+	var cashSessionID *uuid.UUID
+	if req.CashSessionID != nil && strings.TrimSpace(*req.CashSessionID) != "" {
+		parsedID, err := uuid.Parse(strings.TrimSpace(*req.CashSessionID))
+		if err != nil {
+			http.Error(w, "invalid cash_session_id", http.StatusBadRequest)
+			return
+		}
+		cashSessionID = &parsedID
+	}
+
+	input := stores.CreateWashInput{
+		OrganizationID:     orgID,
+		AuthorID:           actorID,
+		SiteID:             siteID,
+		VehicleCategoryID:  vehicleCategoryID,
+		Items:              items,
+		WorkerIDs:          workerIDs,
+		PaymentMethod:      models.PaymentMethod(strings.TrimSpace(req.PaymentMethod)),
+		AmountReceivedCents: req.AmountReceived,
+		CashSessionID:      cashSessionID,
+		IdempotencyKey:     idempotencyKey,
+	}
+	detail, replayed, err := s.washStore.Create(r.Context(), input)
+	if err != nil {
+		switch {
+		case errors.Is(err, stores.ErrWashInvalidInput),
+			errors.Is(err, stores.ErrWashPaymentExceedsTotal),
+			errors.Is(err, stores.ErrCashSessionRequired),
+			errors.Is(err, stores.ErrCashSessionNotApplicable):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, stores.ErrWashIdempotencyConflict),
+			errors.Is(err, stores.ErrCashSessionNotOpen),
+			errors.Is(err, stores.ErrCashBalanceOverflow):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case errors.Is(err, stores.ErrCashSessionSiteMismatch):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, stores.ErrWashSiteNotFound),
+			errors.Is(err, stores.ErrWashVehicleCategoryNotFound),
+			errors.Is(err, stores.ErrWashServiceUnavailable),
+			errors.Is(err, stores.ErrWashWorkerUnavailable):
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		default:
+			s.logger.Error("failed to create wash", "error", err, "organization_id", orgID)
+			http.Error(w, "failed to create wash", http.StatusInternalServerError)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if replayed {
+		w.Header().Set("Idempotency-Replayed", "true")
+		w.WriteHeader(http.StatusOK)
+	} else {
+		w.Header().Set("Idempotency-Replayed", "false")
+		w.WriteHeader(http.StatusCreated)
+	}
+	json.NewEncoder(w).Encode(detail)
+}
+
+func (s *ApiServer) handleGetWash(w http.ResponseWriter, r *http.Request) {
+	orgID, ok := s.requireOrg(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "washID"))
+	if err != nil {
+		http.Error(w, "invalid wash ID", http.StatusBadRequest)
+		return
+	}
+	detail, err := s.washStore.GetDetailByID(r.Context(), id, orgID)
+	if err != nil {
+		if errors.Is(err, stores.ErrWashNotFound) {
+			http.Error(w, "wash not found", http.StatusNotFound)
+			return
+		}
+		s.logger.Error("failed to load wash detail", "error", err, "wash_id", id, "organization_id", orgID)
+		http.Error(w, "failed to load wash detail", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(detail)
+}
+
+type cancelWashRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (s *ApiServer) handleCancelWash(w http.ResponseWriter, r *http.Request) {
+	orgID, actorID, ok := s.requireActor(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "washID"))
+	if err != nil {
+		http.Error(w, "invalid wash ID", http.StatusBadRequest)
+		return
+	}
+	var req cancelWashRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	detail, err := s.washStore.Cancel(r.Context(), id, orgID, actorID, req.Reason)
+	if err != nil {
+		switch {
+		case errors.Is(err, stores.ErrWashNotFound):
+			http.Error(w, "wash not found", http.StatusNotFound)
+		case errors.Is(err, stores.ErrWashCancellationReasonRequired), errors.Is(err, stores.ErrWashInvalidInput):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, stores.ErrWashHasVerifiedPayments):
+			http.Error(w, "wash has verified payments; record a refund before cancelling it", http.StatusConflict)
+		default:
+			s.logger.Error("failed to cancel wash", "error", err, "wash_id", id, "organization_id", orgID)
+			http.Error(w, "failed to cancel wash", http.StatusInternalServerError)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(detail)
 }
 
 // ---------- Vehicle categories ----------
@@ -950,8 +1151,9 @@ func (s *ApiServer) handleCreateService(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.Name == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" || len(req.Name) > 100 || req.PriceCents < 0 {
+		http.Error(w, "name must contain 1 to 100 characters and price_cents cannot be negative", http.StatusBadRequest)
 		return
 	}
 	var categoryID *uuid.UUID
@@ -1068,11 +1270,12 @@ func (s *ApiServer) handleDeactivateService(w http.ResponseWriter, r *http.Reque
 // ---------- Payments ----------
 
 type createPaymentRequest struct {
-	WashID      *string `json:"wash_id"`
-	AmountCents int64   `json:"amount_cents"`
-	Method      string  `json:"method"`
-	Reference   *string `json:"reference"`
-	ReceivedAt  *string `json:"received_at"`
+	WashID        *string `json:"wash_id"`
+	CashSessionID *string `json:"cash_session_id"`
+	AmountCents   int64   `json:"amount_cents"`
+	Method        string  `json:"method"`
+	Reference     *string `json:"reference"`
+	ReceivedAt    *string `json:"received_at"`
 }
 
 func (s *ApiServer) handleListPayments(w http.ResponseWriter, r *http.Request) {
@@ -1091,7 +1294,7 @@ func (s *ApiServer) handleListPayments(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *ApiServer) handleCreatePayment(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.requireOrg(w, r)
+	orgID, actorID, ok := s.requireActor(w, r)
 	if !ok {
 		return
 	}
@@ -1120,19 +1323,67 @@ func (s *ApiServer) handleCreatePayment(w http.ResponseWriter, r *http.Request) 
 		}
 		washID = &wid
 	}
+	var cashSessionID *uuid.UUID
+	if req.CashSessionID != nil && *req.CashSessionID != "" {
+		csid, err := uuid.Parse(*req.CashSessionID)
+		if err != nil {
+			http.Error(w, "invalid cash_session_id", http.StatusBadRequest)
+			return
+		}
+		cashSessionID = &csid
+	}
+	if method == models.PaymentMethodCash && cashSessionID == nil {
+		http.Error(w, stores.ErrCashSessionRequired.Error(), http.StatusBadRequest)
+		return
+	}
+	if method != models.PaymentMethodCash && cashSessionID != nil {
+		http.Error(w, stores.ErrCashSessionNotApplicable.Error(), http.StatusBadRequest)
+		return
+	}
+	receivedAt := time.Now()
+	if req.ReceivedAt != nil && *req.ReceivedAt != "" {
+		parsed, err := time.Parse(time.RFC3339, *req.ReceivedAt)
+		if err != nil {
+			http.Error(w, "received_at must be an RFC3339 timestamp", http.StatusBadRequest)
+			return
+		}
+		receivedAt = parsed
+	}
+	status := models.PaymentStatusPending
+	if method == models.PaymentMethodCash {
+		// Cash is physically received at the point this transaction is recorded.
+		status = models.PaymentStatusVerified
+	}
 	p := &models.Payment{
 		ID:             uuid.New(),
 		OrganizationID: orgID,
 		WashID:         washID,
+		CashSessionID:  cashSessionID,
 		AmountCents:    req.AmountCents,
 		Method:         method,
-		Status:         models.PaymentStatusPending,
+		Status:         status,
 		Reference:      req.Reference,
-		AuthorID:       orgID,
+		ReceivedAt:     receivedAt,
+		AuthorID:       actorID,
 	}
 	if err := s.paymentStore.Create(r.Context(), p); err != nil {
-		s.logger.Error("failed to create payment", "error", err, "organization_id", orgID)
-		http.Error(w, "failed to create payment", http.StatusInternalServerError)
+		switch {
+		case errors.Is(err, stores.ErrWashNotFound):
+			http.Error(w, "wash not found", http.StatusNotFound)
+		case errors.Is(err, stores.ErrCashSessionNotOpen):
+			http.Error(w, "cash session not found or not open", http.StatusNotFound)
+		case errors.Is(err, stores.ErrCashSessionSiteMismatch):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, stores.ErrCashBalanceOverflow),
+			errors.Is(err, stores.ErrWashPaymentExceedsTotal),
+			errors.Is(err, stores.ErrWashCancelled):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case errors.Is(err, stores.ErrCashSessionRequired), errors.Is(err, stores.ErrCashSessionNotApplicable):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		default:
+			s.logger.Error("failed to create payment", "error", err, "organization_id", orgID)
+			http.Error(w, "failed to create payment", http.StatusInternalServerError)
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1148,7 +1399,7 @@ type openCashSessionRequest struct {
 }
 
 func (s *ApiServer) handleOpenCashSession(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.requireOrg(w, r)
+	orgID, actorID, ok := s.requireActor(w, r)
 	if !ok {
 		return
 	}
@@ -1162,28 +1413,29 @@ func (s *ApiServer) handleOpenCashSession(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid site ID", http.StatusBadRequest)
 		return
 	}
-	existing, err := s.cashSessionStore.GetOpenBySite(r.Context(), siteID)
-	if err != nil {
-		s.logger.Error("failed to check existing cash session", "error", err, "site_id", siteID)
-		http.Error(w, "failed to check existing cash session", http.StatusInternalServerError)
-		return
-	}
-	if existing != nil {
-		http.Error(w, "a cash session is already open for this site", http.StatusConflict)
+	if req.OpeningAmountCents < 0 {
+		http.Error(w, "opening_amount_cents cannot be negative", http.StatusBadRequest)
 		return
 	}
 	cs := &models.CashSession{
 		ID:                      uuid.New(),
 		OrganizationID:          orgID,
 		SiteID:                  siteID,
-		UserID:                  orgID,
+		UserID:                  actorID,
 		OpeningAmountCents:      req.OpeningAmountCents,
 		TheoreticalBalanceCents: req.OpeningAmountCents,
 		Status:                  models.CashSessionStatusOpen,
 	}
-	if err := s.cashSessionStore.Create(r.Context(), cs); err != nil {
-		s.logger.Error("failed to open cash session", "error", err, "organization_id", orgID)
-		http.Error(w, "failed to open cash session", http.StatusInternalServerError)
+	if err := s.cashSessionStore.Open(r.Context(), cs); err != nil {
+		switch {
+		case errors.Is(err, stores.ErrSiteNotFound):
+			http.Error(w, "site not found", http.StatusNotFound)
+		case errors.Is(err, stores.ErrOpenCashSessionExists):
+			http.Error(w, err.Error(), http.StatusConflict)
+		default:
+			s.logger.Error("failed to open cash session", "error", err, "organization_id", orgID)
+			http.Error(w, "failed to open cash session", http.StatusInternalServerError)
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1192,7 +1444,7 @@ func (s *ApiServer) handleOpenCashSession(w http.ResponseWriter, r *http.Request
 }
 
 func (s *ApiServer) handleGetCurrentCashSession(w http.ResponseWriter, r *http.Request) {
-	_, ok := s.requireOrg(w, r)
+	orgID, ok := s.requireOrg(w, r)
 	if !ok {
 		return
 	}
@@ -1206,20 +1458,24 @@ func (s *ApiServer) handleGetCurrentCashSession(w http.ResponseWriter, r *http.R
 		http.Error(w, "invalid site ID", http.StatusBadRequest)
 		return
 	}
-	cs, err := s.cashSessionStore.GetOpenBySite(r.Context(), sid)
+	site, err := s.siteStore.GetByIDForOrganization(r.Context(), sid, orgID)
+	if err != nil {
+		s.logger.Error("failed to resolve cash session site", "error", err, "site_id", sid, "organization_id", orgID)
+		http.Error(w, "failed to get current cash session", http.StatusInternalServerError)
+		return
+	}
+	if site == nil {
+		http.Error(w, "site not found", http.StatusNotFound)
+		return
+	}
+	cs, err := s.cashSessionStore.GetOpenBySite(r.Context(), orgID, sid)
 	if err != nil {
 		s.logger.Error("failed to get current cash session", "error", err, "site_id", sid)
 		http.Error(w, "failed to get current cash session", http.StatusInternalServerError)
 		return
 	}
-	if cs == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"message": "no open cash session for this site"})
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(cs)
+	json.NewEncoder(w).Encode(cs) // null means no open session for this site.
 }
 
 type addCashMovementRequest struct {
@@ -1231,12 +1487,11 @@ type addCashMovementRequest struct {
 }
 
 func (s *ApiServer) handleAddCashMovement(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.requireOrg(w, r)
+	orgID, actorID, ok := s.requireActor(w, r)
 	if !ok {
 		return
 	}
-	sessionID := chi.URLParam(r, "sessionID")
-	id, err := uuid.Parse(sessionID)
+	id, err := uuid.Parse(chi.URLParam(r, "sessionID"))
 	if err != nil {
 		http.Error(w, "invalid session ID", http.StatusBadRequest)
 		return
@@ -1247,14 +1502,16 @@ func (s *ApiServer) handleAddCashMovement(w http.ResponseWriter, r *http.Request
 		return
 	}
 	movType := models.CashMovementType(req.Type)
-	switch movType {
-	case models.CashMovementTypeEntry, models.CashMovementTypeExit:
-	default:
+	if movType != models.CashMovementTypeEntry && movType != models.CashMovementTypeExit {
 		http.Error(w, "invalid movement type", http.StatusBadRequest)
 		return
 	}
 	if req.AmountCents <= 0 {
 		http.Error(w, "amount_cents must be positive", http.StatusBadRequest)
+		return
+	}
+	if req.Source == "" || len(req.Source) > 50 {
+		http.Error(w, "source must contain between 1 and 50 characters", http.StatusBadRequest)
 		return
 	}
 	var refID *uuid.UUID
@@ -1275,11 +1532,18 @@ func (s *ApiServer) handleAddCashMovement(w http.ResponseWriter, r *http.Request
 		Source:         req.Source,
 		ReferenceID:    refID,
 		Description:    req.Description,
-		AuthorID:       orgID,
+		AuthorID:       actorID,
 	}
 	if err := s.cashMovementStore.Create(r.Context(), cm); err != nil {
-		s.logger.Error("failed to add cash movement", "error", err, "organization_id", orgID)
-		http.Error(w, "failed to add cash movement", http.StatusInternalServerError)
+		switch {
+		case errors.Is(err, stores.ErrCashSessionNotOpen):
+			http.Error(w, "cash session not found or not open", http.StatusNotFound)
+		case errors.Is(err, stores.ErrInsufficientCash), errors.Is(err, stores.ErrCashBalanceOverflow):
+			http.Error(w, err.Error(), http.StatusConflict)
+		default:
+			s.logger.Error("failed to add cash movement", "error", err, "organization_id", orgID)
+			http.Error(w, "failed to add cash movement", http.StatusInternalServerError)
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1293,12 +1557,11 @@ type closeCashSessionRequest struct {
 }
 
 func (s *ApiServer) handleCloseCashSession(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.requireOrg(w, r)
+	orgID, actorID, ok := s.requireActor(w, r)
 	if !ok {
 		return
 	}
-	sessionID := chi.URLParam(r, "sessionID")
-	id, err := uuid.Parse(sessionID)
+	id, err := uuid.Parse(chi.URLParam(r, "sessionID"))
 	if err != nil {
 		http.Error(w, "invalid session ID", http.StatusBadRequest)
 		return
@@ -1308,33 +1571,23 @@ func (s *ApiServer) handleCloseCashSession(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	cs, err := s.cashSessionStore.GetByID(r.Context(), id)
+	if req.CountedAmountCents < 0 {
+		http.Error(w, "counted_amount_cents cannot be negative", http.StatusBadRequest)
+		return
+	}
+	cs, err := s.cashSessionStore.Close(r.Context(), id, orgID, actorID, req.CountedAmountCents, req.DiscrepancyReason)
 	if err != nil {
-		s.logger.Error("failed to get cash session", "error", err, "cash_session_id", id)
-		http.Error(w, "failed to get cash session", http.StatusInternalServerError)
-		return
-	}
-	if cs == nil || cs.OrganizationID != orgID {
-		http.Error(w, "cash session not found", http.StatusNotFound)
-		return
-	}
-	if cs.Status == models.CashSessionStatusClosed {
-		http.Error(w, "cash session already closed", http.StatusConflict)
-		return
-	}
-	now := time.Now()
-	cs.CountedAmountCents = &req.CountedAmountCents
-	if req.CountedAmountCents != cs.TheoreticalBalanceCents {
-		diff := req.CountedAmountCents - cs.TheoreticalBalanceCents
-		cs.DiscrepancyCents = &diff
-		cs.DiscrepancyReason = req.DiscrepancyReason
-	}
-	cs.Status = models.CashSessionStatusClosed
-	cs.ClosedAt = &now
-	cs.ClosedByID = &orgID
-	if err := s.cashSessionStore.Update(r.Context(), cs); err != nil {
-		s.logger.Error("failed to close cash session", "error", err, "cash_session_id", id)
-		http.Error(w, "failed to close cash session", http.StatusInternalServerError)
+		switch {
+		case errors.Is(err, stores.ErrCashSessionNotFound):
+			http.Error(w, "cash session not found", http.StatusNotFound)
+		case errors.Is(err, stores.ErrCashSessionNotOpen):
+			http.Error(w, "cash session is already closed", http.StatusConflict)
+		case errors.Is(err, stores.ErrDiscrepancyReasonRequired):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		default:
+			s.logger.Error("failed to close cash session", "error", err, "cash_session_id", id)
+			http.Error(w, "failed to close cash session", http.StatusInternalServerError)
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1346,27 +1599,29 @@ func (s *ApiServer) handleListCashMovements(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	sessionID := chi.URLParam(r, "sessionID")
-	id, err := uuid.Parse(sessionID)
+	id, err := uuid.Parse(chi.URLParam(r, "sessionID"))
 	if err != nil {
 		http.Error(w, "invalid session ID", http.StatusBadRequest)
 		return
 	}
-	items, err := s.cashMovementStore.ListBySession(r.Context(), id)
+	session, err := s.cashSessionStore.GetByIDForOrganization(r.Context(), id, orgID)
+	if err != nil {
+		s.logger.Error("failed to resolve cash session", "error", err, "cash_session_id", id)
+		http.Error(w, "failed to list cash movements", http.StatusInternalServerError)
+		return
+	}
+	if session == nil {
+		http.Error(w, "cash session not found", http.StatusNotFound)
+		return
+	}
+	items, err := s.cashMovementStore.ListBySession(r.Context(), id, orgID)
 	if err != nil {
 		s.logger.Error("failed to list cash movements", "error", err, "cash_session_id", id)
 		http.Error(w, "failed to list cash movements", http.StatusInternalServerError)
 		return
 	}
-	// Filtrer par organisation pour l'isolation
-	var filtered []models.CashMovement
-	for _, m := range items {
-		if m.OrganizationID == orgID {
-			filtered = append(filtered, m)
-		}
-	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(filtered)
+	json.NewEncoder(w).Encode(items)
 }
 
 // ---------- Expenses ----------
@@ -1399,7 +1654,7 @@ func (s *ApiServer) handleListExpenses(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *ApiServer) handleCreateExpense(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.requireOrg(w, r)
+	orgID, actorID, ok := s.requireActor(w, r)
 	if !ok {
 		return
 	}
@@ -1452,6 +1707,14 @@ func (s *ApiServer) handleCreateExpense(w http.ResponseWriter, r *http.Request) 
 		}
 		cashSessionID = &csid
 	}
+	if method == models.PaymentMethodCash && cashSessionID == nil {
+		http.Error(w, stores.ErrCashSessionRequired.Error(), http.StatusBadRequest)
+		return
+	}
+	if method != models.PaymentMethodCash && cashSessionID != nil {
+		http.Error(w, "cash_session_id is only valid for cash expenses", http.StatusBadRequest)
+		return
+	}
 	e := &models.Expense{
 		ID:             uuid.New(),
 		OrganizationID: orgID,
@@ -1462,14 +1725,27 @@ func (s *ApiServer) handleCreateExpense(w http.ResponseWriter, r *http.Request) 
 		PaymentMethod:  method,
 		Beneficiary:    req.Beneficiary,
 		Description:    req.Description,
-		AuthorID:       orgID,
+		AuthorID:       actorID,
 		Reference:      req.Reference,
 		Status:         models.ExpenseStatusRecorded,
 		CashSessionID:  cashSessionID,
 	}
 	if err := s.expenseStore.Create(r.Context(), e); err != nil {
-		s.logger.Error("failed to create expense", "error", err, "organization_id", orgID)
-		http.Error(w, "failed to create expense", http.StatusInternalServerError)
+		switch {
+		case errors.Is(err, stores.ErrCashSessionRequired):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, stores.ErrSiteNotFound):
+			http.Error(w, "site not found", http.StatusNotFound)
+		case errors.Is(err, stores.ErrCashSessionNotOpen):
+			http.Error(w, "cash session not found or not open", http.StatusNotFound)
+		case errors.Is(err, stores.ErrCashSessionSiteMismatch):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, stores.ErrInsufficientCash):
+			http.Error(w, err.Error(), http.StatusConflict)
+		default:
+			s.logger.Error("failed to create expense", "error", err, "organization_id", orgID)
+			http.Error(w, "failed to create expense", http.StatusInternalServerError)
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1510,19 +1786,27 @@ func (s *ApiServer) handleGetExpense(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *ApiServer) handleCancelExpense(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.requireOrg(w, r)
+	orgID, actorID, ok := s.requireActor(w, r)
 	if !ok {
 		return
 	}
-	expenseID := chi.URLParam(r, "expenseID")
-	id, err := uuid.Parse(expenseID)
+	id, err := uuid.Parse(chi.URLParam(r, "expenseID"))
 	if err != nil {
 		http.Error(w, "invalid expense ID", http.StatusBadRequest)
 		return
 	}
-	if err := s.expenseStore.Cancel(r.Context(), id, orgID); err != nil {
-		s.logger.Error("failed to cancel expense", "error", err, "organization_id", orgID)
-		http.Error(w, "failed to cancel expense", http.StatusInternalServerError)
+	if err := s.expenseStore.Cancel(r.Context(), id, orgID, actorID); err != nil {
+		switch {
+		case errors.Is(err, stores.ErrExpenseNotFound):
+			http.Error(w, "expense not found", http.StatusNotFound)
+		case errors.Is(err, stores.ErrCashSessionNotOpen):
+			http.Error(w, "cash expense cannot be cancelled after its session is closed", http.StatusConflict)
+		case errors.Is(err, stores.ErrCashBalanceOverflow):
+			http.Error(w, err.Error(), http.StatusConflict)
+		default:
+			s.logger.Error("failed to cancel expense", "error", err, "organization_id", orgID)
+			http.Error(w, "failed to cancel expense", http.StatusInternalServerError)
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1565,7 +1849,8 @@ func (s *ApiServer) corsMiddleware(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
+		w.Header().Set("Access-Control-Expose-Headers", "Idempotency-Replayed")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 
 		if r.Method == http.MethodOptions {

@@ -1,7 +1,12 @@
 import { useAuth } from "@clerk/clerk-react"
 import { useEffect, useState } from "react"
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080"
+const configuredApiBase = (import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "")
+const API_BASE_URL = /^(https?:\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:\/|$)/i.test(
+  configuredApiBase
+)
+  ? ""
+  : configuredApiBase
 
 /** Récupère un jeton de session Clerk (utilisé par les formulaires hors hook). */
 export async function getClerkToken(): Promise<string | null> {
@@ -24,7 +29,7 @@ export interface UseApiResult<T> {
 export function useApi<T = unknown>(path: string): UseApiResult<T> {
   const { getToken, isLoaded } = useAuth()
   const [data, setData] = useState<T | null>(null)
-  const [loading, setLoading] = useState(!isLoaded)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -34,6 +39,7 @@ export function useApi<T = unknown>(path: string): UseApiResult<T> {
 
     ;(async () => {
       setLoading(true)
+      setData(null)
       setError(null)
       try {
         const token = await getToken()
@@ -76,7 +82,11 @@ export function useApi<T = unknown>(path: string): UseApiResult<T> {
     }
   }, [path, getToken, isLoaded])
 
-  return { data, loading, error }
+  return {
+    data: isLoaded && path ? data : null,
+    loading: !isLoaded ? true : path ? loading : false,
+    error: isLoaded && path ? error : null,
+  }
 }
 
 export async function apiFetch(

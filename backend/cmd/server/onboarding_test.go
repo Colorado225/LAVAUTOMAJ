@@ -1,47 +1,43 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
+	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/google/uuid"
 )
 
-// ⚠️ Sécurité : ces tests créent des organisations réelles dans la base
-// configurée. Ils ne s'exécutent QUE si TEST_DATABASE_URL est défini et
-// différent de la base de développement (base jetable obligatoire).
-// cmd/server/main_test.go, lui, exécute mig.Down() en teardown : ne jamais
-// le pointer vers la base de production.
-
-func testDBURL(t *testing.T) string {
-	t.Helper()
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" || url == os.Getenv("DATABASE_URL") {
-		t.Skip("TEST_DATABASE_URL non défini ou identique à DATABASE_URL : test ignoré pour protéger la base de dev/prod")
-	}
-	return url
-}
-
-// TestConfirmOnboardingRequiresCompleteStages vérifie le refus du dashboard
-// (accès métier) avant la fin du parcours : un confirm sur un parcours vide
-// doit renvoyer 400.
+// TestConfirmOnboardingRequiresCompleteStages exercises the real handler with
+// an isolated tenant fixture and verifies that an empty onboarding cannot be
+// confirmed or provisioned as a dashboard-ready organization.
 func TestConfirmOnboardingRequiresCompleteStages(t *testing.T) {
-	testDBURL(t) // garde-fou ; le serveur de test est monté par main_test.go
-	if testServer == nil || testDB == nil {
-		t.Skip("serveur de test non initialisé")
+	if testDB == nil || testServer == nil {
+		t.Skip("database integration test: TEST_DATABASE_URL is not set")
 	}
 
-	// Org jetable, sans progression : la confirmation doit échouer.
-	_ = uuid.New() // (l'auth Clerk est requise avant toute résolution d'org)
+	ctx := context.Background()
+	clerkOrgID := "org_onboarding_test_" + uuid.NewString()
+	org, err := testServer.onboardingStore.CreateOrganization(ctx, clerkOrgID, "Onboarding Test")
+	if err != nil {
+		t.Fatalf("failed to create organization fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testDB.ExecContext(ctx, `DELETE FROM organizations WHERE id = $1`, org.ID)
+	})
+
+	claims := &clerk.SessionClaims{
+		Subject: "user_onboarding_test_" + uuid.NewString(),
+		Custom:  map[string]interface{}{"org_id": clerkOrgID, "org_role": "org:admin"},
+	}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/confirm", nil)
-	// Le middleware Clerk n'est pas contournable en test unitaire sans jeton :
-	// on attend un 401/403 sans claims, ou 400/500 selon la pile — l'important
-	// est de ne jamais recevoir de 201 (création) sans parcours complet.
-	rec := httptest.NewRecorder()
-	testServer.router.ServeHTTP(rec, req)
-	if rec.Code == http.StatusCreated {
-		t.Fatalf("la confirmation a abouti sans parcours complet ni authentification (code 201)")
+	req = req.WithContext(clerk.ContextWithSessionClaims(req.Context(), claims))
+	recorder := httptest.NewRecorder()
+	testServer.handleConfirmOnboarding(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected incomplete onboarding to return 400, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 }

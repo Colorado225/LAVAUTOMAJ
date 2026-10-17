@@ -48,19 +48,16 @@ Critère de validation PHASE 2 : build réussi, navigation stable, aucun lien ma
 
 ## PHASE 3 — Catalogue et lavages
 
-[-] **Service Catalog** : Migration 000002 appliquée, modèles Go, stores et endpoints API implémentés (`GET/POST/PATCH/POST deactivate /api/v1/service-categories`, `GET/POST/PATCH/POST deactivate /api/v1/services`). Page frontend `/services` affichant le catalogue depuis l'API.
-- [x] Modèles Go : `VehicleCategory`, `ServiceCategory`, `Service`
-- [x] Stores : `vehicle_categories.go`, `service_categories.go`, `services.go`
-- [x] Endpoints API avec isolation par `organization_id` et vérification Clerk
-- [x] Frontend : page `/services` consommant l'API via `useApi`
-- [x] Navigation : sidebar + command-search mis à jour
-[-] **Vehicle Categories** : Même traitement (voir ci-dessus). Page frontend `/vehicle-categories` créée.
-- [ ] **"New Wash" Form** : Créer le formulaire d'enregistrement d'un nouveau lavage.
-- [ ] **Wash History** : Afficher l'historique des lavages.
-- [ ] **Wash Details** : Afficher le détail d'un lavage.
-- [ ] **Transactional Recording** : Assurer l'enregistrement transactionnel des données.
-- [ ] **Cancellation Management** : Gérer l'annulation d'un lavage.
-- [ ] **Idempotency** : Protéger contre les doubles soumissions.
+- [x] **Service Catalog** : Catalogue standard provisionné à l'onboarding et création de prestations personnalisées depuis `/services`; endpoints tenant-scopés.
+- [x] **Vehicle Categories** : Catégories de départ pour les organisations existantes et nouvelles; création disponible depuis `/vehicle-categories`.
+- [x] **New Wash Form** : Choix du site, catégorie, prestations/quantités, employés, moyen de paiement et montant reçu; total calculé automatiquement.
+- [x] **Wash History & Details** : Historique des 200 opérations récentes et page de détail avec snapshots, affectations et paiements.
+- [x] **Transactional Recording** : Lavage, lignes de prix figées, affectations, paiement et mouvement cash éventuel dans une transaction.
+- [x] **Idempotency** : Clé requise, préfixée par organisation, payload fingerprinté et reprise frontend sans double enregistrement.
+- [-] **Cancellation Management** : Annulation auditée des lavages non payés/en attente; annulation bloquée tant qu'un paiement vérifié n'a pas été remboursé.
+- [-] **Tests** : Tests unitaires et PostgreSQL écrits (`wash_store_test.go`, `washes_test.go`); exécution non faite, Go/PostgreSQL indisponibles.
+
+Critère de validation PHASE 3 : en cours jusqu'à exécution des tests sur base jetable et prise en charge du remboursement avant annulation d'un lavage payé.
 
 ## PHASE 4 — Paiements et caisse
 
@@ -87,17 +84,7 @@ Critère de validation PHASE 2 : build réussi, navigation stable, aucun lien ma
 - [x] Page washes (liste des lavages)
 - [x] Navigation sidebar + command-search (Caisse, Dépenses, Lavages déjà présents)
 
-Critère de validation PHASE 4 : montants du rapport, encaissements et solde de caisse correspondent aux mêmes opérations sources sans double comptabilisation. ⬅️ En cours (tests à écrire).
-
-## PHASE 5 — Rapports et équipe
-
-- [ ] **Daily Reports** : Générer les rapports journaliers.
-- [ ] **Periodical Reports** : Générer les rapports par période (hebdomadaire, mensuel).
-- [ ] **Service Performance Reports** : Analyser la performance des prestations.
-- [ ] **Employee Performance Indicators** : Suivre la performance des employés.
-- [ ] **Report Filters** : Ajouter des filtres aux rapports.
-- [ ] **CSV Export** : Permettre l'export des données en CSV (selon les permissions).
-- [ ] **Team Management** : Gérer les collaborateurs.
+Critère de validation PHASE 4 : montants du rapport, encaissements et solde de caisse correspondent aux mêmes opérations sources sans double comptabilisation. ⬅️ En cours (tests écrits, exécution en attente d'un environnement Go/PostgreSQL).
 
 ## PHASE 5 — Rapports et équipe
 

@@ -3,6 +3,9 @@ package stores
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"strings"
+
 	"washpilot-ci-backend/internal/models"
 
 	"github.com/google/uuid"
@@ -18,6 +21,10 @@ func NewServiceStore(db *sqlx.DB) *ServiceStore {
 }
 
 func (s *ServiceStore) Create(ctx context.Context, svc *models.Service) error {
+	svc.Name = strings.TrimSpace(svc.Name)
+	if svc.Name == "" || len(svc.Name) > 100 || svc.PriceCents < 0 {
+		return errors.New("service name must contain 1 to 100 characters and price cannot be negative")
+	}
 	query := `INSERT INTO services (id, organization_id, category_id, name, price_cents, duration_minutes, is_active, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW()) RETURNING id, created_at, updated_at`
 	return s.DB.GetContext(ctx, svc, query, svc.ID, svc.OrganizationID, svc.CategoryID, svc.Name, svc.PriceCents, svc.DurationMinutes, svc.IsActive)
@@ -44,6 +51,10 @@ func (s *ServiceStore) GetByID(ctx context.Context, id uuid.UUID) (*models.Servi
 }
 
 func (s *ServiceStore) Update(ctx context.Context, svc *models.Service) error {
+	svc.Name = strings.TrimSpace(svc.Name)
+	if svc.Name == "" || len(svc.Name) > 100 || svc.PriceCents < 0 {
+		return errors.New("service name must contain 1 to 100 characters and price cannot be negative")
+	}
 	query := `UPDATE services SET category_id = $1, name = $2, price_cents = $3, duration_minutes = $4, is_active = $5, updated_at = NOW() WHERE id = $6 AND organization_id = $7 RETURNING updated_at`
 	return s.DB.GetContext(ctx, &svc.UpdatedAt, query, svc.CategoryID, svc.Name, svc.PriceCents, svc.DurationMinutes, svc.IsActive, svc.ID, svc.OrganizationID)
 }

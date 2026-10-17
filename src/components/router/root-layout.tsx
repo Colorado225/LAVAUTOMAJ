@@ -1,7 +1,8 @@
-import { Outlet, useNavigation, Navigate } from "react-router-dom"
+import { Outlet, useLocation, useNavigation, Navigate } from "react-router-dom"
 import { SignedIn, SignedOut } from "@clerk/clerk-react"
 import { LoadingSpinner } from "@/components/ui/loading-spinner"
 import { OnboardingGate } from "@/components/router/onboarding-gate"
+import { OrganizationGate } from "@/components/router/organization-gate"
 
 /** Thin top bar shown while the next route's code is loading. */
 function RouteProgress() {
@@ -18,22 +19,45 @@ function RouteProgress() {
 
 export function RootLayout() {
   const navigation = useNavigation()
+  const location = useLocation()
+  const isPublicLandingRoute = location.pathname === "/" || location.pathname === "/landing"
+  const isAuthRoute = location.pathname.startsWith("/auth/")
+  const isOrganizationCreationRoute = location.pathname === "/auth/create-organization"
+  const isSignUpRoute = location.pathname === "/auth/sign-up"
+
   return (
     <>
       {navigation.state === "loading" && <RouteProgress />}
-      {/*
-        Garde d'authentification globale (§2-§3 du WORKFLOW) : un visiteur
-        non connecté est renvoyé vers la connexion ; un compte non configuré
-        est renvoyé vers l'onboarding par OnboardingGate.
-      */}
-      <SignedOut>
-        <Navigate to="/auth/sign-in" replace />
-      </SignedOut>
-      <SignedIn>
-        <OnboardingGate>
-          <Outlet />
-        </OnboardingGate>
-      </SignedIn>
+      {isPublicLandingRoute ? (
+        <Outlet />
+      ) : isAuthRoute ? (
+        <>
+          {/* Clerk sign-in/up screens must remain reachable before a session exists. */}
+          <SignedOut>
+            <Outlet />
+          </SignedOut>
+          <SignedIn>
+            {isOrganizationCreationRoute || isSignUpRoute ? (
+              <Outlet />
+            ) : (
+              <Navigate to="/dashboard" replace />
+            )}
+          </SignedIn>
+        </>
+      ) : (
+        <>
+          <SignedOut>
+            <Navigate to="/auth/sign-in" replace state={{ from: location.pathname }} />
+          </SignedOut>
+          <SignedIn>
+            <OrganizationGate>
+              <OnboardingGate>
+                <Outlet />
+              </OnboardingGate>
+            </OrganizationGate>
+          </SignedIn>
+        </>
+      )}
     </>
   )
 }

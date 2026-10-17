@@ -1,219 +1,89 @@
-"use client"
-
 import {
-  BarChart3,
-  Zap,
+  Banknote,
+  CarFront,
+  TrendingUp,
+  ClipboardCheck,
+  CreditCard,
   Users,
-  ArrowRight,
-  Database,
-  Package,
-  Crown,
-  Layout,
-  Palette,
 } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Image3D } from "@/components/image-3d"
+import { Reveal, SectionHeading } from "./landing-motion"
 
-const mainFeatures = [
+const features = [
   {
-    icon: Package,
-    title: "Curated Component Library",
+    icon: CarFront,
+    title: "Chaque lavage, détaillé",
     description:
-      "Hand-picked blocks and templates for quality and reliability.",
+      "Retrouvez la catégorie du véhicule, les prestations, le montant, le paiement et les laveurs associés.",
+    tone: "bg-blue-50 text-blue-700",
   },
   {
-    icon: Crown,
-    title: "Free & Premium Options",
+    icon: TrendingUp,
+    title: "Des recettes plus lisibles",
     description:
-      "Start free, upgrade to premium collections when you need more.",
+      "Le tableau de bord regroupe les paiements confirmés et le nombre de lavages enregistrés.",
+    tone: "bg-emerald-50 text-emerald-700",
   },
   {
-    icon: Layout,
-    title: "Ready-to-Use Templates",
-    description: "Copy-paste components that just work out of the box.",
-  },
-  {
-    icon: Zap,
-    title: "Regular Updates",
-    description: "New blocks and templates added weekly to keep you current.",
-  },
-]
-
-const secondaryFeatures = [
-  {
-    icon: BarChart3,
-    title: "Multiple Frameworks",
+    icon: Banknote,
+    title: "Une caisse suivie",
     description:
-      "React, Next.js, and Vite compatibility for flexible development.",
+      "Ouvrez une session, suivez les mouvements et comparez le solde théorique au montant compté.",
+    tone: "bg-violet-50 text-violet-700",
   },
   {
-    icon: Palette,
-    title: "Modern Tech Stack",
-    description: "Built with shadcn/ui, Tailwind CSS, and TypeScript.",
+    icon: ClipboardCheck,
+    title: "Un historique des dépenses",
+    description:
+      "Consultez les dépenses enregistrées avec leur date, leur catégorie, leur montant et leur moyen de paiement.",
+    tone: "bg-amber-50 text-amber-700",
   },
   {
     icon: Users,
-    title: "Responsive Design",
-    description: "Mobile-first components for all screen sizes and devices.",
+    title: "Les laveurs associés aux opérations",
+    description:
+      "Associez les membres de l’équipe aux lavages concernés pour retrouver plus facilement le contexte.",
+    tone: "bg-cyan-50 text-cyan-700",
   },
   {
-    icon: Database,
-    title: "Developer-Friendly",
+    icon: CreditCard,
+    title: "Les paiements du terrain",
     description:
-      "Clean code, well-documented, easy integration and customization.",
+      "Enregistrez les paiements en espèces, Orange Money, MTN MoMo, Moov Money, Wave ou autre.",
+    tone: "bg-rose-50 text-rose-700",
   },
 ]
 
 export function FeaturesSection() {
   return (
-    <section id="features" className="py-24 sm:py-32 bg-muted/30">
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Section Header */}
-        <div className="mx-auto max-w-2xl text-center mb-16">
-          <Badge variant="outline" className="mb-4">
-            Marketplace Features
-          </Badge>
-          <h2 className="text-3xl font-bold tracking-tight sm:text-4xl mb-4">
-            Everything you need to build amazing web applications
-          </h2>
-          <p className="text-lg text-muted-foreground">
-            Our marketplace provides curated blocks, templates, landing pages,
-            and admin dashboards to help you build professional applications
-            faster than ever.
+    <section id="fonctionnalites" className="scroll-mt-24 bg-[#f6f8fc] py-20 sm:py-28">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <Reveal>
+          <SectionHeading
+            eyebrow="Ce que vous pouvez suivre"
+            title="Reprenez la maîtrise de votre activité."
+            description="WashPilot CI rassemble les repères utiles pour comprendre votre journée de travail et prendre vos décisions à partir des opérations enregistrées."
+          />
+        </Reveal>
+
+        <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 sm:mt-16">
+          {features.map((feature, index) => (
+            <Reveal key={feature.title} delay={(index % 3) * 0.06}>
+              <article className="group h-full rounded-3xl border border-slate-200/80 bg-white p-6 shadow-[0_12px_38px_rgba(16,35,66,0.04)] transition duration-300 hover:-translate-y-1 hover:shadow-[0_22px_50px_rgba(16,35,66,0.09)] motion-reduce:transition-none sm:p-7">
+                <div className={`mb-5 grid size-12 place-items-center rounded-2xl ${feature.tone} transition-transform duration-300 group-hover:scale-105 motion-reduce:transition-none`}>
+                  <feature.icon className="size-5" aria-hidden="true" />
+                </div>
+                <h3 className="text-base font-bold leading-6 text-[#102342]">{feature.title}</h3>
+                <p className="mt-3 text-sm leading-6 text-slate-500">{feature.description}</p>
+              </article>
+            </Reveal>
+          ))}
+        </div>
+
+        <Reveal>
+          <p className="mx-auto mt-8 max-w-3xl text-center text-xs leading-5 text-slate-400 sm:text-sm">
+            Les indicateurs reflètent les données saisies dans l’application. Ils aident à mieux voir l’activité, sans garantir un niveau de recettes ou de bénéfices.
           </p>
-        </div>
-
-        {/* First Feature Section */}
-        <div className="grid items-center gap-12 lg:grid-cols-2 lg:gap-8 xl:gap-16 mb-24">
-          {/* Left Image */}
-          <Image3D
-            lightSrc="feature-1-light.png"
-            darkSrc="feature-1-dark.png"
-            alt="Analytics dashboard"
-            direction="left"
-          />
-          {/* Right Content */}
-          <div className="flex flex-col gap-6">
-            <div className="flex flex-col gap-4">
-              <h3 className="text-2xl font-semibold tracking-tight text-balance sm:text-3xl">
-                Components that accelerate development
-              </h3>
-              <p className="text-muted-foreground text-base text-pretty">
-                Our curated marketplace offers premium blocks and templates
-                designed to save time and ensure consistency across your admin
-                projects.
-              </p>
-            </div>
-
-            <ul className="grid gap-4 sm:grid-cols-2">
-              {mainFeatures.map((feature, index) => (
-                <li
-                  key={index}
-                  className="group hover:bg-accent/5 flex items-start gap-3 p-2 rounded-lg transition-colors"
-                >
-                  <div className="mt-0.5 flex shrink-0 items-center justify-center">
-                    <feature.icon
-                      className="size-5 text-primary"
-                      aria-hidden="true"
-                    />
-                  </div>
-                  <div>
-                    <h3 className="text-foreground font-medium">
-                      {feature.title}
-                    </h3>
-                    <p className="text-muted-foreground mt-1 text-sm">
-                      {feature.description}
-                    </p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-
-            <div className="flex flex-col sm:flex-row gap-4 pe-4 pt-2">
-              <Button size="lg" className="cursor-pointer">
-                <a
-                  href="https://shadcnstore.com/templates"
-                  className="flex items-center"
-                >
-                  Browse Templates
-                  <ArrowRight className="ms-2 size-4" aria-hidden="true" />
-                </a>
-              </Button>
-              <Button size="lg" variant="outline" className="cursor-pointer">
-                <a href="https://shadcnstore.com/blocks">View Components</a>
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        {/* Second Feature Section - Flipped Layout */}
-        <div className="grid items-center gap-12 lg:grid-cols-2 lg:gap-8 xl:gap-16">
-          {/* Left Content */}
-          <div className="flex flex-col gap-6 order-2 lg:order-1">
-            <div className="flex flex-col gap-4">
-              <h3 className="text-2xl font-semibold tracking-tight text-balance sm:text-3xl">
-                Built for modern development workflows
-              </h3>
-              <p className="text-muted-foreground text-base text-pretty">
-                Every component follows best practices with TypeScript,
-                responsive design, and clean code architecture that integrates
-                seamlessly into your projects.
-              </p>
-            </div>
-
-            <ul className="grid gap-4 sm:grid-cols-2">
-              {secondaryFeatures.map((feature, index) => (
-                <li
-                  key={index}
-                  className="group hover:bg-accent/5 flex items-start gap-3 p-2 rounded-lg transition-colors"
-                >
-                  <div className="mt-0.5 flex shrink-0 items-center justify-center">
-                    <feature.icon
-                      className="size-5 text-primary"
-                      aria-hidden="true"
-                    />
-                  </div>
-                  <div>
-                    <h3 className="text-foreground font-medium">
-                      {feature.title}
-                    </h3>
-                    <p className="text-muted-foreground mt-1 text-sm">
-                      {feature.description}
-                    </p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-
-            <div className="flex flex-col sm:flex-row gap-4 pe-4 pt-2">
-              <Button size="lg" className="cursor-pointer">
-                <a href="#" className="flex items-center">
-                  View Documentation
-                  <ArrowRight className="ms-2 size-4" aria-hidden="true" />
-                </a>
-              </Button>
-              <Button size="lg" variant="outline" className="cursor-pointer">
-                <a
-                  href="https://github.com/shadcnstore/shadcn-dashboard-landing-template"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  GitHub Repository
-                </a>
-              </Button>
-            </div>
-          </div>
-
-          {/* Right Image */}
-          <Image3D
-            lightSrc="feature-2-light.png"
-            darkSrc="feature-2-dark.png"
-            alt="Performance dashboard"
-            direction="right"
-            className="order-1 lg:order-2"
-          />
-        </div>
+        </Reveal>
       </div>
     </section>
   )
