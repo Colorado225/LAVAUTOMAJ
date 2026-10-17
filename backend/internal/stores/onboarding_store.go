@@ -31,6 +31,7 @@ func (s *OnboardingStore) CreateOrganization(ctx context.Context, clerkOrgID, na
 	err := s.DB.GetContext(ctx, &org, `
 		INSERT INTO organizations (clerk_org_id, name)
 		VALUES ($1, $2)
+		ON CONFLICT (clerk_org_id) DO UPDATE SET clerk_org_id = EXCLUDED.clerk_org_id
 		RETURNING *`,
 		clerkOrgID, name)
 	return &org, err
@@ -259,29 +260,47 @@ func (s *OnboardingStore) GenerateUniqueSlug(ctx context.Context, name string) (
 // Idempotent : si l'onboarding est déjà terminé, renvoie l'org sans recréer.
 // Retourne (org, alreadyCompleted, err).
 func (s *OnboardingStore) ConfirmOnboarding(ctx context.Context, orgID uuid.UUID) (*models.Organization, bool, error) {
-	progress, err := s.GetProgress(ctx, orgID)
+	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return nil, false, err
 	}
-	if progress == nil {
-		return nil, false, errors.New("aucune progression d'onboarding")
+	defer tx.Rollback()
+
+	// Lock the progress row before validation and provisioning. Simultaneous
+	// confirmation requests then observe the first commit and remain idempotent.
+	var progress models.OnboardingProgress
+	err = tx.GetContext(ctx, &progress,
+		`SELECT * FROM onboarding_progress WHERE organization_id = $1 FOR UPDATE`, orgID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, ErrOnboardingProgressMissing
+		}
+		return nil, false, err
 	}
 	if progress.CompletedAt != nil {
-		org, err := s.GetOrganization(ctx, orgID)
-		return org, true, err
+		var org models.Organization
+		if err := tx.GetContext(ctx, &org, `SELECT * FROM organizations WHERE id = $1`, orgID); err != nil {
+			return nil, false, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, false, err
+		}
+		return &org, true, nil
 	}
 
 	// Conditions obligatoires (§9.3-9.6) : station complète, ≥1 service, plan.
-	if !IsStageComplete(models.StageReview, progress) {
-		return nil, false, errors.New("onboarding incomplet : les conditions obligatoires ne sont pas satisfaites")
+	if !IsStageComplete(models.StageReview, &progress) {
+		return nil, false, ErrOnboardingIncomplete
 	}
 
-	plan, err := s.PlanByCode(ctx, *progress.PlanCode)
+	var plan models.Plan
+	err = tx.GetContext(ctx, &plan,
+		`SELECT * FROM plans WHERE code = $1 AND is_active = true`, *progress.PlanCode)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, ErrSelectedPlanUnavailable
+		}
 		return nil, false, err
-	}
-	if plan == nil {
-		return nil, false, errors.New("forfait sélectionné introuvable ou inactif")
 	}
 
 	var stationData struct {
@@ -302,12 +321,6 @@ func (s *OnboardingStore) ConfirmOnboarding(ctx context.Context, orgID uuid.UUID
 		return nil, false, err
 	}
 
-	tx, err := s.DB.Beginx()
-	if err != nil {
-		return nil, false, err
-	}
-	defer tx.Rollback()
-
 	// 1. Coordonnées de la station + onboarding_completed.
 	var org models.Organization
 	err = tx.GetContext(ctx, &org, `
@@ -323,7 +336,33 @@ func (s *OnboardingStore) ConfirmOnboarding(ctx context.Context, orgID uuid.UUID
 		return nil, false, err
 	}
 
-	// 2. Services choisis + personnalisés copiés dans la table services de l'org.
+	// 2. Provisionner la première station opérationnelle pour le parcours de
+	// caisse. L'unicité (organization_id, name) rend la reprise idempotente.
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO sites (organization_id, name, address, city, phone, is_active)
+		VALUES ($1, $2, $3, $4, $5, true)
+		ON CONFLICT (organization_id, name) DO UPDATE SET
+			address = EXCLUDED.address,
+			city = EXCLUDED.city,
+			phone = EXCLUDED.phone,
+			is_active = true,
+			updated_at = NOW()`,
+		orgID, stationData.Name, stationData.Address, stationData.City, stationData.Phone)
+	if err != nil {
+		return nil, false, err
+	}
+	// Catégories de véhicule de départ, nécessaires à l'enregistrement d'un
+	// lavage dès la première connexion. Les catégories personnalisées sont
+	// conservées grâce à la contrainte unique tenant + nom.
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO vehicle_categories (organization_id, name)
+		VALUES ($1, 'Voiture'), ($1, 'Moto'), ($1, 'Utilitaire')
+		ON CONFLICT (organization_id, name) DO NOTHING`, orgID)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// 3. Services choisis + personnalisés copiés dans la table services de l'org.
 	if progress.ServicesData != nil {
 		var sel struct {
 			Selected []struct {
@@ -377,7 +416,7 @@ func (s *OnboardingStore) ConfirmOnboarding(ctx context.Context, orgID uuid.UUID
 		}
 	}
 
-	// 3. Travailleurs (0 autorisé si le propriétaire exerce seul).
+	// 4. Travailleurs (0 autorisé si le propriétaire exerce seul).
 	if progress.WorkersData != nil {
 		var wk struct {
 			Workers []struct {
@@ -421,7 +460,7 @@ func (s *OnboardingStore) ConfirmOnboarding(ctx context.Context, orgID uuid.UUID
 		}
 	}
 
-	// 4. Abonnement — Free actif, payant en attente (jamais de paiement simulé, §7).
+	// 5. Abonnement — Free actif, payant en attente (jamais de paiement simulé, §7).
 	state := models.SubStateActive
 	var startedAt *time.Time
 	if plan.PriceCents > 0 {
@@ -439,7 +478,7 @@ func (s *OnboardingStore) ConfirmOnboarding(ctx context.Context, orgID uuid.UUID
 		return nil, false, err
 	}
 
-	// 5. Marquer l'onboarding terminé (dernière opération de la transaction).
+	// 6. Marquer l'onboarding terminé (dernière opération de la transaction).
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE onboarding_progress SET completed_at = NOW(), updated_at = NOW()
 		WHERE organization_id = $1 AND completed_at IS NULL`, orgID); err != nil {

@@ -4,8 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { CarFront, DollarSign } from 'lucide-react'
 
 interface DashboardMetricsData {
-    total_orders: number
-    total_revenue: number
+    total_washes: number
+    total_revenue_cents: number
 }
 
 const formatXOF = (cents: number) =>
@@ -84,10 +84,10 @@ export function DashboardMetrics() {
                 </CardHeader>
                 <CardContent>
                     <div className="text-2xl font-bold">
-                        {formatXOF(data?.total_revenue || 0)}
+                        {formatXOF(data?.total_revenue_cents || 0)}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                        Sur l'ensemble des lavages encaissés
+                        Somme des paiements confirmés
                     </p>
                 </CardContent>
             </Card>
@@ -97,7 +97,7 @@ export function DashboardMetrics() {
                     <CarFront className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                    <div className="text-2xl font-bold">{data?.total_orders || 0}</div>
+                    <div className="text-2xl font-bold">{data?.total_washes || 0}</div>
                     <p className="text-xs text-muted-foreground">
                         Nombre total de lavages enregistrés
                     </p>

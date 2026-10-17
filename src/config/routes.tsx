@@ -13,19 +13,25 @@ function page(load: () => Promise<{ default: ComponentType }>) {
 export const routes: RouteObject[] = [
   // Redirect legacy dashboard-2 to the canonical /dashboard
   { path: "/dashboard-2", element: <Navigate to="/dashboard" replace /> },
-  // Root redirect to dashboard
-  { path: "/", element: <Navigate to="/dashboard" replace /> },
+  // Public marketing entry point
+  { path: "/", element: <Navigate to="/landing" replace /> },
+  { path: "/landing", lazy: page(() => import("@/app/landing/page")) },
   // WashPilot CI core routes
   { path: "/dashboard", lazy: page(() => import("@/pages/dashboard")) },
   { path: "/onboarding", lazy: page(() => import("@/app/onboarding/page")) },
   { path: "/washes", lazy: page(() => import("@/app/washes/page")) },
+  { path: "/washes/:washID", lazy: page(() => import("@/app/washes/[washID]/page")) },
   { path: "/cash-drawer", lazy: page(() => import("@/app/cash-drawer/page")) },
   { path: "/expenses", lazy: page(() => import("@/app/expenses/page")) },
   { path: "/reports", lazy: page(() => import("@/app/reports/page")) },
   { path: "/team", lazy: page(() => import("@/app/team/page")) },
   { path: "/services", lazy: page(() => import("@/app/services/page")) },
   { path: "/vehicle-categories", lazy: page(() => import("@/app/vehicle-categories/page")) },
-  // Authentication Routes
+  // Authentication and first-organization setup routes
+  {
+    path: "/auth/create-organization",
+    lazy: page(() => import("@/app/auth/create-organization/page")),
+  },
   {
     path: "/auth/sign-in",
     lazy: page(() => import("@/app/auth/sign-in/page")),

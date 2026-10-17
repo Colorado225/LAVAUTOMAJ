@@ -36,7 +36,7 @@ export default function ExpensesPage() {
               Enregistrez et suivez les dépenses de votre station.
             </p>
           </div>
-          <Button onClick={() => {}}>
+          <Button disabled title="La saisie de dépense n’est pas encore disponible">
             <Plus className="mr-2" /> Nouvelle dépense
           </Button>
         </div>

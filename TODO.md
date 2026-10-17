@@ -90,19 +90,19 @@ Pour chaque tâche, respecter l'ordre de la PARTIE 14 de `PLAN.md` :
 
 ## PHASE 3 — Catalogue et lavages
 
-**Critère de validation :** un lavage peut être enregistré, retrouvé, contrôlé et annulé sans corrompre l'historique.
+**Critère de validation :** un lavage peut être enregistré, retrouvé, contrôlé et annulé sans corrompre l'historique. En cours : valider les tests sur une base jetable et compléter le cas d'annulation après paiement vérifié via le workflow de remboursement.
 
-- [ ] 3.1 — Implémenter le catalogue des prestations (Lavage extérieur, intérieur, complet, moteur, nettoyage approfondi, personnalisées)
-- [ ] 3.2 — Gérer les catégories de véhicules
-- [ ] 3.3 — Créer le formulaire de nouveau lavage (choix catégorie, prestations, total automatique, employé, moyen de paiement, montant reçu)
-- [ ] 3.4 — Afficher l'historique des lavages
-- [ ] 3.5 — Afficher le détail d'une prestation / d'un lavage
-- [ ] 3.6 — Implémenter le calcul du total (snapshot nom + prix au moment de la vente)
-- [ ] 3.7 — Assurer l'enregistrement transactionnel
-- [ ] 3.8 — Gérer l'annulation d'un lavage
-- [ ] 3.9 — Protéger contre les doubles soumissions (idempotence)
-- [ ] 3.10 — Tests : prix modifié ne change pas les anciens lavages ; double envoi ne crée pas deux ventes ; lavage annulé exclu des ventes actives
-  - Preuve : tests passent
+- [x] 3.1 — Catalogue des prestations : catalogue standard d'onboarding et création de prestations personnalisées depuis `/services`.
+- [x] 3.2 — Catégories de véhicules : catégories de départ provisionnées, création disponible depuis `/vehicle-categories`.
+- [x] 3.3 — Formulaire de nouveau lavage : site, catégorie, prestations/quantités, total, employés, moyen et montant reçu.
+- [x] 3.4 — Historique des lavages avec recherche par les 200 opérations récentes.
+- [x] 3.5 — Détail du lavage : snapshots, employés, paiements et motif d'annulation.
+- [x] 3.6 — Calcul du total backend à partir des prix catalogue figés au moment de la vente.
+- [x] 3.7 — Enregistrement atomique du lavage, lignes, affectations, paiement et mouvement cash éventuel.
+- [-] 3.8 — Annulation conservée dans l'historique; les paiements vérifiés doivent être remboursés avant annulation (workflow de remboursement à compléter).
+- [x] 3.9 — Idempotence serveur par organisation et empreinte du payload; le frontend réutilise la même clé lors d'une reprise.
+- [-] 3.10 — Tests ajoutés pour les snapshots, doubles envois, annulation et règles d'entrée; exécution en attente d'un environnement Go/PostgreSQL.
+  - Preuve : `backend/internal/stores/wash_store_test.go`, `backend/cmd/server/washes_test.go`; non exécutés dans cet environnement.
 
 ---
 

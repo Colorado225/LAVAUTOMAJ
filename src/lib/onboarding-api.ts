@@ -78,7 +78,10 @@ export interface Plan {
   billing_cycle: string;
   max_workers: number | null;
   max_services: number | null;
-  features: string[];
+  max_sites?: number | null;
+  max_users?: number | null;
+  /** The database stores boolean entitlements; older responses used labels. */
+  features: string[] | Record<string, boolean>;
   sort_order: number;
 }
 

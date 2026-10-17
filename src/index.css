@@ -211,5 +211,6 @@ html {
   animation: route-progress-slide 1.1s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
   .route-progress-bar { animation: none; width: 100%; opacity: 0.6; }
 }

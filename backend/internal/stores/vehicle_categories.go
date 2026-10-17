@@ -3,6 +3,9 @@ package stores
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"strings"
+
 	"washpilot-ci-backend/internal/models"
 
 	"github.com/google/uuid"
@@ -18,6 +21,10 @@ func NewVehicleCategoryStore(db *sqlx.DB) *VehicleCategoryStore {
 }
 
 func (s *VehicleCategoryStore) Create(ctx context.Context, c *models.VehicleCategory) error {
+	c.Name = strings.TrimSpace(c.Name)
+	if c.Name == "" || len(c.Name) > 100 {
+		return errors.New("vehicle category name must contain 1 to 100 characters")
+	}
 	query := `INSERT INTO vehicle_categories (id, organization_id, name, is_active, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING id, created_at, updated_at`
 	return s.DB.GetContext(ctx, c, query, c.ID, c.OrganizationID, c.Name, c.IsActive)
@@ -44,6 +51,10 @@ func (s *VehicleCategoryStore) GetByID(ctx context.Context, id uuid.UUID) (*mode
 }
 
 func (s *VehicleCategoryStore) Update(ctx context.Context, c *models.VehicleCategory) error {
+	c.Name = strings.TrimSpace(c.Name)
+	if c.Name == "" || len(c.Name) > 100 {
+		return errors.New("vehicle category name must contain 1 to 100 characters")
+	}
 	query := `UPDATE vehicle_categories SET name = $1, is_active = $2, updated_at = NOW() WHERE id = $3 AND organization_id = $4 RETURNING updated_at`
 	return s.DB.GetContext(ctx, &c.UpdatedAt, query, c.Name, c.IsActive, c.ID, c.OrganizationID)
 }

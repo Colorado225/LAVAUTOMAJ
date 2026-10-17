@@ -1,271 +1,41 @@
-"use client"
-
-import { zodResolver } from "@hookform/resolvers/zod"
-import { Controller, useForm } from "react-hook-form"
-import { z } from "zod"
-import { Field, FieldError, FieldGroup } from "@/components/ui/field"
-import { Separator } from "@/components/ui/separator"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { Link } from "react-router-dom"
 import { Logo } from "@/components/logo"
-import { Heart } from "lucide-react"
-import {
-  Github,
-  Twitter,
-  Linkedin,
-  Youtube,
-} from "@/components/icons/brand-icons"
 
-const newsletterSchema = z.object({
-  email: z.string().email({
-    message: "Please enter a valid email address.",
-  }),
-})
-
-const footerLinks = {
-  product: [
-    { name: "Features", href: "#features" },
-    { name: "Pricing", href: "#pricing" },
-    { name: "API", href: "#api" },
-    { name: "Documentation", href: "#docs" },
-  ],
-  company: [
-    { name: "About", href: "#about" },
-    { name: "Blog", href: "#blog" },
-    { name: "Careers", href: "#careers" },
-    { name: "Press", href: "#press" },
-  ],
-  resources: [
-    { name: "Help Center", href: "#help" },
-    { name: "Community", href: "#community" },
-    { name: "Guides", href: "#guides" },
-    { name: "Webinars", href: "#webinars" },
-  ],
-  legal: [
-    { name: "Privacy", href: "#privacy" },
-    { name: "Terms", href: "#terms" },
-    { name: "Security", href: "#security" },
-    { name: "Status", href: "#status" },
-  ],
-}
-
-const socialLinks = [
-  { name: "Twitter", href: "#", icon: Twitter },
-  {
-    name: "GitHub",
-    href: "https://github.com/shadcnstore/shadcn-dashboard-landing-template",
-    icon: Github,
-  },
-  { name: "LinkedIn", href: "#", icon: Linkedin },
-  { name: "YouTube", href: "#", icon: Youtube },
+const footerLinks = [
+  { label: "Les enjeux", href: "#enjeux" },
+  { label: "Démo produit", href: "#demo" },
+  { label: "Fonctionnalités", href: "#fonctionnalites" },
+  { label: "Questions fréquentes", href: "#faq" },
 ]
 
 export function LandingFooter() {
-  const form = useForm<z.infer<typeof newsletterSchema>>({
-    resolver: zodResolver(newsletterSchema),
-    defaultValues: {
-      email: "",
-    },
-  })
-
-  function onSubmit(values: z.infer<typeof newsletterSchema>) {
-    // Here you would typically send the email to your newsletter service
-    console.log(values)
-    // Show success message and reset form
-    form.reset()
-  }
-
   return (
-    <footer className="border-t bg-background">
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-16">
-        {/* Newsletter Section */}
-        <div className="mb-16">
-          <div className="mx-auto max-w-2xl text-center">
-            <h3 className="text-2xl font-bold mb-4">Stay updated</h3>
-            <p className="text-muted-foreground mb-6">
-              Get the latest updates, articles, and resources sent to your inbox
-              weekly.
+    <footer className="bg-[#071a36] text-white">
+      <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+        <div className="flex flex-col gap-8 border-b border-white/10 pb-8 md:flex-row md:items-center md:justify-between">
+          <div className="max-w-md">
+            <Link to="/landing" className="inline-flex items-center gap-3">
+              <span className="grid size-10 place-items-center rounded-2xl bg-white/10 text-white">
+                <Logo size={25} />
+              </span>
+              <span className="text-lg font-extrabold tracking-[-0.04em]">WashPilot <span className="text-sky-300">CI</span></span>
+            </Link>
+            <p className="mt-4 text-sm leading-6 text-blue-100/65">
+              La gestion de votre station, enfin plus claire. Des repères concrets à partir des opérations que vous enregistrez.
             </p>
-            <form
-              onSubmit={form.handleSubmit(onSubmit)}
-              className="flex flex-col gap-2 max-w-md mx-auto sm:flex-row"
-            >
-              <FieldGroup>
-                <Controller
-                  control={form.control}
-                  name="email"
-                  render={({ field, fieldState }) => (
-                    <Field data-invalid={fieldState.invalid} className="flex-1">
-                      <Input
-                        id="footer-email"
-                        aria-invalid={fieldState.invalid}
-                        type="email"
-                        placeholder="Enter your email"
-                        {...field}
-                      />
-                      {fieldState.invalid && (
-                        <FieldError errors={[fieldState.error]} />
-                      )}
-                    </Field>
-                  )}
-                />
-              </FieldGroup>
-              <Button type="submit" className="cursor-pointer">
-                Subscribe
-              </Button>
-            </form>
           </div>
-        </div>
-
-        {/* Main Footer Content */}
-        <div className="grid gap-8 grid-cols-4 lg:grid-cols-6">
-          {/* Brand Column */}
-          <div className="col-span-4 lg:col-span-2 max-w-2xl">
-            <div className="flex items-center gap-2 mb-4 max-lg:justify-center">
-              <a
-                href="https://shadcnstore.com"
-                target="_blank"
-                className="flex items-center gap-2 cursor-pointer"
-              >
-                <Logo size={32} />
-                <span className="font-bold text-xl">ShadcnStore</span>
+          <nav aria-label="Liens de pied de page" className="flex flex-wrap gap-x-5 gap-y-3 text-xs font-semibold text-blue-100/75 sm:text-sm">
+            {footerLinks.map((item) => (
+              <a key={item.href} href={item.href} className="transition-colors hover:text-white motion-reduce:transition-none">
+                {item.label}
               </a>
-            </div>
-            <p className="text-muted-foreground mb-6 max-lg:text-center max-lg:flex max-lg:justify-center">
-              Accelerating web development with curated blocks, templates,
-              landing pages, and admin dashboards designed for modern
-              developers.
-            </p>
-            <div className="flex gap-4 max-lg:justify-center">
-              {socialLinks.map((social) => (
-                <Button
-                  key={social.name}
-                  variant="ghost"
-                  size="icon"
-                  nativeButton={false}
-                  render={
-                    <a
-                      href={social.href}
-                      aria-label={social.name}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    />
-                  }
-                >
-                  <social.icon className="size-4" />
-                </Button>
-              ))}
-            </div>
-          </div>
-
-          {/* Links Columns */}
-          <div className="max-md:col-span-2 lg:col-span-1">
-            <h4 className="font-semibold mb-4">Product</h4>
-            <ul className="flex flex-col gap-3">
-              {footerLinks.product.map((link) => (
-                <li key={link.name}>
-                  <a
-                    href={link.href}
-                    className="text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {link.name}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="max-md:col-span-2 lg:col-span-1">
-            <h4 className="font-semibold mb-4">Company</h4>
-            <ul className="flex flex-col gap-3">
-              {footerLinks.company.map((link) => (
-                <li key={link.name}>
-                  <a
-                    href={link.href}
-                    className="text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {link.name}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="max-md:col-span-2 lg:col-span-1">
-            <h4 className="font-semibold mb-4">Resources</h4>
-            <ul className="flex flex-col gap-3">
-              {footerLinks.resources.map((link) => (
-                <li key={link.name}>
-                  <a
-                    href={link.href}
-                    className="text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {link.name}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="max-md:col-span-2 lg:col-span-1">
-            <h4 className="font-semibold mb-4">Legal</h4>
-            <ul className="flex flex-col gap-3">
-              {footerLinks.legal.map((link) => (
-                <li key={link.name}>
-                  <a
-                    href={link.href}
-                    className="text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {link.name}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
+            ))}
+            <Link to="/auth/sign-in" className="transition-colors hover:text-white motion-reduce:transition-none">Connexion</Link>
+          </nav>
         </div>
-
-        <Separator className="my-8" />
-
-        {/* Bottom Footer */}
-        <div className="flex flex-col lg:flex-row justify-between items-center gap-2">
-          <div className="flex flex-col sm:flex-row items-center gap-2 text-muted-foreground text-sm">
-            <div className="flex items-center gap-1">
-              <span>Made with</span>
-              <Heart className="size-4 text-destructive fill-current" />
-              <span>by</span>
-              <a
-                href="https://shadcnstore.com"
-                target="_blank"
-                className="font-semibold text-foreground hover:text-primary transition-colors cursor-pointer"
-              >
-                ShadcnStore
-              </a>
-            </div>
-            <span className="hidden sm:inline">•</span>
-            <span>
-              © {new Date().getFullYear()} for the developer community
-            </span>
-          </div>
-          <div className="flex items-center gap-4 text-sm text-muted-foreground mt-4 md:mt-0">
-            <a
-              href="#privacy"
-              className="hover:text-foreground transition-colors"
-            >
-              Privacy Policy
-            </a>
-            <a
-              href="#terms"
-              className="hover:text-foreground transition-colors"
-            >
-              Terms of Service
-            </a>
-            <a
-              href="#cookies"
-              className="hover:text-foreground transition-colors"
-            >
-              Cookie Policy
-            </a>
-          </div>
+        <div className="flex flex-col gap-2 pt-5 text-[10px] leading-5 text-blue-100/45 sm:flex-row sm:items-center sm:justify-between sm:text-xs">
+          <span>© {new Date().getFullYear()} WashPilot CI. Tous droits réservés.</span>
+          <span>Les chiffres de démonstration sont fictifs. Aucun niveau de gains n’est garanti.</span>
         </div>
       </div>
     </footer>

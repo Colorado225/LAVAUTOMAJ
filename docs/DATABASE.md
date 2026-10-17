@@ -144,6 +144,7 @@ Unique : `(organization_id, name)`
 
 Index : `idx_vehicle_categories_organization_id`
 Unique : `(organization_id, name)`
+Les catégories de départ `Voiture`, `Moto` et `Utilitaire` sont provisionnées pour les organisations existantes par la migration 000010 et pour les nouvelles organisations à la confirmation de l'onboarding.
 
 ### customers (facultatif dans le MVP)
 
@@ -172,7 +173,11 @@ Index : `idx_customers_organization_id`
 | status | VARCHAR(50) | NOT NULL DEFAULT 'completed' | Statut (completed, cancelled, pending) |
 | payment_status | VARCHAR(50) | NOT NULL DEFAULT 'unpaid' | Statut paiement (unpaid, paid, partial, refunded) |
 | author_id | UUID | NOT NULL, FK -> users.id | Auteur de l'opération |
-| idempotency_key | VARCHAR(255) | UNIQUE | Clé d'idempotence |
+| idempotency_key | VARCHAR(255) | UNIQUE | Clé d'idempotence, préfixée côté serveur par l'organisation |
+| idempotency_fingerprint | CHAR(64) | | Empreinte du contenu de la demande idempotente |
+| cancelled_at | TIMESTAMPTZ | | Date d'annulation |
+| cancelled_by_id | UUID | FK -> users.id, ON DELETE SET NULL | Auteur de l'annulation |
+| cancellation_reason | TEXT | | Motif d'annulation conservé dans l'historique |
 | created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 | updated_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 
@@ -204,6 +209,18 @@ Index : `idx_wash_items_wash_id`, `idx_wash_items_service_id`
 Index : `idx_wash_assignments_wash_id`, `idx_wash_assignments_user_id`
 Unique : `(wash_id, user_id)`
 
+### wash_worker_assignments (attribution aux travailleurs de l'organisation)
+
+| Colonne | Type | Contraintes | Description |
+|---------|------|-------------|-------------|
+| id | UUID | PK, DEFAULT gen_random_uuid() | Identifiant |
+| wash_id | UUID | NOT NULL, FK -> washes.id ON DELETE CASCADE | Lavage |
+| worker_id | UUID | NOT NULL, FK -> workers.id ON DELETE CASCADE | Travailleur affecté |
+| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
+
+Index : `idx_wash_worker_assignments_worker_id`
+Unique : `(wash_id, worker_id)`
+
 ### payments (encaissements associés)
 
 | Colonne | Type | Contraintes | Description |
@@ -211,6 +228,7 @@ Unique : `(wash_id, user_id)`
 | id | UUID | PK, DEFAULT gen_random_uuid() | Identifiant |
 | organization_id | UUID | NOT NULL, FK -> organizations.id | Entreprise |
 | wash_id | UUID | FK -> washes.id | Lavage lié (optionnel) |
+| cash_session_id | UUID | FK -> cash_sessions.id, ON DELETE SET NULL | Session recevant un paiement en espèces |
 | amount_cents | BIGINT | NOT NULL | Montant en centimes XOF |
 | method | VARCHAR(50) | NOT NULL | Moyen (cash, orange_money, mtn_momo, moov_money, wave, other) |
 | status | VARCHAR(50) | NOT NULL DEFAULT 'pending' | Statut (pending, verified, failed, refunded) |
@@ -219,7 +237,7 @@ Unique : `(wash_id, user_id)`
 | author_id | UUID | NOT NULL, FK -> users.id | Auteur |
 | created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 
-Index : `idx_payments_organization_id`, `idx_payments_wash_id`, `idx_payments_status`, `idx_payments_created_at`, `idx_payments_method`
+Index : `idx_payments_organization_id`, `idx_payments_wash_id`, `idx_payments_cash_session_id`, `idx_payments_status`, `idx_payments_created_at`, `idx_payments_method`
 
 ### refunds (remboursements — workflow futur)
 
