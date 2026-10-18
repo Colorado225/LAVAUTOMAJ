@@ -10,10 +10,6 @@ import { ClerkProvider } from "@clerk/clerk-react"
 
 const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 
-if (!publishableKey) {
-  throw new Error("VITE_CLERK_PUBLISHABLE_KEY is not defined")
-}
-
 // Get basename from environment (for deployment) or use empty string for development
 const basename = import.meta.env.VITE_BASENAME || ""
 
@@ -40,7 +36,7 @@ function App() {
       style={{ fontFamily: "var(--font-inter)" }}
     >
       <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
-        <ClerkProvider publishableKey={publishableKey}>
+        <ClerkProvider publishableKey={publishableKey || ""}>
           <SidebarConfigProvider>
             <Toaster>
               <RouterProvider router={router} />

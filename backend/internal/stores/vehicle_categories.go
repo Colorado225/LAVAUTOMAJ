@@ -37,10 +37,10 @@ func (s *VehicleCategoryStore) ListByOrganization(ctx context.Context, orgID uui
 	return items, err
 }
 
-func (s *VehicleCategoryStore) GetByID(ctx context.Context, id uuid.UUID) (*models.VehicleCategory, error) {
+func (s *VehicleCategoryStore) GetByID(ctx context.Context, id, orgID uuid.UUID) (*models.VehicleCategory, error) {
 	var c models.VehicleCategory
-	query := `SELECT * FROM vehicle_categories WHERE id = $1`
-	err := s.DB.GetContext(ctx, &c, query, id)
+	query := `SELECT * FROM vehicle_categories WHERE id = $1 AND organization_id = $2`
+	err := s.DB.GetContext(ctx, &c, query, id, orgID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil

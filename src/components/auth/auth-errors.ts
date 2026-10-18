@@ -31,6 +31,9 @@ export function getAuthErrorMessage(error: unknown, fallback?: string): string {
   if (/pwned|breach|hibp|compromised/.test(rawMessage)) {
     return "Ce mot de passe a été compromis dans une fuite de données connue. Choisissez-en un autre."
   }
+  if (code.includes("session_exists") || /session_exists|active session|already signed in/.test(rawMessage)) {
+    return "Une session est déjà active. Veuillez actualiser la page ou vous déconnecter puis réessayer."
+  }
 
   // In development, surface the real Clerk error to make debugging possible.
   if (import.meta.env.DEV && firstError) {

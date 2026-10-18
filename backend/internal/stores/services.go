@@ -37,10 +37,10 @@ func (s *ServiceStore) ListByOrganization(ctx context.Context, orgID uuid.UUID) 
 	return items, err
 }
 
-func (s *ServiceStore) GetByID(ctx context.Context, id uuid.UUID) (*models.Service, error) {
+func (s *ServiceStore) GetByID(ctx context.Context, id, orgID uuid.UUID) (*models.Service, error) {
 	var svc models.Service
-	query := `SELECT * FROM services WHERE id = $1`
-	err := s.DB.GetContext(ctx, &svc, query, id)
+	query := `SELECT * FROM services WHERE id = $1 AND organization_id = $2`
+	err := s.DB.GetContext(ctx, &svc, query, id, orgID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil

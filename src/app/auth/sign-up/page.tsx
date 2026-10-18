@@ -10,7 +10,6 @@ import {
   PasswordVisibilityButton,
 } from "@/components/auth/auth-form-elements"
 import { getAuthErrorMessage } from "@/components/auth/auth-errors"
-import { MIN_PASSWORD_LENGTH } from "@/app/auth/password-policy"
 
 type SignUpStep = "details" | "verification"
 
@@ -53,8 +52,8 @@ export default function SignUpPage() {
     setNotice("")
     if (!isLoaded) return
 
-    if (password.length < MIN_PASSWORD_LENGTH) {
-      setError(`Votre mot de passe doit contenir au moins ${MIN_PASSWORD_LENGTH} caractères.`)
+    if (password.length < 8) {
+      setError("Votre mot de passe doit contenir au moins 8 caractères.")
       return
     }
     if (password !== confirmation) {
@@ -76,7 +75,7 @@ export default function SignUpPage() {
         return
       }
       if (attempt.status !== "missing_requirements") {
-        setError("L’inscription n’a pas pu être démarrée. Vérifiez vos informations puis réessayez.")
+        setError(getAuthErrorMessage({ message: `Status: ${attempt.status}` }, "L’inscription n’a pas pu être démarrée. Vérifiez vos informations puis réessayez."))
         return
       }
 
@@ -84,7 +83,6 @@ export default function SignUpPage() {
       setStep("verification")
       setNotice(`Un code de confirmation a été envoyé à ${email.trim()}.`)
     } catch (authError) {
-      console.error("Clerk sign-up error:", authError)
       setError(getAuthErrorMessage(authError, "Impossible de créer le compte pour le moment. Réessayez dans quelques instants."))
     } finally {
       setIsSubmitting(false)
@@ -128,15 +126,15 @@ export default function SignUpPage() {
     }
   }
 
-  const confirmationMismatch = confirmation.length > 0 && password !== confirmation
-  const verifying = step === "verification"
+  const passwordsMismatch = confirmation.length > 0 && password !== confirmation
+  const isVerification = step === "verification"
 
   return (
     <AuthPageLayout
-      eyebrow={verifying ? "DERNIÈRE ÉTAPE" : "VOTRE STATION PASSE AU NIVEAU SUPÉRIEUR"}
-      title={verifying ? "Confirmez votre adresse e-mail" : "Créez votre espace WashPilot"}
+      eyebrow={isVerification ? "DERNIÈRE ÉTAPE" : "VOTRE STATION PASSE AU NIVEAU SUPÉRIEUR"}
+      title={isVerification ? "Confirmez votre adresse e-mail" : "Créez votre espace WashPilot"}
       description={
-        verifying
+        isVerification
           ? `Saisissez le code envoyé à ${email.trim()} pour confirmer votre inscription.`
           : "Quelques informations suffisent pour préparer le pilotage de votre station."
       }
@@ -145,7 +143,7 @@ export default function SignUpPage() {
       panelTitle="Le bon départ pour votre station."
       panelDescription="L’activité, l’équipe et les encaissements réunis dans un espace pensé pour votre quotidien."
       topAction={
-        <>
+        <div>
           <span className="hidden sm:inline">Déjà membre ? </span>
           <Link
             to="/auth/sign-in"
@@ -153,12 +151,13 @@ export default function SignUpPage() {
           >
             Se connecter
           </Link>
-        </>
+        </div>
       }
     >
-      {verifying ? (
+      {isVerification ? (
         <form onSubmit={handleVerifyEmail} className="space-y-5">
           {notice ? <AuthNotice tone="info">{notice}</AuthNotice> : null}
+
           <AuthField
             id="sign-up-verification-code"
             label="Code de confirmation"
@@ -169,17 +168,23 @@ export default function SignUpPage() {
             inputMode="numeric"
             placeholder="Saisissez le code reçu par e-mail"
             value={verificationCode}
-            onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, "").slice(0, 8))}
+            onChange={(event) => {
+              const sanitized = event.target.value.replace(/\D/g, "").slice(0, 8)
+              setVerificationCode(sanitized)
+            }}
             minLength={4}
             maxLength={8}
             required
             disabled={isSubmitting}
             hint="Consultez aussi vos courriers indésirables si le message tarde."
           />
+
           {error ? <AuthNotice>{error}</AuthNotice> : null}
+
           <AuthSubmitButton pending={isSubmitting} disabled={!isLoaded}>
             Confirmer mon adresse <ArrowRight className="size-4" aria-hidden="true" />
           </AuthSubmitButton>
+
           <div className="flex flex-col items-center justify-center gap-3 pt-1 text-xs sm:flex-row sm:gap-5">
             <button
               type="button"
@@ -232,6 +237,7 @@ export default function SignUpPage() {
               disabled={isSubmitting}
             />
           </div>
+
           <AuthField
             id="sign-up-email"
             label="Adresse e-mail"
@@ -246,6 +252,7 @@ export default function SignUpPage() {
             required
             disabled={isSubmitting}
           />
+
           <AuthField
             id="sign-up-password"
             label="Mot de passe"
@@ -253,21 +260,22 @@ export default function SignUpPage() {
             type={showPassword ? "text" : "password"}
             name="new-password"
             autoComplete="new-password"
-            placeholder={`${MIN_PASSWORD_LENGTH} caractères minimum`}
+            placeholder="8 caractères minimum"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            minLength={MIN_PASSWORD_LENGTH}
+            minLength={8}
             required
             disabled={isSubmitting}
-            hint={`Utilisez au moins ${MIN_PASSWORD_LENGTH} caractères.`}
+            hint="Utilisez au moins 8 caractères."
             trailing={
               <PasswordVisibilityButton
                 visible={showPassword}
-                onToggle={() => setShowPassword((visible) => !visible)}
+                onToggle={() => setShowPassword((prev) => !prev)}
                 label="le mot de passe"
               />
             }
           />
+
           <AuthField
             id="sign-up-confirm-password"
             label="Confirmer le mot de passe"
@@ -280,20 +288,22 @@ export default function SignUpPage() {
             onChange={(event) => setConfirmation(event.target.value)}
             required
             disabled={isSubmitting}
-            error={confirmationMismatch ? "Les mots de passe ne correspondent pas." : undefined}
+            error={passwordsMismatch ? "Les mots de passe ne correspondent pas." : undefined}
             trailing={
               <PasswordVisibilityButton
                 visible={showConfirmation}
-                onToggle={() => setShowConfirmation((visible) => !visible)}
+                onToggle={() => setShowConfirmation((prev) => !prev)}
                 label="la confirmation du mot de passe"
               />
             }
           />
 
           {error ? <AuthNotice>{error}</AuthNotice> : null}
+
           <AuthSubmitButton pending={isSubmitting} disabled={!isLoaded}>
             Créer mon compte <ArrowRight className="size-4" aria-hidden="true" />
           </AuthSubmitButton>
+
           <p className="pt-1 text-center text-[11px] leading-5 text-slate-400">
             En créant votre compte, vous pourrez ensuite configurer les informations de votre station.
           </p>

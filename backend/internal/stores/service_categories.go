@@ -30,10 +30,10 @@ func (s *ServiceCategoryStore) ListByOrganization(ctx context.Context, orgID uui
 	return items, err
 }
 
-func (s *ServiceCategoryStore) GetByID(ctx context.Context, id uuid.UUID) (*models.ServiceCategory, error) {
+func (s *ServiceCategoryStore) GetByID(ctx context.Context, id, orgID uuid.UUID) (*models.ServiceCategory, error) {
 	var c models.ServiceCategory
-	query := `SELECT * FROM service_categories WHERE id = $1`
-	err := s.DB.GetContext(ctx, &c, query, id)
+	query := `SELECT * FROM service_categories WHERE id = $1 AND organization_id = $2`
+	err := s.DB.GetContext(ctx, &c, query, id, orgID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil

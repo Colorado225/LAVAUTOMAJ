@@ -114,50 +114,14 @@ func (s *ApiServer) setupRouter() {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(clerkhttp.RequireHeaderAuthorization())
 
-		// Vehicle categories
+		// Routes accessibles à TOUS les utilisateurs authentifiés (minimum RoleWasher)
 		r.Get("/vehicle-categories", s.handleListVehicleCategories)
-		r.Post("/vehicle-categories", s.handleCreateVehicleCategory)
-		r.Patch("/vehicle-categories/{categoryID}", s.handleUpdateVehicleCategory)
-		r.Post("/vehicle-categories/{categoryID}/deactivate", s.handleDeactivateVehicleCategory)
-
-		// Service categories
 		r.Get("/service-categories", s.handleListServiceCategories)
-		r.Post("/service-categories", s.handleCreateServiceCategory)
-		r.Patch("/service-categories/{categoryID}", s.handleUpdateServiceCategory)
-		r.Post("/service-categories/{categoryID}/deactivate", s.handleDeactivateServiceCategory)
-
-		// Services
 		r.Get("/services", s.handleListServices)
-		r.Post("/services", s.handleCreateService)
-		r.Patch("/services/{serviceID}", s.handleUpdateService)
-		r.Post("/services/{serviceID}/deactivate", s.handleDeactivateService)
-
-		// Payments
-		r.Get("/payments", s.handleListPayments)
-		r.Post("/payments", s.handleCreatePayment)
-
-		// Cash sessions
-		r.Post("/cash-sessions/open", s.handleOpenCashSession)
-		r.Get("/cash-sessions/current", s.handleGetCurrentCashSession)
-		r.Get("/cash-sessions/{sessionID}/movements", s.handleListCashMovements)
-		r.Post("/cash-sessions/{sessionID}/movements", s.handleAddCashMovement)
-		r.Post("/cash-sessions/{sessionID}/close", s.handleCloseCashSession)
-
-		// Expenses
-		r.Get("/expenses", s.handleListExpenses)
-		r.Post("/expenses", s.handleCreateExpense)
-		r.Get("/expenses/{expenseID}", s.handleGetExpense)
-		r.Post("/expenses/{expenseID}/cancel", s.handleCancelExpense)
-
-		r.Get("/users", s.handleListUsers)
 		r.Get("/sites", s.handleListSites)
 		r.Get("/washes", s.handleListWashes)
-		r.Post("/washes", s.handleCreateWash)
 		r.Get("/washes/{washID}", s.handleGetWash)
-		r.Post("/washes/{washID}/cancel", s.handleCancelWash)
 		r.Get("/dashboard/metrics", s.handleGetDashboardMetrics)
-
-		// Onboarding (docs/WORKFLOW.md)
 		r.Get("/onboarding/status", s.handleOnboardingStatus)
 		r.Get("/onboarding/progress", s.handleGetOnboardingProgress)
 		r.Put("/onboarding/progress", s.handleSaveOnboardingProgress)
@@ -167,7 +131,53 @@ func (s *ApiServer) setupRouter() {
 		r.Get("/service-catalog", s.handleListServiceCatalog)
 		r.Get("/workers", s.handleListWorkers)
 
-		// Admin-only routes
+		// Routes LAVEURS : création de lavages uniquement (tous les rôles)
+		r.Group(func(r chi.Router) {
+			r.Use(s.withRole(models.RoleOwner, models.RoleManager, models.RoleCashier, models.RoleWasher))
+			r.Post("/washes", s.handleCreateWash)
+		})
+
+		// Routes CAISSIERS : gestion de caisse et paiements uniquement
+		r.Group(func(r chi.Router) {
+			r.Use(s.withRole(models.RoleOwner, models.RoleManager, models.RoleCashier))
+			// Sessions de caisse
+			r.Get("/cash-sessions/current", s.handleGetCurrentCashSession)
+			r.Post("/cash-sessions/open", s.handleOpenCashSession)
+			r.Get("/cash-sessions/{sessionID}/movements", s.handleListCashMovements)
+			r.Post("/cash-sessions/{sessionID}/movements", s.handleAddCashMovement)
+			r.Post("/cash-sessions/{sessionID}/close", s.handleCloseCashSession)
+			// Paiements
+			r.Get("/payments", s.handleListPayments)
+			r.Post("/payments", s.handleCreatePayment)
+		})
+
+		// Routes GESTIONNAIRES : dépenses, modification des catégories/services
+		r.Group(func(r chi.Router) {
+			r.Use(s.withRole(models.RoleOwner, models.RoleManager))
+			// Dépenses
+			r.Get("/expenses", s.handleListExpenses)
+			r.Post("/expenses", s.handleCreateExpense)
+			r.Get("/expenses/{expenseID}", s.handleGetExpense)
+			r.Post("/expenses/{expenseID}/cancel", s.handleCancelExpense)
+			// Catégories de véhicules
+			r.Post("/vehicle-categories", s.handleCreateVehicleCategory)
+			r.Patch("/vehicle-categories/{categoryID}", s.handleUpdateVehicleCategory)
+			r.Post("/vehicle-categories/{categoryID}/deactivate", s.handleDeactivateVehicleCategory)
+			// Catégories de services
+			r.Post("/service-categories", s.handleCreateServiceCategory)
+			r.Patch("/service-categories/{categoryID}", s.handleUpdateServiceCategory)
+			r.Post("/service-categories/{categoryID}/deactivate", s.handleDeactivateServiceCategory)
+			// Services
+			r.Post("/services", s.handleCreateService)
+			r.Patch("/services/{serviceID}", s.handleUpdateService)
+			r.Post("/services/{serviceID}/deactivate", s.handleDeactivateService)
+			// Annulation de lavages
+			r.Post("/washes/{washID}/cancel", s.handleCancelWash)
+			// Liste des utilisateurs
+			r.Get("/users", s.handleListUsers)
+		})
+
+		// Routes OWNER uniquement
 		r.Group(func(r chi.Router) {
 			r.Use(s.withRole(models.RoleOwner))
 			r.Get("/admin/dashboard", func(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +190,7 @@ func (s *ApiServer) setupRouter() {
 
 	s.router = r
 }
+
 
 func (s *ApiServer) handleGetDashboardMetrics(w http.ResponseWriter, r *http.Request) {
 	orgID, ok := s.requireOrg(w, r)
@@ -957,8 +968,8 @@ func (s *ApiServer) handleUpdateVehicleCategory(w http.ResponseWriter, r *http.R
 		http.Error(w, "invalid category ID", http.StatusBadRequest)
 		return
 	}
-	c, err := s.store.VehicleCategoryStore.GetByID(r.Context(), id)
-	if err != nil || c == nil || c.OrganizationID != orgID {
+	c, err := s.store.VehicleCategoryStore.GetByID(r.Context(), id, orgID)
+	if err != nil || c == nil {
 		http.Error(w, "vehicle category not found", http.StatusNotFound)
 		return
 	}
@@ -1073,8 +1084,8 @@ func (s *ApiServer) handleUpdateServiceCategory(w http.ResponseWriter, r *http.R
 		http.Error(w, "invalid category ID", http.StatusBadRequest)
 		return
 	}
-	c, err := s.store.ServiceCategoryStore.GetByID(r.Context(), id)
-	if err != nil || c == nil || c.OrganizationID != orgID {
+	c, err := s.store.ServiceCategoryStore.GetByID(r.Context(), id, orgID)
+	if err != nil || c == nil {
 		http.Error(w, "service category not found", http.StatusNotFound)
 		return
 	}
@@ -1208,8 +1219,8 @@ func (s *ApiServer) handleUpdateService(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid service ID", http.StatusBadRequest)
 		return
 	}
-	svc, err := s.store.ServiceStore.GetByID(r.Context(), id)
-	if err != nil || svc == nil || svc.OrganizationID != orgID {
+	svc, err := s.store.ServiceStore.GetByID(r.Context(), id, orgID)
+	if err != nil || svc == nil {
 		http.Error(w, "service not found", http.StatusNotFound)
 		return
 	}
