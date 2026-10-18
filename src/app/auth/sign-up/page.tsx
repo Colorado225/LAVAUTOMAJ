@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react"
-import { ArrowLeft, ArrowRight, KeyRound, Mail, UserRound } from "lucide-react"
-import { useAuth, useSignUp } from "@clerk/clerk-react"
-import { Link, Navigate, useNavigate } from "react-router-dom"
+import { ArrowLeft, ArrowRight, KeyRound, LogOut, Mail, UserRound } from "lucide-react"
+import { useAuth, useClerk, useSignUp, useUser } from "@clerk/clerk-react"
+import { Link, useNavigate } from "react-router-dom"
 import { AuthPageLayout } from "@/components/auth/auth-page-layout"
 import {
   AuthField,
@@ -10,11 +10,14 @@ import {
   PasswordVisibilityButton,
 } from "@/components/auth/auth-form-elements"
 import { getAuthErrorMessage } from "@/components/auth/auth-errors"
+import { apiFetch, getClerkToken } from "@/lib/api"
 
 type SignUpStep = "details" | "verification"
 
 export default function SignUpPage() {
   const { isLoaded: authLoaded, isSignedIn } = useAuth()
+  const { user } = useUser()
+  const { signOut } = useClerk()
   const { isLoaded, signUp, setActive } = useSignUp()
   const navigate = useNavigate()
   const [step, setStep] = useState<SignUpStep>("details")
@@ -28,11 +31,73 @@ export default function SignUpPage() {
   const [showConfirmation, setShowConfirmation] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isResending, setIsResending] = useState(false)
+  const [isDisconnecting, setIsDisconnecting] = useState(false)
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
 
+  const handleDisconnect = async () => {
+    setIsDisconnecting(true)
+    try {
+      await signOut()
+      setError("")
+      setNotice("Vous avez été déconnecté avec succès. Vous pouvez créer votre compte.")
+    } catch {
+      window.location.reload()
+    } finally {
+      setIsDisconnecting(false)
+    }
+  }
+
   if (authLoaded && isSignedIn) {
-    return <Navigate to="/auth/create-organization" replace />
+    return (
+      <AuthPageLayout
+        eyebrow="SESSION ACTIVE DÉTECTÉE"
+        title="Vous êtes déjà connecté"
+        description="Une session est actuellement active avec un compte existant sur cet appareil."
+        imageSrc="/images/wash-station.jpg"
+        imageAlt="Station de lavage"
+        panelTitle="Pilotez votre station en toute sérénité."
+        panelDescription="Accédez à votre espace ou déconnectez-vous pour inscrire une nouvelle station de lavage."
+        topAction={
+          <button
+            type="button"
+            onClick={handleDisconnect}
+            className="flex items-center gap-1.5 font-bold text-red-600 transition hover:text-red-800"
+          >
+            <LogOut className="size-4" /> Se déconnecter
+          </button>
+        }
+      >
+        <div className="space-y-5">
+          <AuthNotice tone="info">
+            Connecté avec le compte :{" "}
+            <strong>{user?.primaryEmailAddress?.emailAddress || "Utilisateur actif"}</strong>
+          </AuthNotice>
+
+          <p className="text-sm text-slate-600">
+            Pour continuer à utiliser votre station existante, rendez-vous sur le tableau de bord. Si vous souhaitez enregistrer une nouvelle entreprise ou un nouvel utilisateur, déconnectez-vous d’abord.
+          </p>
+
+          <div className="flex flex-col gap-3 pt-2">
+            <Link
+              to="/dashboard"
+              className="flex h-[50px] w-full items-center justify-center gap-2 rounded-xl bg-[#123d79] px-5 text-sm font-bold text-white shadow-lg shadow-blue-900/15 transition hover:bg-[#0d3268]"
+            >
+              Accéder à mon espace <ArrowRight className="size-4" />
+            </Link>
+            <button
+              type="button"
+              onClick={handleDisconnect}
+              disabled={isDisconnecting}
+              className="flex h-[48px] w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              <LogOut className="size-4" />
+              {isDisconnecting ? "Déconnexion en cours…" : "Se déconnecter pour créer un nouveau compte"}
+            </button>
+          </div>
+        </div>
+      </AuthPageLayout>
+    )
   }
 
   async function activateConfirmedAccount(sessionId: string | null) {
@@ -42,6 +107,26 @@ export default function SignUpPage() {
       return false
     }
     await setActive({ session: sessionId })
+
+    // Sync user with backend & database
+    try {
+      const token = await getClerkToken()
+      await apiFetch(
+        "/api/v1/auth/sync",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            first_name: firstName.trim(),
+            last_name: lastName.trim(),
+            email: email.trim(),
+          }),
+        },
+        token
+      )
+    } catch (e) {
+      console.warn("User sync warning:", e)
+    }
+
     navigate("/auth/create-organization", { replace: true })
     return true
   }
@@ -82,8 +167,9 @@ export default function SignUpPage() {
       await signUp.prepareEmailAddressVerification({ strategy: "email_code" })
       setStep("verification")
       setNotice(`Un code de confirmation a été envoyé à ${email.trim()}.`)
-    } catch (authError) {
-      setError(getAuthErrorMessage(authError, "Impossible de créer le compte pour le moment. Réessayez dans quelques instants."))
+    } catch (authError: any) {
+      const errMsg = getAuthErrorMessage(authError, "Impossible de créer le compte pour le moment. Réessayez dans quelques instants.")
+      setError(errMsg)
     } finally {
       setIsSubmitting(false)
     }
@@ -128,6 +214,7 @@ export default function SignUpPage() {
 
   const passwordsMismatch = confirmation.length > 0 && password !== confirmation
   const isVerification = step === "verification"
+  const isSessionExists = error.includes("session est déjà active") || error.includes("session_exists")
 
   return (
     <AuthPageLayout
@@ -199,38 +286,40 @@ export default function SignUpPage() {
               onClick={() => {
                 setStep("details")
                 setError("")
-                setNotice("")
               }}
-              className="inline-flex items-center gap-1 font-medium text-slate-500 transition-colors hover:text-slate-800 motion-reduce:transition-none"
+              disabled={isSubmitting}
+              className="inline-flex items-center gap-1 font-semibold text-slate-500 transition-colors hover:text-slate-800 motion-reduce:transition-none"
             >
-              <ArrowLeft className="size-3.5" aria-hidden="true" /> Modifier mes informations
+              <ArrowLeft className="size-3.5" aria-hidden="true" /> Modifier l’adresse
             </button>
           </div>
         </form>
       ) : (
-        <form onSubmit={handleCreateAccount} className="space-y-4">
+        <form onSubmit={handleCreateAccount} className="space-y-4" noValidate>
+          {notice ? <AuthNotice tone="info">{notice}</AuthNotice> : null}
+
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <AuthField
-              id="sign-up-first-name"
+              id="sign-up-firstname"
               label="Prénom"
               icon={UserRound}
               type="text"
-              name="given-name"
+              name="firstName"
               autoComplete="given-name"
-              placeholder="Votre prénom"
+              placeholder="Ex. Amadou"
               value={firstName}
               onChange={(event) => setFirstName(event.target.value)}
               required
               disabled={isSubmitting}
             />
             <AuthField
-              id="sign-up-last-name"
+              id="sign-up-lastname"
               label="Nom"
               icon={UserRound}
               type="text"
-              name="family-name"
+              name="lastName"
               autoComplete="family-name"
-              placeholder="Votre nom"
+              placeholder="Ex. Koné"
               value={lastName}
               onChange={(event) => setLastName(event.target.value)}
               required
@@ -258,7 +347,7 @@ export default function SignUpPage() {
             label="Mot de passe"
             icon={KeyRound}
             type={showPassword ? "text" : "password"}
-            name="new-password"
+            name="password"
             autoComplete="new-password"
             placeholder="8 caractères minimum"
             value={password}
@@ -266,46 +355,59 @@ export default function SignUpPage() {
             minLength={8}
             required
             disabled={isSubmitting}
-            hint="Utilisez au moins 8 caractères."
             trailing={
               <PasswordVisibilityButton
                 visible={showPassword}
-                onToggle={() => setShowPassword((prev) => !prev)}
+                onToggle={() => setShowPassword((visible) => !visible)}
                 label="le mot de passe"
               />
             }
           />
 
           <AuthField
-            id="sign-up-confirm-password"
-            label="Confirmer le mot de passe"
+            id="sign-up-confirmation"
+            label="Confirmez le mot de passe"
             icon={KeyRound}
             type={showConfirmation ? "text" : "password"}
-            name="confirm-password"
+            name="confirmation"
             autoComplete="new-password"
-            placeholder="Répétez le mot de passe"
+            placeholder="Répétez votre mot de passe"
             value={confirmation}
             onChange={(event) => setConfirmation(event.target.value)}
+            minLength={8}
             required
             disabled={isSubmitting}
-            error={passwordsMismatch ? "Les mots de passe ne correspondent pas." : undefined}
+            error={passwordsMismatch ? "Les deux mots de passe ne correspondent pas." : undefined}
             trailing={
               <PasswordVisibilityButton
                 visible={showConfirmation}
-                onToggle={() => setShowConfirmation((prev) => !prev)}
+                onToggle={() => setShowConfirmation((visible) => !visible)}
                 label="la confirmation du mot de passe"
               />
             }
           />
 
-          {error ? <AuthNotice>{error}</AuthNotice> : null}
+          {error ? (
+            <div className="space-y-2">
+              <AuthNotice>{error}</AuthNotice>
+              {isSessionExists && (
+                <button
+                  type="button"
+                  onClick={handleDisconnect}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-red-50 py-2 text-xs font-bold text-red-700 transition hover:bg-red-100"
+                >
+                  <LogOut className="size-3.5" /> Se déconnecter de la session active pour continuer
+                </button>
+              )}
+            </div>
+          ) : null}
 
-          <AuthSubmitButton pending={isSubmitting} disabled={!isLoaded}>
-            Créer mon compte <ArrowRight className="size-4" aria-hidden="true" />
+          <AuthSubmitButton pending={isSubmitting} disabled={!isLoaded || passwordsMismatch}>
+            Créer mon espace WashPilot <ArrowRight className="size-4" aria-hidden="true" />
           </AuthSubmitButton>
 
-          <p className="pt-1 text-center text-[11px] leading-5 text-slate-400">
-            En créant votre compte, vous pourrez ensuite configurer les informations de votre station.
+          <p className="pt-2 text-center text-xs text-slate-500">
+            En créant votre compte, vous accédez à la gestion centralisée de votre station de lavage.
           </p>
         </form>
       )}

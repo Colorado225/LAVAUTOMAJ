@@ -7,7 +7,8 @@ import {
   BellDot,
   CircleUser,
 } from "lucide-react"
-import { Link } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
+import { useClerk, useUser } from "@clerk/clerk-react"
 
 import { Logo } from "@/components/logo"
 import {
@@ -27,15 +28,36 @@ import {
 } from "@/components/ui/sidebar"
 
 export function NavUser({
-  user,
+  user: initialUser,
 }: {
-  user: {
+  user?: {
     name: string
     email: string
     avatar: string
   }
 }) {
   const { isMobile } = useSidebar()
+  const { signOut } = useClerk()
+  const { user: clerkUser } = useUser()
+  const navigate = useNavigate()
+
+  const displayName =
+    clerkUser?.fullName ||
+    clerkUser?.firstName ||
+    initialUser?.name ||
+    "Utilisateur"
+  const displayEmail =
+    clerkUser?.primaryEmailAddress?.emailAddress ||
+    initialUser?.email ||
+    ""
+
+  const handleSignOut = async () => {
+    try {
+      await signOut()
+    } finally {
+      navigate("/auth/sign-in", { replace: true })
+    }
+  }
 
   return (
     <SidebarMenu>
@@ -49,16 +71,16 @@ export function NavUser({
               />
             }
           >
-            <div className="flex size-8 items-center justify-center rounded-lg">
-              <Logo size={28} className="size-7!" />
+            <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Logo size={24} className="size-6" />
             </div>
             <div className="grid flex-1 text-left text-sm leading-tight">
-              <span className="truncate font-medium">{user.name}</span>
+              <span className="truncate font-medium">{displayName}</span>
               <span className="text-muted-foreground truncate text-xs">
-                {user.email}
+                {displayEmail}
               </span>
             </div>
-            <EllipsisVertical className="ml-auto" />
+            <EllipsisVertical className="ml-auto size-4 text-muted-foreground" />
           </DropdownMenuTrigger>
           <DropdownMenuContent
             className="w-(--anchor-width) min-w-56 rounded-lg"
@@ -69,13 +91,13 @@ export function NavUser({
             <DropdownMenuGroup>
               <DropdownMenuLabel className="p-0 font-normal text-foreground">
                 <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-                  <div className="size-8 rounded-lg">
-                    <Logo size={28} />
+                  <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <Logo size={24} />
                   </div>
                   <div className="grid flex-1 text-left text-sm leading-tight">
-                    <span className="truncate font-medium">{user.name}</span>
+                    <span className="truncate font-medium">{displayName}</span>
                     <span className="text-muted-foreground truncate text-xs">
-                      {user.email}
+                      {displayEmail}
                     </span>
                   </div>
                 </div>
@@ -87,32 +109,32 @@ export function NavUser({
                 className="cursor-pointer"
                 render={<Link to="/settings/account" />}
               >
-                <CircleUser />
-                Account
+                <CircleUser className="size-4 mr-2" />
+                Mon compte
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="cursor-pointer"
                 render={<Link to="/settings/billing" />}
               >
-                <CreditCard />
-                Billing
+                <CreditCard className="size-4 mr-2" />
+                Abonnement
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="cursor-pointer"
                 render={<Link to="/settings/notifications" />}
               >
-                <BellDot />
+                <BellDot className="size-4 mr-2" />
                 Notifications
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
               <DropdownMenuItem
-                className="cursor-pointer"
-                render={<Link to="/sign-in" />}
+                className="cursor-pointer text-destructive focus:text-destructive"
+                onClick={handleSignOut}
               >
-                <LogOut />
-                Log out
+                <LogOut className="size-4 mr-2" />
+                Se déconnecter
               </DropdownMenuItem>
             </DropdownMenuGroup>
           </DropdownMenuContent>

@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react"
-import { ArrowRight, KeyRound, Mail } from "lucide-react"
-import { useAuth, useSignIn } from "@clerk/clerk-react"
-import { Link, Navigate, useNavigate } from "react-router-dom"
+import { ArrowRight, KeyRound, LogOut, Mail } from "lucide-react"
+import { useAuth, useClerk, useSignIn, useUser } from "@clerk/clerk-react"
+import { Link, useNavigate } from "react-router-dom"
 import { AuthPageLayout } from "@/components/auth/auth-page-layout"
 import {
   AuthField,
@@ -10,6 +10,7 @@ import {
   PasswordVisibilityButton,
 } from "@/components/auth/auth-form-elements"
 import { getAuthErrorMessage } from "@/components/auth/auth-errors"
+import { apiFetch, getClerkToken } from "@/lib/api"
 
 const REMEMBERED_EMAIL_KEY = "washpilot.remembered-email"
 
@@ -36,6 +37,8 @@ function persistRememberedEmail(email: string, remember: boolean) {
 
 export default function SignInPage() {
   const { isLoaded: authLoaded, isSignedIn } = useAuth()
+  const { user } = useUser()
+  const { signOut } = useClerk()
   const { isLoaded, signIn, setActive } = useSignIn()
   const navigate = useNavigate()
   const [email, setEmail] = useState(getInitialEmail)
@@ -43,10 +46,67 @@ export default function SignInPage() {
   const [rememberMe, setRememberMe] = useState(() => Boolean(getInitialEmail()))
   const [showPassword, setShowPassword] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isDisconnecting, setIsDisconnecting] = useState(false)
   const [error, setError] = useState("")
 
+  const handleDisconnect = async () => {
+    setIsDisconnecting(true)
+    try {
+      await signOut()
+      setError("")
+    } catch {
+      window.location.reload()
+    } finally {
+      setIsDisconnecting(false)
+    }
+  }
+
   if (authLoaded && isSignedIn) {
-    return <Navigate to="/dashboard" replace />
+    return (
+      <AuthPageLayout
+        eyebrow="SESSION ACTIVE"
+        title="Vous êtes déjà connecté"
+        description="Une session est déjà active avec un compte existant sur cet appareil."
+        imageSrc="/images/wash-car.jpg"
+        imageAlt="Station de lavage"
+        panelTitle="Votre station, à son meilleur."
+        panelDescription="Passez à votre tableau de bord ou changez de compte."
+        topAction={
+          <button
+            type="button"
+            onClick={handleDisconnect}
+            className="flex items-center gap-1.5 font-bold text-red-600 transition hover:text-red-800"
+          >
+            <LogOut className="size-4" /> Se déconnecter
+          </button>
+        }
+      >
+        <div className="space-y-5">
+          <AuthNotice tone="info">
+            Connecté avec le compte :{" "}
+            <strong>{user?.primaryEmailAddress?.emailAddress || "Utilisateur actif"}</strong>
+          </AuthNotice>
+
+          <div className="flex flex-col gap-3 pt-2">
+            <Link
+              to="/dashboard"
+              className="flex h-[50px] w-full items-center justify-center gap-2 rounded-xl bg-[#123d79] px-5 text-sm font-bold text-white shadow-lg shadow-blue-900/15 transition hover:bg-[#0d3268]"
+            >
+              Accéder au tableau de bord <ArrowRight className="size-4" />
+            </Link>
+            <button
+              type="button"
+              onClick={handleDisconnect}
+              disabled={isDisconnecting}
+              className="flex h-[48px] w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              <LogOut className="size-4" />
+              {isDisconnecting ? "Déconnexion…" : "Se déconnecter pour changer de compte"}
+            </button>
+          </div>
+        </div>
+      </AuthPageLayout>
+    )
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -84,6 +144,24 @@ export default function SignInPage() {
       }
 
       await setActive({ session: attempt.createdSessionId })
+
+      // Sync user with backend
+      try {
+        const token = await getClerkToken()
+        await apiFetch(
+          "/api/v1/auth/sync",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              email: normalizedEmail,
+            }),
+          },
+          token
+        )
+      } catch (e) {
+        console.warn("User sync warning:", e)
+      }
+
       navigate("/dashboard", { replace: true })
     } catch (authError) {
       setError(getAuthErrorMessage(authError, "Connexion impossible pour le moment. Réessayez dans quelques instants."))
@@ -176,7 +254,6 @@ export default function SignInPage() {
         <AuthSubmitButton pending={isSubmitting} disabled={!isLoaded}>
           Se connecter <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" aria-hidden="true" />
         </AuthSubmitButton>
-
       </form>
     </AuthPageLayout>
   )

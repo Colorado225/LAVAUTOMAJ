@@ -13,17 +13,12 @@ export default defineConfig({
   },
   define: {
     "import.meta.env.VITE_BASENAME": JSON.stringify(
-      process.env.VITE_BASENAME || "",
+      process.env.VITE_BASENAME || ""
     ),
   },
   server: {
+    port: 3000,
     host: "0.0.0.0",
     allowedHosts: true,
-    proxy: {
-      "/api": {
-        target: process.env.VITE_API_PROXY || "http://localhost:8080",
-        changeOrigin: true,
-      },
-    },
   },
 });
