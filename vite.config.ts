@@ -5,6 +5,8 @@ import { defineConfig } from "vite";
 
 // https://vite.dev/config/
 export default defineConfig({
+  // `NEXT_PUBLIC_` is accepted as a public-key alias for migration from Next.js.
+  envPrefix: ["VITE_", "NEXT_PUBLIC_"],
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

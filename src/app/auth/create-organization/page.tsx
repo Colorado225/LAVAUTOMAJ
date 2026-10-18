@@ -5,7 +5,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner"
 
 export default function CreateOrganizationPage() {
   const { isLoaded: authLoaded, isSignedIn } = useAuth()
-  const { isLoaded: organizationLoaded, organization } = useOrganization()
+  const { isLoaded: organizationLoaded } = useOrganization()
 
   if (!authLoaded || (isSignedIn && !organizationLoaded)) {
     return (
@@ -17,10 +17,6 @@ export default function CreateOrganizationPage() {
 
   if (!isSignedIn) {
     return <Navigate to="/auth/sign-in" replace />
-  }
-
-  if (organization) {
-    return <Navigate to="/dashboard" replace />
   }
 
   return (

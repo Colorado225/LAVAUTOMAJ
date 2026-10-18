@@ -1,5 +1,4 @@
 import * as React from "react"
-import { useNavigate } from "react-router-dom"
 import { useApi } from "@/lib/api"
 import {
   Card,
@@ -36,8 +35,7 @@ const formatXOF = (cents: number | null | undefined) =>
   cents == null ? "—"
     : `${(cents / 100).toLocaleString("fr-CI")} F CFA`
 
-export function ServicesStep({ progress, onDone }: OnboardingWizardProps) {
-  const navigate = useNavigate()
+export function ServicesStep({ progress, onDone, onQuit }: OnboardingWizardProps) {
   const saved = progress?.services_data
   const { data: catalog, loading, error } = useApi<CatalogTemplate[]>(
     "/api/v1/service-catalog"
@@ -75,29 +73,32 @@ export function ServicesStep({ progress, onDone }: OnboardingWizardProps) {
     const name = newName.trim()
     if (name.length < 2) return
     if (custom.some((c) => c.name.toLowerCase() === name.toLowerCase())) return
-    const price = newPrice ? Math.round(parseFloat(newPrice) * 100) : null
+    const parsedPrice = newPrice ? Number(newPrice) : null
+    if (parsedPrice !== null && (!Number.isFinite(parsedPrice) || parsedPrice < 0)) return
+    const price = parsedPrice === null ? null : Math.round(parsedPrice * 100)
     setCustom((prev) => [...prev, { name, category: "autre", price_cents: price }])
     setNewName("")
     setNewPrice("")
   }
 
   async function save(quit: boolean) {
-    if (quit) {
-      navigate("/dashboard")
+    if (!quit && selected.length === 0 && custom.length === 0) {
+      setServerError("Sélectionnez ou ajoutez au moins une prestation pour continuer.")
       return
     }
     setSaving(true)
     setServerError(null)
     try {
-      const res = await saveStage("services", {
+      const response = await saveStage("services", {
         selected,
         custom,
-      } satisfies ServicesData)
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || `Erreur ${res.status}`)
+      } satisfies ServicesData, undefined, quit)
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(text || `Erreur ${response.status}`)
       }
-      onDone()
+      if (quit) await onQuit()
+      else onDone()
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "Erreur inconnue")
     } finally {

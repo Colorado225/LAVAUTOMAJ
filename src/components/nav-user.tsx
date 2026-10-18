@@ -2,9 +2,9 @@
 
 import {
   CreditCard,
+  Building2,
   EllipsisVertical,
   LogOut,
-  BellDot,
   CircleUser,
 } from "lucide-react"
 import { Link, useNavigate } from "react-router-dom"
@@ -114,17 +114,17 @@ export function NavUser({
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="cursor-pointer"
+                render={<Link to="/auth/select-organization" />}
+              >
+                <Building2 className="size-4 mr-2" />
+                Changer d'organisation
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="cursor-pointer"
                 render={<Link to="/settings/billing" />}
               >
                 <CreditCard className="size-4 mr-2" />
                 Abonnement
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="cursor-pointer"
-                render={<Link to="/settings/notifications" />}
-              >
-                <BellDot className="size-4 mr-2" />
-                Notifications
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />

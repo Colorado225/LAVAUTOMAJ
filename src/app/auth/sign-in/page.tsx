@@ -10,7 +10,7 @@ import {
   PasswordVisibilityButton,
 } from "@/components/auth/auth-form-elements"
 import { getAuthErrorMessage } from "@/components/auth/auth-errors"
-import { apiFetch, getClerkToken } from "@/lib/api"
+import { apiFetch } from "@/lib/api"
 
 const REMEMBERED_EMAIL_KEY = "washpilot.remembered-email"
 
@@ -54,8 +54,8 @@ export default function SignInPage() {
     try {
       await signOut()
       setError("")
-    } catch {
-      window.location.reload()
+    } catch (signOutError) {
+      setError(getAuthErrorMessage(signOutError, "La déconnexion a échoué. Réessayez pour changer de compte."))
     } finally {
       setIsDisconnecting(false)
     }
@@ -86,6 +86,7 @@ export default function SignInPage() {
             Connecté avec le compte :{" "}
             <strong>{user?.primaryEmailAddress?.emailAddress || "Utilisateur actif"}</strong>
           </AuthNotice>
+          {error ? <AuthNotice>{error}</AuthNotice> : null}
 
           <div className="flex flex-col gap-3 pt-2">
             <Link
@@ -145,21 +146,15 @@ export default function SignInPage() {
 
       await setActive({ session: attempt.createdSessionId })
 
-      // Sync user with backend
+      // Neon reads the user identity and active Clerk organization from the
+      // verified session; browser-supplied identity fields are never trusted.
       try {
-        const token = await getClerkToken()
-        await apiFetch(
-          "/api/v1/auth/sync",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              email: normalizedEmail,
-            }),
-          },
-          token
-        )
-      } catch (e) {
-        console.warn("User sync warning:", e)
+        const syncResponse = await apiFetch("/api/v1/auth/sync", { method: "POST" })
+        if (!syncResponse.ok) {
+          console.warn("Clerk-to-Neon sync will be retried on the next API request:", await syncResponse.text())
+        }
+      } catch (syncError) {
+        console.warn("Clerk-to-Neon sync deferred:", syncError)
       }
 
       navigate("/dashboard", { replace: true })

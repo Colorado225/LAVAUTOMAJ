@@ -3,7 +3,8 @@ import { OnboardingWizard } from "./components/onboarding-wizard"
 import { LoadingSpinner } from "@/components/ui/loading-spinner"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { Button } from "@/components/ui/button"
-import { useAuth } from "@clerk/clerk-react"
+import { useAuth, useClerk } from "@clerk/clerk-react"
+import { useNavigate } from "react-router-dom"
 import type { OnboardingProgress } from "@/lib/onboarding-api"
 
 /**
@@ -13,6 +14,8 @@ import type { OnboardingProgress } from "@/lib/onboarding-api"
  */
 export default function OnboardingPage() {
   const { isSignedIn } = useAuth()
+  const { signOut } = useClerk()
+  const navigate = useNavigate()
   const {
     data: progress,
     loading,
@@ -46,8 +49,11 @@ export default function OnboardingPage() {
       <OnboardingWizard
         progress={progress}
         onDone={() => window.location.reload()}
-        onQuit={() => {
-          window.location.href = "/dashboard"
+        onQuit={async () => {
+          // Leave the authenticated app before logging out so the route guard
+          // never loops an unfinished onboarding back to the wizard.
+          navigate("/landing", { replace: true })
+          await signOut()
         }}
       />
     </BaseLayout>

@@ -10,7 +10,7 @@ import {
   PasswordVisibilityButton,
 } from "@/components/auth/auth-form-elements"
 import { getAuthErrorMessage } from "@/components/auth/auth-errors"
-import { apiFetch, getClerkToken } from "@/lib/api"
+import { apiFetch } from "@/lib/api"
 
 type SignUpStep = "details" | "verification"
 
@@ -41,8 +41,8 @@ export default function SignUpPage() {
       await signOut()
       setError("")
       setNotice("Vous avez été déconnecté avec succès. Vous pouvez créer votre compte.")
-    } catch {
-      window.location.reload()
+    } catch (signOutError) {
+      setError(getAuthErrorMessage(signOutError, "La déconnexion a échoué. Réessayez avant de créer un autre compte."))
     } finally {
       setIsDisconnecting(false)
     }
@@ -73,6 +73,7 @@ export default function SignUpPage() {
             Connecté avec le compte :{" "}
             <strong>{user?.primaryEmailAddress?.emailAddress || "Utilisateur actif"}</strong>
           </AuthNotice>
+          {error ? <AuthNotice>{error}</AuthNotice> : null}
 
           <p className="text-sm text-slate-600">
             Pour continuer à utiliser votre station existante, rendez-vous sur le tableau de bord. Si vous souhaitez enregistrer une nouvelle entreprise ou un nouvel utilisateur, déconnectez-vous d’abord.
@@ -108,23 +109,18 @@ export default function SignUpPage() {
     }
     await setActive({ session: sessionId })
 
-    // Sync user with backend & database
+    // Clerk is the identity source of truth. Neon synchronization reads the
+    // verified Clerk profile on the server; no profile fields from the browser
+    // are trusted.
     try {
-      const token = await getClerkToken()
-      await apiFetch(
-        "/api/v1/auth/sync",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            first_name: firstName.trim(),
-            last_name: lastName.trim(),
-            email: email.trim(),
-          }),
-        },
-        token
-      )
-    } catch (e) {
-      console.warn("User sync warning:", e)
+      const response = await apiFetch("/api/v1/auth/sync", { method: "POST" })
+      if (!response.ok) {
+        console.warn("Clerk-to-Neon sync will be retried after organization setup:", await response.text())
+      }
+    } catch (syncError) {
+      // Account creation belongs to Clerk; tenant sync is safely retried when
+      // the authenticated onboarding status is loaded.
+      console.warn("Clerk-to-Neon sync deferred:", syncError)
     }
 
     navigate("/auth/create-organization", { replace: true })
@@ -167,7 +163,7 @@ export default function SignUpPage() {
       await signUp.prepareEmailAddressVerification({ strategy: "email_code" })
       setStep("verification")
       setNotice(`Un code de confirmation a été envoyé à ${email.trim()}.`)
-    } catch (authError: any) {
+    } catch (authError: unknown) {
       const errMsg = getAuthErrorMessage(authError, "Impossible de créer le compte pour le moment. Réessayez dans quelques instants.")
       setError(errMsg)
     } finally {

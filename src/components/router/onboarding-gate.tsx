@@ -28,12 +28,15 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
       <div className="flex min-h-svh flex-col items-center justify-center gap-4 p-6 text-center">
         <p className="text-lg font-semibold">Session indisponible</p>
         <p className="text-muted-foreground max-w-sm">
-          Impossible de vérifier l'état de votre station. Reconnectez-vous ou
-          réessayez dans un instant.
+          Impossible de vérifier l'état de votre station auprès du serveur. Réessayez dans un instant ; si le problème persiste, vérifiez la configuration Clerk/Neon.
         </p>
-        <a href="/auth/sign-in" className="text-primary underline">
-          Se connecter
-        </a>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+        >
+          Réessayer
+        </button>
       </div>
     )
   }
@@ -43,6 +46,10 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
 
   if (needsOnboarding && location.pathname !== "/onboarding") {
     return <Navigate to="/onboarding" replace />
+  }
+
+  if (data.state === "completed" && location.pathname === "/onboarding") {
+    return <Navigate to="/dashboard" replace />
   }
 
   return <>{children}</>

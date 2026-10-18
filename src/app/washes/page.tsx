@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from "react"
 import { Link } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { apiFetch, getClerkToken, useApi } from "@/lib/api"
+import { createIdempotencyKey } from "@/lib/idempotency"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -87,13 +88,6 @@ function paymentStatusLabel(status: string): string {
   if (status === "refunded") return "Remboursé"
   if (status === "unpaid") return "Non payé"
   return status
-}
-
-function makeIdempotencyKey(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID()
-  }
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 export default function WashesPage() {
@@ -196,7 +190,7 @@ export default function WashesPage() {
       return
     }
 
-    const requestKey = idempotencyKey ?? makeIdempotencyKey()
+    const requestKey = idempotencyKey ?? createIdempotencyKey()
     setIdempotencyKey(requestKey)
     setSaving(true)
     try {

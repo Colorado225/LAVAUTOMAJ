@@ -4,7 +4,8 @@ import { API_BASE_URL, getClerkToken } from "@/lib/api"
 export async function saveStage(
   stage: string,
   data: unknown,
-  planCode?: string
+  planCode?: string,
+  draft = false
 ): Promise<Response> {
   const token = await getClerkToken()
   return fetch(`${API_BASE_URL}/api/v1/onboarding/progress`, {
@@ -13,6 +14,6 @@ export async function saveStage(
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ stage, data, plan_code: planCode }),
+    body: JSON.stringify({ stage, data, plan_code: planCode, draft }),
   })
 }
