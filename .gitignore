@@ -1,0 +1,33 @@
+# Environnement / secrets — ne jamais committer
+.env
+.env.local
+.env.*.local
+backend/.env
+
+# Dépendances
+node_modules/
+.pnp
+.pnp.*
+
+# Build frontend
+dist/
+dist-ssr/
+*.local
+
+# Binaire backend Go
+backend/server
+backend/*.exe
+
+# Logs / OS / éditeurs
+*.log
+.DS_Store
+.vscode/*
+.idea/
+
+# Vite / TS
+*.tsbuildinfo
+node_modules/.tmp/
+node_modules/.vite/
+
+# QA temporaire
+qa-signup.mjs
