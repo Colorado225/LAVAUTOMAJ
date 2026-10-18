@@ -99,6 +99,7 @@ export interface OnboardingSummary {
   services: ServicesData | null;
   workers: WorkersData | null;
   plan: Plan | null;
+  subscription_status: string;
   completed: boolean;
   org_name: string;
 }

@@ -11,8 +11,6 @@ function page(load: () => Promise<{ default: ComponentType }>) {
 }
 
 export const routes: RouteObject[] = [
-  // Redirect legacy dashboard-2 to the canonical /dashboard
-  { path: "/dashboard-2", element: <Navigate to="/dashboard" replace /> },
   // Public marketing entry point
   { path: "/", element: <Navigate to="/landing" replace /> },
   { path: "/landing", lazy: page(() => import("@/app/landing/page")) },
@@ -26,11 +24,16 @@ export const routes: RouteObject[] = [
   { path: "/reports", lazy: page(() => import("@/app/reports/page")) },
   { path: "/team", lazy: page(() => import("@/app/team/page")) },
   { path: "/services", lazy: page(() => import("@/app/services/page")) },
+  { path: "/service-categories", lazy: page(() => import("@/app/service-categories/page")) },
   { path: "/vehicle-categories", lazy: page(() => import("@/app/vehicle-categories/page")) },
   // Authentication and first-organization setup routes
   {
     path: "/auth/create-organization",
     lazy: page(() => import("@/app/auth/create-organization/page")),
+  },
+  {
+    path: "/auth/select-organization",
+    lazy: page(() => import("@/app/auth/select-organization/page")),
   },
   {
     path: "/auth/sign-in",
@@ -67,24 +70,12 @@ export const routes: RouteObject[] = [
   },
   // Settings Routes
   {
-    path: "/settings/user",
-    lazy: page(() => import("@/app/settings/user/page")),
-  },
-  {
     path: "/settings/account",
     lazy: page(() => import("@/app/settings/account/page")),
   },
   {
     path: "/settings/billing",
     lazy: page(() => import("@/app/settings/billing/page")),
-  },
-  {
-    path: "/settings/appearance",
-    lazy: page(() => import("@/app/settings/appearance/page")),
-  },
-  {
-    path: "/settings/notifications",
-    lazy: page(() => import("@/app/settings/notifications/page")),
   },
   // Catch-all route for 404
   { path: "*", lazy: page(() => import("@/app/errors/not-found/page")) },

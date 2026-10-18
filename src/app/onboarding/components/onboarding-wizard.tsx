@@ -15,7 +15,7 @@ export interface OnboardingWizardProps {
   progress: OnboardingProgress | null
   /** Appelé quand l'étape courante est enregistrée : recharge la progression. */
   onDone: () => void
-  onQuit: () => void
+  onQuit: () => void | Promise<void>
 }
 
 const STEP_INDEX = (stage: string) => Math.max(0, STAGES.indexOf(stage as (typeof STAGES)[number]))

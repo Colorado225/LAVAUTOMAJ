@@ -1,5 +1,4 @@
 import * as React from "react"
-import { useNavigate } from "react-router-dom"
 import { useApi } from "@/lib/api"
 import {
   Card,
@@ -36,8 +35,7 @@ function getPlanFeatures(features: Plan["features"]): string[] {
     .map(([key]) => FEATURE_LABELS[key] ?? key)
 }
 
-export function PlanStep({ progress, onDone }: OnboardingWizardProps) {
-  const navigate = useNavigate()
+export function PlanStep({ progress, onDone, onQuit }: OnboardingWizardProps) {
   const { data: plans, loading, error } = useApi<Plan[]>("/api/v1/plans")
   const [selectedCode, setSelectedCode] = React.useState<string | null>(
     progress?.plan_code ?? null
@@ -46,21 +44,21 @@ export function PlanStep({ progress, onDone }: OnboardingWizardProps) {
   const [serverError, setServerError] = React.useState<string | null>(null)
 
   async function save(quit: boolean) {
-    if (quit) {
-      navigate("/dashboard")
+    if (!quit && !selectedCode) {
+      setServerError("Choisissez un forfait pour continuer.")
       return
     }
     setSaving(true)
     setServerError(null)
     try {
-      // Le corps `data` n'est pas utilisé pour cette étape ; le plan_code
-      // porte la sélection. La validation serveur reste la source de vérité.
-      const res = await saveStage("plan", { plan: selectedCode }, selectedCode ?? undefined)
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || `Erreur ${res.status}`)
+      // Le plan_code provient du catalogue Neon, validé à nouveau côté serveur.
+      const response = await saveStage("plan", { plan: selectedCode }, selectedCode ?? undefined, quit)
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(text || `Erreur ${response.status}`)
       }
-      onDone()
+      if (quit) await onQuit()
+      else onDone()
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "Erreur inconnue")
     } finally {

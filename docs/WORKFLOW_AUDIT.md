@@ -1,69 +1,46 @@
-# PHASE A — Audit de l'existant : rapport des écarts
+# Audit backend — WashPilot CI
 
-Audit réalisé selon `docs/WORKFLOW.md` (workflow d'inscription, onboarding et personnalisation du dashboard). Référence : `docs/PROGRESS.md`, `TODO.md`, code réel.
+## Périmètre réel
 
-## 1. État réel de l'application
+Le code exécutable est **React/Vite/TypeScript** côté navigateur, **Express 5/TypeScript** dans `server.ts` et `server/`, et **PostgreSQL/Neon** via `pg`. Les anciennes notes Go/chi/sqlx et migrations `00000x` ne correspondent pas au dépôt actuel.
 
-### Backend (Go + chi + sqlx + Neon/PostgreSQL + Clerk)
+## Architecture et identité
 
-- Serveur `cmd/server/main.go` (1 150+ lignes, mono-fichier), 30 handlers.
-- Auth : Clerk (`clerkhttp.RequireHeaderAuthorization`), claims custom `org_id` requis par la quasi-totalité des endpoints.
-- 4 migrations appliquées sur Neon : `organizations`, `users`, `vehicle_categories`, `service_categories`, `services`, `sites`, `customers`, `washes`, `wash_items`, `wash_assignments`, `payments`, `cash_sessions`, `cash_movements`, `expense_categories`, `expenses`.
-- Isolation multi-tenant par `organization_id` vérifiée (test `isolation_test.go`).
-- Endpoint `GET /api/v1/dashboard/metrics` renvoie `total_orders` / `total_revenue` (centimes) calculés sur la table `orders`.
-- **Écart constaté** : `cmd/server/main_test.go` référence `github.com/golang-migrate/migrate/v4` qui n'est pas dans `go.mod` → `go test ./...` échoue au setup.
+- Clerk est le fournisseur d'identité ; le backend vérifie les JWT via `@clerk/backend`.
+- `users` stocke la projection globale du profil. `organization_members` stocke le rôle par tenant ; `users.role` n'est pas un rôle d'autorisation tenant.
+- L'organisation vient du claim Clerk vérifié. Les requêtes SQL des routes métier filtrent par l'identifiant interne d'organisation.
+- Les profils et appartenances sont synchronisés par `POST /api/v1/auth/sync` et webhooks Clerk signés, dédupliqués et transactionnels.
+- Lorsqu'une appartenance locale manque, le backend vérifie l'appartenance actuelle auprès de l'API Backend Clerk avant de la créer, afin qu'un ancien JWT ne puisse pas rétablir une adhésion révoquée.
 
-### Frontend (Vite + React 19 + react-router 7 + Clerk + shadcn/ui)
+## Corrections de sécurité et d'intégrité implémentées
 
-- Routes (`src/config/routes.tsx`) : `/`, `/dashboard`, `/onboarding`, `/washes`, `/cash-drawer`, `/expenses`, `/reports`, `/team`, `/services`, `/vehicle-categories`, auth (sign-in/sign-up/forgot), settings, erreurs.
-- `ClerkProvider` dans `App.tsx`, mais **aucune protection de route** : `/dashboard` est accessible sans session (l'API renvoie alors une erreur, mais la page s'affiche).
-- `sign-in/sign-up` : formulaires décoratifs du template (`login-form-1.tsx`, POST vers `/`), **non branchés sur Clerk** (pas de `<SignIn/>`/`<SignUp/>`, pas de redirection post-auth).
-- `/onboarding` : placeholder « PHASE 1 / MODULE 1 » — **aucune étape, aucune donnée**.
-- `/dashboard` : `DashboardMetrics` branché sur l'API réelle (recettes XOF, lavages), layout `BaseLayout`.
-- Sidebar statique (`app-sidebar.tsx`) : nom « WashPilot CI » codé en dur, non lié à l'organisation réelle.
-- Hook API réutilisable : `src/lib/api.ts` (`useApi`, `apiFetch`, token Clerk, `VITE_API_BASE_URL`).
+- Body parser : JSON mal formé → `400`, payload trop volumineux → `413`, encodage non supporté → `415`.
+- Onboarding : progression et brouillons persistants, validations serveur, confirmation idempotente dans une transaction.
+- Tenant : rôles par organisation, plafonds utilisateurs/prestations/travailleurs couverts côté serveur, contrôle des références inter-tenant.
+- Lavages : empreinte SHA-256 déterministe, clé d'idempotence, contrôle des services/travailleurs/site/catégorie, paiement et mouvement cash atomiques, référence par compteur tenant/année.
+- Caisse : clés d'idempotence à l'ouverture et sur mouvements manuels, rôle opérateur/gestionnaire, verrouillage du solde, refus des sorties excédentaires et clôture rejouable sans double écriture.
+- Dépenses : clé d'idempotence, site déduit de la session cash si absent, rôle de caisse, contrôle de solde, annulation réservée aux propriétaires/responsables et mouvement inverse transactionnel.
+- Catalogue : contrôle de doublons tenant et limites de prestations sérialisées sous verrou advisory.
 
-### Base de données (Neon)
+## Résultats de validation locale
 
-- 16 tables, 0 organisation, 0 utilisateur — base vierge.
-- Table `organizations` minimale : `clerk_org_id`, `name` seulement (pas de téléphone/adresse/ville/logo).
-- **Aucun modèle** pour : workers (travailleurs), plans/abonnements, progression d'onboarding.
+Les validations locales à enregistrer après chaque modification sont :
 
-## 2. Écarts par rapport au WORKFLOW.md
+```text
+npm run build
+npm run lint
+npm test
+git diff --check
+```
 
-| #   | Exigence                                                                | État                           | Écart                                                                                                    |
-| --- | ----------------------------------------------------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| 1   | Landing page                                                            | ✅ `src/app/landing/` complète | Adapter les CTA vers sign-in/sign-up réels                                                               |
-| 2   | Inscription/connexion                                                   | ❌                             | Formulaires non branchés sur Clerk                                                                       |
-| 3   | Redirection selon état du compte                                        | ❌                             | Pas de garde de route, tout le monde arrive sur `/dashboard`                                             |
-| 4   | Détection de l'état de configuration côté serveur                       | ❌                             | Aucun endpoint de statut                                                                                 |
-| 5   | Onboarding multi-étapes (identité, catalogue, travailleurs, forfait)    | ❌                             | Page placeholder uniquement                                                                              |
-| 6   | Récapitulatif + confirmation                                            | ❌                             | —                                                                                                        |
-| 7   | Enregistrement transactionnel idempotent                                | ❌                             | —                                                                                                        |
-| 8   | Animation de succès post-confirmation serveur                           | ❌                             | —                                                                                                        |
-| 9   | Persistance/reprise (`OnboardingProgress`)                              | ❌                             | —                                                                                                        |
-| 10  | Dashboard personnalisé (nom station, services, forfait, chiffres réels) | ◐                              | Métriques réelles OK ; nom/logo/services/forfait absents                                                 |
-| 11  | Multi-stations par utilisateur                                          | ❌                             | Modèle 1 user = 1 org (claim `org_id` unique) — hors périmètre immédiat                                  |
-| 12  | Entités `ServiceCatalog`/`StationService`                               | ◐                              | `services` existe (par org) : sert de catalogue par station ; un seed de prestations standard est requis |
-| 13  | Forfaits Free/Pro/Business en base                                      | ❌                             | Aucune table                                                                                             |
-| 14  | Tests backend/frontend                                                  | ◐                              | Isolation testée ; setup `go test` cassé ; aucun test onboarding                                         |
+Elles ne remplacent pas une validation contre PostgreSQL/Neon.
 
-## 3. Composants réutilisables identifiés (à ne pas reconstruire)
+## Risques ou travaux ouverts
 
-- **Frontend** : `BaseLayout`, tous les `components/ui/*` (shadcn), `useApi`/`apiFetch`, `Logo`, `Toaster`, `lucide-react`, `react-hook-form` + `zod` + `Field*`, routeur lazy (`config/routes.tsx`), thème/clerk providers.
-- **Backend** : middleware Clerk, pattern `ApiServer` + stores sqlx, migrations `golang-migrate`, test d'isolation.
-- **Design** : conservé tel quel — seuls les contenus s'adaptent au contexte (règle NB du WORKFLOW.md).
-
-## 4. Décisions d'audit
-
-1. Ne pas toucher aux 4 migrations existantes (aucune migration destructive).
-2. L'onboarding vit dans une **nouvelle migration 000005** : extension `organizations`, tables `workers`, `plans`, `subscriptions`, `onboarding_progress`.
-3. Le catalogue standard de prestations est **seedé** dans la migration (données de référence par défaut, rattachées à l'org à la confirmation).
-4. Correction immédiate du setup de tests backend (`go get golang-migrate`).
-5. Les pages auth du template seront remplacées par les composants Clerk **sans changer le design** (carte centrée, logo, mêmes classes).
-
-## 5. Risques
-
-- Le claim `org_id` est créé côté Clerk (template session). En local, une org Clerk inexistante en base → 403. L'onboarding doit **auto-provisionner** l'org si absente (source : claims Clerk), sinon le parcours est bloqué avant de commencer.
-- Clerk test key disponible ; le parcours complet (inscription réelle) est testable en dev.
-- `main.go` est un mono-fichier : les nouveaux handlers onboarding seront isolés dans un fichier dédié (`onboarding_handlers.go`) pour limiter la pollution.
+1. Aucune base Neon valide (`DATABASE_URL`) n'est disponible dans cet environnement : les migrations, contraintes uniques, transactions concurrentes et flux E2E ne sont pas exécutés ici.
+2. Aucun secret Clerk serveur valide n'est configuré ici ; la connexion Clerk réelle, les webhooks et la vérification des appartenances nécessitent des clés de test renouvelées.
+3. Les paiements mobiles sont saisis comme opérations métier, mais aucun fournisseur Orange Money/MTN MoMo/Moov/Wave ni flux de remboursement n'est intégré ; une confirmation ne doit pas être simulée.
+4. Les rapports d’activité avec export CSV et la gestion des travailleurs sont livrés ; restent les tests PostgreSQL de ces flux, les invitations/révocations Clerk, le billing et l’audit log.
+5. L'isolation tenant est faite au niveau applicatif ; RLS PostgreSQL n'est pas configuré.
+6. L'audit de dépendances a trouvé des vulnérabilités élevées dans des dépendances de développement ; aucune mise à niveau majeure forcée n'a été appliquée.
+7. `docs/DATABASE.md` décrit le schéma réellement créé par les migrations `001`–`005` ; toute nouvelle migration doit être append-only en production.

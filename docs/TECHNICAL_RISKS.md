@@ -1,6 +1,6 @@
 # Risques Techniques et Stratégies d'Atténuation
 
-Ce document identifie les principaux risques techniques du projet WashPilot_CI et propose des mesures pour les gérer.
+Ce document identifie les principaux risques techniques du projet WashPilot CI et propose des mesures pour les gérer. Le dépôt actuel utilise React/Vite et une API Express/TypeScript avec PostgreSQL/Neon ; les références historiques à Go ne s'appliquent pas au runtime.
 
 ## 1. Intégrité des Données Financières
 
@@ -16,7 +16,7 @@ Ce document identifie les principaux risques techniques du projet WashPilot_CI e
 
 - **Risque :** Une faille dans l'isolation des données pourrait permettre à un utilisateur de l'entreprise A de voir ou de modifier les données de l'entreprise B. C'est le risque le plus critique pour un SaaS.
 - **Stratégie d'atténuation :**
-  - **Contrôle Systématique au Backend :** Chaque requête à l'API Go doit valider le jeton Clerk et extraire l'`organization_id`. Cet ID doit être utilisé comme filtre (`WHERE organization_id = ?`) dans **chaque requête SQL** qui lit ou écrit des données métier.
+  - **Contrôle Systématique au Backend :** Chaque requête métier à l'API Express doit valider le jeton Clerk et résoudre le tenant depuis l'organisation active. Cet ID doit être utilisé comme filtre (`WHERE organization_id = $n`) dans **chaque requête SQL** qui lit ou écrit des données métier.
   - **Pas de Confiance au Frontend :** Ne jamais se fier à un `organization_id` envoyé par le client dans le corps d'une requête. La seule source de vérité est le jeton d'authentification.
   - **Tests d'Intrusion :** Mettre en place des tests automatisés qui tentent explicitement d'accéder à des ressources appartenant à une autre organisation pour s'assurer que l'accès est bien refusé.
   - **Permissions par Rôle :** Appliquer une vérification des rôles (Owner, Manager, Cashier) côté backend pour chaque action.
@@ -29,7 +29,7 @@ Ce document identifie les principaux risques techniques du projet WashPilot_CI e
     - **Webhooks :** Gérer les webhooks de Clerk de manière asynchrone et idempotente pour synchroniser les utilisateurs et les organisations. Prévoir les cas où un webhook pourrait être reçu plusieurs fois.
     - **Déconnexion :** Avoir une stratégie claire si l'API de Clerk est indisponible (ex: afficher un message d'erreur clair, empêcher les nouvelles connexions mais maintenir les sessions actives si possible).
   - **Neon :**
-    - **Pool de Connexions :** Configurer correctement le pool de connexions dans l'API Go pour gérer efficacement la charge et éviter l'épuisement des connexions.
+    - **Pool de Connexions :** Configurer correctement le pool `pg` de l'API Express (variable `PG_POOL_MAX`, SSL Neon, délais de connexion) pour gérer efficacement la charge et éviter l'épuisement des connexions.
     - **Plan de Sauvegarde :** Bien que Neon gère les sauvegardes, comprendre et documenter la procédure de restauration en cas de problème majeur.
 
 ## 4. Performance à Grande Échelle

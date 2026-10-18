@@ -3,9 +3,7 @@
 import * as React from "react"
 import {
   LayoutPanelLeft,
-  Shield,
   Settings,
-  Truck,
   Wallet,
   Receipt,
   BarChart3,
@@ -16,7 +14,6 @@ import {
 import { Link } from "react-router-dom"
 import { Logo } from "@/components/logo"
 import { useOnboardingStatus } from "@/lib/onboarding-api"
-import { SidebarNotification } from "@/components/sidebar-notification"
 
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
@@ -32,8 +29,8 @@ import {
 
 const data = {
   user: {
-    name: "Gérant",
-    email: "gerant@example.com",
+    name: "Utilisateur",
+    email: "",
     avatar: "",
   },
   navGroups: [
@@ -80,6 +77,10 @@ const data = {
               url: "/services",
             },
             {
+              title: "Catégories de prestations",
+              url: "/service-categories",
+            },
+            {
               title: "Catégories de véhicules",
               url: "/vehicle-categories",
             },
@@ -90,11 +91,6 @@ const data = {
     {
       label: "Configuration",
       items: [
-        {
-          title: "Onboarding",
-          url: "/onboarding",
-          icon: Truck,
-        },
         {
           title: "Paramètres",
           url: "#",
@@ -108,35 +104,7 @@ const data = {
               title: "Facturation",
               url: "/settings/billing",
             },
-            {
-              title: "Apparence",
-              url: "/settings/appearance",
-            },
-            {
-              title: "Notifications",
-              url: "/settings/notifications",
-            },
           ],
-        },
-      ],
-    },
-    {
-      label: "Authentification",
-      items: [
-        {
-          title: "Connexion",
-          url: "/auth/sign-in",
-          icon: Shield,
-        },
-        {
-          title: "Inscription",
-          url: "/auth/sign-up",
-          icon: Shield,
-        },
-        {
-          title: "Mot de passe oublié",
-          url: "/auth/forgot-password",
-          icon: Shield,
         },
       ],
     },
@@ -144,11 +112,10 @@ const data = {
 }
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
-  // Dashboard dynamique (§10 du WORKFLOW) : nom réel de la station depuis le
-  // serveur ; repli discret tant que la station n'est pas configurée.
   const { data: status } = useOnboardingStatus()
   const stationName = status?.station?.name ?? status?.org_name ?? "WashPilot CI"
   const stationCity = status?.station?.city
+
   return (
     <Sidebar {...props}>
       <SidebarHeader>
@@ -174,7 +141,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         ))}
       </SidebarContent>
       <SidebarFooter>
-        <SidebarNotification />
         <NavUser user={data.user} />
       </SidebarFooter>
     </Sidebar>

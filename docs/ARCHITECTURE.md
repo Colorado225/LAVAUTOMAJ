@@ -1,60 +1,56 @@
-# Architecture Technique de WashPilot_CI
+# Architecture technique — WashPilot CI
 
-Ce document définit l'architecture technique cible pour l'application SaaS WashPilot_CI.
+## Vue actuelle
 
-## 1. Vue d'ensemble
+```text
+React + Vite + TypeScript + React Router
+        │ Bearer JWT Clerk (same-origin /api/v1)
+        ▼
+Express 5 + TypeScript (Node)
+  ├─ @clerk/backend : vérification JWT, profil Clerk, webhooks signés
+  ├─ routes auth, organisations, onboarding, catalogue, équipe, rapports et opérations
+  └─ pg Pool + migrations SQL versionnées
+        ▼
+PostgreSQL managé Neon
+```
 
-WashPilot_CI sera construit sur une architecture moderne, découplée et évolutive, composée des éléments suivants :
+- **Frontend :** SPA React 19, Vite, React Router et composants shadcn/ui.
+- **API :** serveur Express 5 en TypeScript, lancé par `tsx server.ts`. Les modules de domaine sont dans `server/` ; les réponses JSON sont versionnées sous `/api/v1`.
+- **Base de données :** PostgreSQL Neon via `pg`, pool borné et migrations SQL dans `server/migrations/`.
+- **Authentification :** Clerk gère les comptes, mots de passe, vérifications, sessions et organisations. Le backend valide la signature et l'expiration de chaque jeton via le SDK officiel `@clerk/backend`.
 
-- **Frontend :** Une Single-Page Application (SPA) construite avec **React (Vite)** et **TypeScript**, en utilisant la bibliothèque de composants **Shadcn UI**.
-- **Backend :** Une API RESTful écrite en **Go (Golang)**, responsable de toute la logique métier, des autorisations et de la communication avec la base de données.
-- **Base de données :** Une base de données PostgreSQL managée par **Neon**, qui offre une excellente scalabilité et des fonctionnalités serverless.
-- **Authentification :** Un service d'identité managé, **Clerk**, pour gérer l'authentification des utilisateurs, les organisations et les invitations.
+## Authentification et synchronisation des utilisateurs
 
-![Diagramme d'architecture simple](https://i.imgur.com/your-diagram-image.png)
-_(Note : Un diagramme visuel sera ajouté pour illustrer cette architecture)_
+Clerk est la source de vérité pour l'identité. Neon conserve une projection applicative : `users` (identifiant Clerk unique, coordonnées, statut), `organizations` (identifiant Clerk unique), et `organization_members` (rôle et appartenance tenant). Les webhooks signés synchronisent les changements Clerk ; `POST /api/v1/auth/sync` et la résolution au premier appel authentifié permettent de réparer un événement manqué.
 
-## 2. Frontend (React + Vite)
+Le profil transmis dans le navigateur n'est jamais considéré comme preuve d'identité. L'ID utilisateur et l'organisation active viennent d'un JWT vérifié. Le rôle est résolu depuis l'appartenance Clerk vérifiée puis répliqué localement ; une appartenance locale manquante est revalidée auprès de Clerk avant sa création. L'organisation active doit correspondre à une appartenance tenant avant toute lecture ou écriture.
 
-- **Framework :** Nous utiliserons le projet Vite existant comme base, en le transformant pour répondre aux besoins de WashPilot_CI.
-- **Langage :** TypeScript sera utilisé pour assurer la robustesse et la maintenabilité du code.
-- **UI :** Nous nous appuierons sur **Shadcn UI** pour construire une interface utilisateur cohérente et professionnelle. Les composants seront adaptés et étendus au besoin.
-- **Gestion de l'état :**
-  - **État du serveur :** **TanStack Query (React Query)** sera utilisé pour gérer l'état du serveur (données de l'API). Il prendra en charge le cache, la synchronisation en arrière-plan et la mise à jour des données, ce qui est crucial pour une application dynamique.
-  - **État local/global :** Pour l'état de l'interface (ex: état d'un formulaire complexe, ouverture/fermeture d'une modale), nous utiliserons les hooks React (`useState`, `useContext`). Si un état global plus complexe s'avère nécessaire, **Zustand** sera envisagé pour sa simplicité et sa performance.
-- **Routage :** **React Router** restera le routeur principal, configuré de manière centralisée.
-- **Communication API :** Les appels à l'API Go se feront via des requêtes `fetch` encapsulées dans les fonctions de TanStack Query. Un client API (type `axios` ou un wrapper simple) pourra être créé pour centraliser la configuration (headers, gestion des erreurs).
+## Isolation multi-tenant
 
-## 3. Backend (Go)
+- Chaque requête `/api/v1/*` exige un Bearer JWT Clerk valide.
+- L'identifiant interne d'organisation est résolu depuis `clerk_org_id`, lui-même issu du claim Clerk vérifié, jamais depuis `organization_id` dans le body ou l'URL.
+- Les requêtes SQL opérationnelles filtrent par `organization_id`; les sites, services, catégories, travailleurs et sessions de caisse sont aussi vérifiés par tenant.
+- Le dashboard et les opérations sont refusés tant que `onboarding_completed` n'est pas vrai ; les limites utilisateurs, prestations et travailleurs du forfait sont contrôlées serveur.
+- Les écritures d’équipe utilisent des transactions PostgreSQL ; la création/réactivation verrouille le quota de travailleurs actifs du forfait. Les rapports utilisent des lectures tenant-scopées dans une transaction repeatable-read read-only et sont réservés owner/manager.
+- Les modifications d’onboarding et les écritures financières utilisent des transactions PostgreSQL. Les clés d'idempotence sont tenant-scopées, associées à une empreinte SHA-256, et protègent les lavages, ouvertures de caisse, mouvements manuels et dépenses contre les retries.
+- Les soldes de caisse sont modifiés sous verrou de ligne, refusent les sorties supérieures au solde, et les dépenses espèces héritent du site de leur session. Les références de lavage sont allouées atomiquement par organisation et année.
+- Les profils globaux et appartenances multi-organisation sont distincts : l'organisation de rattachement historique dans `users` peut être nulle ; `organization_members` représente les relations multi-tenant.
 
-- **Langage :** Go a été choisi pour sa performance, sa simplicité et sa robustesse, ce qui est idéal pour une API métier.
-- **Framework :** Nous utiliserons un routeur HTTP léger et performant comme `chi` ou `gorilla/mux`, ainsi que la bibliothèque standard `net/http`.
-- **Structure du projet :** Le projet suivra une organisation en couches (Domain-Driven Design) pour séparer clairement les préoccupations :
-  - `cmd/` : Points d'entrée de l'application (serveur API).
-  - `internal/` :
-    - `api/` ou `handler/` : Gestionnaires HTTP, validation des requêtes.
-    - `service/` ou `usecase/` : Logique métier principale.
-    - `repository/` ou `storage/` : Accès à la base de données.
-    - `domain/` : Modèles de données et règles métier pures.
-- **Communication avec la base de données :** Nous utiliserons la bibliothèque `pgx` pour interagir avec la base de données PostgreSQL. Les migrations SQL seront gérées avec un outil comme `golang-migrate/migrate`.
-- **API :** L'API sera versionnée (ex: `/api/v1`) et suivra les principes REST. Les réponses seront au format JSON.
+## Onboarding
 
-## 4. Base de données (PostgreSQL sur Neon)
+La progression côté serveur (`onboarding_progress`) est la seule source de vérité. Les étapes `station`, `services`, `workers` et `plan` sont validées côté frontend et backend. Les brouillons peuvent être enregistrés et l'utilisateur peut quitter ; à la prochaine connexion, le parcours reprend à l'étape stockée. La confirmation finale valide de nouveau les données, applique les limites du forfait et crée en transaction la station, les services, les travailleurs et l'abonnement. Un forfait payant reste `pending` tant qu'aucun paiement réel n'a été vérifié.
 
-- **SGBD :** PostgreSQL est un choix robuste et éprouvé pour les applications relationnelles.
-- **Hébergement :** Neon offre une solution serverless pour PostgreSQL, ce qui simplifie la gestion de l'infrastructure, les sauvegardes et la scalabilité.
-- **Modèle de données :** Le modèle de données suivra les spécifications de `PLAN.md`, avec une attention particulière à l'isolation multi-tenant (toutes les tables métier auront une colonne `organization_id`).
-- **Schéma :** Un document `docs/DATABASE.md` sera créé pour détailler le schéma relationnel, les tables, les colonnes et les contraintes.
+## Migrations et diagnostic
 
-## 5. Authentification (Clerk)
+Le serveur charge les migrations numérotées `001_auth_onboarding.sql` à `005_team_reporting_indexes.sql` sous `server/migrations/`, sous un verrou advisory PostgreSQL, puis les enregistre dans `app_schema_migrations`. Elles sont additives et peuvent être rejouées en sécurité lorsqu'elles n'ont pas encore été marquées comme appliquées. En production, fournir un `DATABASE_URL` Neon avec SSL et `CLERK_SECRET_KEY`.
 
-- **Rôle :** Clerk gérera tout le cycle de vie de l'authentification : inscription, connexion, gestion des sessions, authentification multi-facteurs (MFA).
-- **Intégration Frontend :** Le SDK React de Clerk sera utilisé pour protéger les routes, accéder aux informations de l'utilisateur et afficher les composants d'UI (formulaires de connexion, bouton utilisateur).
-- **Intégration Backend :** Le backend Go validera les JSON Web Tokens (JWT) fournis par Clerk à chaque requête API. Un middleware sera mis en place pour extraire l'ID de l'utilisateur et l'ID de l'organisation du jeton, garantissant que chaque requête est authentifiée et autorisée.
-- **Multi-tenancy :** Nous utiliserons la fonctionnalité "Organizations" de Clerk pour gérer les entreprises clientes, les membres et les rôles, ce qui s'intègre parfaitement à notre architecture multi-tenant.
+- `GET /healthz` : liveness HTTP.
+- `GET /readyz` : readiness, renvoie `503` tant que Neon/migrations ou Clerk ne sont pas prêts.
 
-## 6. Déploiement
+Les endpoints `/api/v1/workers` et `/api/v1/reports/summary` sont basés sur Neon ; les rapports exposent les lavages par jour, paiements vérifiés, dépenses enregistrées, prestations, moyens de paiement et catégories. Les mutations du catalogue utilisent les routes Neon tenant-scopées (`POST`/`PATCH`) et renvoient les lignes enregistrées ; l’interface relit les listes après chaque succès. Les suppressions de catalogue sont des désactivations afin de préserver les références historiques. Les anciennes données API en mémoire et utilisateurs de démonstration ne sont plus servis sur les routes applicatives.
 
-- **Frontend :** L'application React sera déployée sur un hébergeur de sites statiques moderne comme **Vercel** ou **Netlify**.
-- **Backend :** L'API Go sera conteneurisée avec **Docker** et déployée sur un service comme **Google Cloud Run**, **AWS Fargate**, ou un autre service d'hébergement de conteneurs.
-- **CI/CD :** Une pipeline de CI/CD (par exemple, avec GitHub Actions) sera mise en place pour automatiser les tests, la construction des images Docker et le déploiement.
+## Variables et déploiement
+
+Voir `.env.example` et `docs/AUTHENTICATION.md`. En particulier : `VITE_CLERK_PUBLISHABLE_KEY` (ou son alias public `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`) est la seule clé Clerk exposée au navigateur ; `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SIGNING_SECRET` et `DATABASE_URL` restent côté serveur. Le frontend utilise des URL API relatives par défaut pour fonctionner derrière le proxy de preview et sur une origine unique.
+
+Le projet reste déployable comme un serveur Node Express qui sert le build Vite. Une évolution vers un déploiement frontend/API séparé doit définir explicitement `CORS_ORIGINS`, `VITE_API_BASE_URL` et `CLERK_AUTHORIZED_PARTIES`.

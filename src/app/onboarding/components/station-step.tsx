@@ -1,16 +1,14 @@
 import * as React from "react"
-import { useNavigate } from "react-router-dom"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
-import { API_BASE_URL, getClerkToken } from "@/lib/api"
 import type { StationData } from "@/lib/onboarding-api"
+import { saveStage } from "./save-stage"
 import type { OnboardingWizardProps } from "./onboarding-wizard"
 
-export function StationStep({ progress, onDone }: OnboardingWizardProps) {
-  const navigate = useNavigate()
+export function StationStep({ progress, onDone, onQuit }: OnboardingWizardProps) {
   const saved = progress?.station_data
   const [values, setValues] = React.useState<StationData>({
     name: saved?.name ?? "",
@@ -37,28 +35,17 @@ export function StationStep({ progress, onDone }: OnboardingWizardProps) {
   }
 
   async function save(quit: boolean) {
-    if (quit) {
-      navigate("/dashboard")
-      return
-    }
-    if (!validate()) return
+    if (!quit && !validate()) return
     setSaving(true)
     setServerError(null)
     try {
-      const token = await getClerkToken()
-      const res = await fetch(`${API_BASE_URL}/api/v1/onboarding/progress`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ stage: "station", data: values }),
-      })
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || `Erreur ${res.status}`)
+      const response = await saveStage("station", values, undefined, quit)
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(text || `Erreur ${response.status}`)
       }
-      onDone()
+      if (quit) await onQuit()
+      else onDone()
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "Erreur inconnue")
     } finally {

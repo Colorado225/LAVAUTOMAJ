@@ -1,8 +1,9 @@
 "use client"
 
-import { useState, type FormEvent } from "react"
+import { useRef, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { apiFetch, useApi } from "@/lib/api"
+import { createIdempotencyKey } from "@/lib/idempotency"
 import {
   Table,
   TableBody,
@@ -117,6 +118,7 @@ export default function ExpensesPage() {
   const [saving, setSaving] = useState(false)
   const [mutationError, setMutationError] = useState<string | null>(null)
   const [mutationSuccess, setMutationSuccess] = useState<string | null>(null)
+  const idempotencyKeys = useRef(new Map<string, string>())
 
   // Form fields
   const [siteId, setSiteId] = useState("")
@@ -184,11 +186,24 @@ export default function ExpensesPage() {
       if (reference) body.reference = reference
       if (cashSessionId) body.cash_session_id = cashSessionId
 
-      await apiFetch("/api/v1/expenses", {
+      const fingerprint = JSON.stringify(body)
+      let requestKey = idempotencyKeys.current.get(fingerprint)
+      if (!requestKey) {
+        requestKey = createIdempotencyKey()
+        idempotencyKeys.current.set(fingerprint, requestKey)
+      }
+
+      const response = await apiFetch("/api/v1/expenses", {
         method: "POST",
+        headers: { "Idempotency-Key": requestKey },
         body: JSON.stringify(body),
       })
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(errorText || `Erreur ${response.status}`)
+      }
 
+      idempotencyKeys.current.clear()
       setMutationSuccess("Dépense enregistrée avec succès !")
       setTimeout(() => {
         setOpen(false)

@@ -1,118 +1,46 @@
-# WashPilot_CI - Suivi de Progression
+# État d'avancement — WashPilot CI
 
-Ce document suit l'avancement du projet conformément à la `ROADMAP.md` et à `TODO.md`.
+> Ce suivi remplace les anciennes notes qui décrivaient un backend Go. Le dépôt actuel est une SPA React/Vite/TypeScript avec API Express/TypeScript et PostgreSQL/Neon.
 
-## PHASE 0 — Audit et cadrage
+## Backend actuel
 
-- [x] **docs/AUDIT_SHADCN_TEMPLATE.md** : Analyser le template Shadcn UI existant.
-- [x] **docs/ARCHITECTURE.md** : Définir l'architecture technique cible.
-- [x] **docs/ROADMAP.md** : Détailler le plan d'implémentation.
-- [x] **Migration Plan** : Lister les fichiers à conserver, migrer, adapter, supprimer ou différer.
-- [x] **Business Flow Diagram** : Schématiser les flux métier.
-- [x] **Technical Risks** : Identifier les risques techniques.
-- [x] **docs/DATABASE.md** : Schéma relationnel, tables, colonnes, relations, index, contraintes, règles de suppression, stratégies d'isolation.
-- [x] **docs/TODO.md** : Traduction de PLAN.md en todo list actionnable avec workflow de vérification.
+- [x] Authentification Clerk : inscription, connexion, JWT vérifié par le backend ; aucun mot de passe n'est stocké dans Neon.
+- [x] Synchronisation du profil Clerk dans `users` et appartenance tenant dans `organization_members`.
+- [x] Vérification Clerk des appartenances à la création locale, webhook signé/dédupliqué pour synchroniser créations, mises à jour et révocations.
+- [x] Isolation des routes tenant depuis l'organisation du JWT, filtre `organization_id` sur les requêtes métier.
+- [x] Onboarding sauvegardé dans `onboarding_progress`, validation serveur, reprise de brouillon et confirmation transactionnelle.
+- [x] Routes catalogue tenant-scopées pour lire/créer/modifier/désactiver les prestations et catégories ; les suppressions physiques sont évitées pour protéger l’historique.
+- [x] Routes de lavages, paiements, caisse, mouvements et dépenses.
+- [x] Routes d’équipe : création, modification et activation/désactivation de travailleurs, garde owner/manager et quota actif vérifié sous verrou transactionnel.
+- [x] Route de rapport tenant-scopée, réservée owner/manager, avec dates inclusives, agrégats financiers/opérationnels et série journalière.
+- [x] Contrôles de rôle, limites de forfait couvertes, validation de solde et calculs entiers sûrs.
+- [x] Idempotence SHA-256 pour les mutations financières couvertes ; références de lavage générées via compteur transactionnel par tenant/année.
+- [x] Migrations SQL versionnées `001` à `005`, readiness/liveness et pool PostgreSQL borné.
 
-## PHASE 1 — Fondations
+## Frontend actuel
 
-- [x] **Backend/Frontend Structure** : Structure des projets en place (Go backend + Vite frontend).
-  - [x] Initialiser le module Go pour le backend
-- [x] **Environment Config** : Config chargée depuis `.env` (DATABASE_URL, CLERK_SECRET_KEY).
-- [x] **Neon DB Connection** : Connexion établie via `sqlx`/`pgx`, `Ping()` OK.
-- [x] **First SQL Migration** : Migration `000001_init_schema` créée (`organizations`, `users`).
-  - [x] Créer les fichiers de migration pour `users` et `organizations`.
-  - [x] Migration `000001` appliquée et validée sur Neon (tests passent).
-- [x] **Catalog Migration** : Migration `000002_catalog` (`vehicle_categories`, `service_categories`, `services`) créée et appliquée sur Neon.
-- [x] **Clerk Token Verification** : Vérification des jetons Clerk côté backend (`clerkhttp.RequireHeaderAuthorization`, `SessionClaimsFromContext`).
-- [x] **User & Organization Models** : Modèles alignés sur PLAN.md (rôles PLATFORM_ADMIN, OWNER, MANAGER, CASHIER, WASHER).
-- [x] **Multi-tenant Isolation** : Isolation par `organization_id` vérifiée (test d'isolation passe).
-- [x] **Role Management** : Rôles définis côté modèle.
-- [x] **Basic Logging** : Journalisation structurée (`slog` JSON).
-- [x] **Health Endpoints** : `GET /healthz`, `GET /readyz` fonctionnels.
-- [x] **Isolation Tests** : Test d'isolation multi-tenant écrit et validé contre Neon.
+- [x] React/Vite, React Router, Clerk et API same-origin.
+- [x] Garde d'organisation et d'onboarding avec état servi par Neon.
+- [x] Pages Clerk/onboarding, dashboard, lavages, caisse, dépenses, rapports, équipe et catalogue.
+- [x] CRUD synchrone Neon pour travailleurs, prestations, catégories de prestations et catégories de véhicules : création, lecture, modification et archivage/réactivation. Les mutations relisent les données depuis l’API après succès.
+- [x] Les formulaires de lavage, ouverture de caisse, mouvements manuels et dépenses transmettent des clés d'idempotence.
 
-Critère de validation PHASE 1 : un utilisateur authentifié ne peut accéder qu'aux ressources de son entreprise. ✅ Vérifié.
+## Vérification locale
 
-## PHASE 2 — Interface et migration du template
+Vérification locale après l’implémentation des pages : `npm run build`, `npm run lint`, `npm test` (12 tests) et `git diff --check` passent.
 
-- [x] **Main Layout** : `base-layout.tsx` et `root-layout.tsx` adaptés (WashPilot CI, sidebar, header, footer).
-- [x] **Navigation** : Routes, sidebar et command-search alignés sur WashPilot_CI (Tableau de bord, Lavages, Caisse, Dépenses, Rapports, Équipe, Onboarding, Paramètres, Authentification, Erreurs). Anciennes routes démo supprimées.
-- [x] **Reusable Components** : Bibliothèque `components/ui/` (Shadcn) conservée.
-- [x] **Basic Dashboard** : Page `/dashboard` créée (placeholder, PHASE 3 affinera les indicateurs).
-- [-] **Responsive Design** : Tailwind mobile-first en place, à affiner sur les nouvelles pages.
-- [-] **UI States** : États chargement/erreur/liste vide à implémenter avec les fonctionnalités.
-- [-] **Clerk Login Pages** : ClerkProvider intégré (App.tsx), `.env` frontend créé avec `VITE_CLERK_PUBLISHABLE_KEY`, couche API `src/lib/api.ts` (`useApi` hook avec token Clerk).
-- [-] **Frontend Permissions** : Système de permissions frontend à mettre en place (PHASE 3+).
+## Validation encore nécessaire
 
-Critère de validation PHASE 2 : build réussi, navigation stable, aucun lien majeur cassé. ✅ Vérifié.
+- [ ] Renseigner `DATABASE_URL` de test et un secret Clerk serveur renouvelé ; appliquer/valider les migrations sur Neon.
+- [ ] Tests d'intégration PostgreSQL pour transactions concurrentes, idempotence, soldes et isolation entre deux organisations.
+- [ ] Parcours E2E Clerk réel : compte, e-mail, création/adhésion d'organisation, onboarding, dashboard et révocation de membre.
+- [ ] Tests PostgreSQL des mutations de catalogue, travailleurs et rapports sur Neon de test (quota concurrent, transactions et isolation).
+- [ ] Gestion des membres d’accès Clerk (invitation/révocation depuis l’application), flux de remboursement/paiement externe, facturation et journal d’audit.
+- [ ] Préparation opérationnelle de production : monitoring, sauvegardes/restauration, CI/CD et audit final des dépendances.
 
-## PHASE 3 — Catalogue et lavages
+## Limites importantes
 
-- [x] **Service Catalog** : Catalogue standard provisionné à l'onboarding et création de prestations personnalisées depuis `/services`; endpoints tenant-scopés.
-- [x] **Vehicle Categories** : Catégories de départ pour les organisations existantes et nouvelles; création disponible depuis `/vehicle-categories`.
-- [x] **New Wash Form** : Choix du site, catégorie, prestations/quantités, employés, moyen de paiement et montant reçu; total calculé automatiquement.
-- [x] **Wash History & Details** : Historique des 200 opérations récentes et page de détail avec snapshots, affectations et paiements.
-- [x] **Transactional Recording** : Lavage, lignes de prix figées, affectations, paiement et mouvement cash éventuel dans une transaction.
-- [x] **Idempotency** : Clé requise, préfixée par organisation, payload fingerprinté et reprise frontend sans double enregistrement.
-- [-] **Cancellation Management** : Annulation auditée des lavages non payés/en attente; annulation bloquée tant qu'un paiement vérifié n'a pas été remboursé.
-- [-] **Tests** : Tests unitaires et PostgreSQL écrits (`wash_store_test.go`, `washes_test.go`); exécution non faite, Go/PostgreSQL indisponibles.
-
-Critère de validation PHASE 3 : en cours jusqu'à exécution des tests sur base jetable et prise en charge du remboursement avant annulation d'un lavage payé.
-
-## PHASE 4 — Paiements et caisse
-
-[-] **Payment Recording** : Migration 000004 (`payments`) appliquée, modèle `Payment`, store `payment_store`, endpoints `GET/POST /api/v1/payments` avec isolation `organization_id`.
-- [x] Modèles Go : `Payment`, `PaymentMethod`, `PaymentStatus`
-- [x] Store : `payment_store.go`
-- [x] Endpoints API avec isolation et vérification Clerk
-
-[-] **Cash Sessions** : Migration 000004 (`cash_sessions`, `cash_movements`) appliquée, modèles `CashSession`, `CashMovement`, stores, endpoints `POST /cash-sessions/open`, `GET /cash-sessions/current`, `GET/POST /cash-sessions/{id}/movements`, `POST /cash-sessions/{id}/close`.
-- [x] Modèles Go : `CashSession`, `CashMovement`, `CashSessionStatus`, `CashMovementType`
-- [x] Stores : `cash_session_store.go`, `cash_movement_store.go`
-- [x] Endpoints API avec isolation (une session ouverte par site)
-
-[-] **Expense Recording** : Migration 000004 (`expenses`, `expense_categories`) appliquée, modèles `Expense`, `ExpenseCategory`, stores, endpoints `GET/POST/GET/POST /expenses`.
-- [x] Modèles Go : `Expense`, `ExpenseCategory`, `ExpenseStatus`
-- [x] Stores : `expense_category_store.go`, `expense_store.go`
-- [x] Endpoints API avec isolation
-
-[-] **Discrepancy Calculation** : Clôture calcule l'écart (compté - théorique) et le stocke.
-
-[-] **Frontend** : Pages `/cash-drawer`, `/expenses`, `/washes` créées, consommant l'API via `useApi` avec token Clerk.
-- [x] Page cash-drawer (sessions, soldes, écarts, mouvements)
-- [x] Page expenses (liste des dépenses)
-- [x] Page washes (liste des lavages)
-- [x] Navigation sidebar + command-search (Caisse, Dépenses, Lavages déjà présents)
-
-Critère de validation PHASE 4 : montants du rapport, encaissements et solde de caisse correspondent aux mêmes opérations sources sans double comptabilisation. ⬅️ En cours (tests écrits, exécution en attente d'un environnement Go/PostgreSQL).
-
-## PHASE 5 — Rapports et équipe
-
-- [ ] **Daily Reports** : Générer les rapports journaliers.
-- [ ] **Periodical Reports** : Générer les rapports par période (hebdomadaire, mensuel).
-- [ ] **Service Performance Reports** : Analyser la performance des prestations.
-- [ ] **Employee Performance Indicators** : Suivre la performance des employés.
-- [ ] **Report Filters** : Ajouter des filtres aux rapports.
-- [ ] **CSV Export** : Permettre l'export des données en CSV (selon les permissions).
-- [ ] **Team Management** : Gérer les collaborateurs.
-
-## PHASE 6 — Abonnements et entitlements
-
-- [ ] **Plan Catalog** : Gérer les offres d'abonnement.
-- [ ] **Subscription Management** : Gérer l'abonnement de chaque entreprise.
-- [ ] **Entitlement Checks** : Vérifier les droits d'accès aux fonctionnalités.
-- [ ] **Manual Payment** : Mettre en place un système de paiement manuel.
-- [ ] **Admin Validation** : Permettre la validation des paiements par un administrateur.
-- [ ] **Subscription History** : Historiser les changements d'abonnement.
-- [ ] **Expiration Management** : Gérer l'expiration des abonnements.
-
-## PHASE 7 — Pilote et production
-
-- [ ] **Test Dataset** : Créer un jeu de données de test complet.
-- [ ] **E2E Test Plan** : Définir et exécuter le plan de test de bout en bout.
-- [ ] **Production Configuration** : Configurer l'environnement de production.
-- [ ] **Secret Management** : Mettre en place une gestion sécurisée des secrets.
-- [ ] **Deployment Documentation** : Documenter la procédure de déploiement.
-- [ ] **Backup & Restore Procedure** : Documenter la procédure de sauvegarde et de restauration.
-- [ ] **Error Monitoring** : Mettre en place le suivi des erreurs.
-- [ ] **User Guide** : Rédiger le guide utilisateur en français.
+- Sans `DATABASE_URL`, `/readyz` répond `503` et les migrations/transactions ne peuvent pas être validées contre une vraie base.
+- Les forfaits payants restent en attente ; aucune confirmation de paiement n'est simulée.
+- L'isolation est actuellement appliquée par le backend ; PostgreSQL RLS n'est pas configuré.
+- L'audit npm a identifié des vulnérabilités élevées dans des dépendances de développement. La mise à niveau majeure proposée automatiquement n'a pas été appliquée.

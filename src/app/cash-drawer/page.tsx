@@ -3,6 +3,7 @@
 import * as React from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useApi, apiFetch, getClerkToken } from "@/lib/api"
+import { createIdempotencyKey } from "@/lib/idempotency"
 import {
   Table,
   TableBody,
@@ -64,10 +65,12 @@ export default function CashDrawerPage() {
   const siteId = selectedSiteId || sites?.[0]?.id || ""
   const [openDialog, setOpenDialog] = React.useState(false)
   const [openingAmount, setOpeningAmount] = React.useState("0")
+  const openingRequestKeys = React.useRef(new Map<string, string>())
   const [movementDialogOpen, setMovementDialogOpen] = React.useState(false)
   const [movementType, setMovementType] = React.useState<"entry" | "exit">("entry")
   const [movementAmount, setMovementAmount] = React.useState("")
   const [movementDescription, setMovementDescription] = React.useState("")
+  const movementRequestKeys = React.useRef(new Map<string, string>())
   const [closeDialogOpen, setCloseDialogOpen] = React.useState(false)
   const [countedAmount, setCountedAmount] = React.useState("")
   const [discrepancyReason, setDiscrepancyReason] = React.useState("")
@@ -90,6 +93,14 @@ export default function CashDrawerPage() {
       return
     }
 
+    const body = { site_id: siteId, opening_amount_cents: amountCents }
+    const fingerprint = JSON.stringify(body)
+    let requestKey = openingRequestKeys.current.get(fingerprint)
+    if (!requestKey) {
+      requestKey = createIdempotencyKey()
+      openingRequestKeys.current.set(fingerprint, requestKey)
+    }
+
     setSaving(true)
     setMutationError(null)
     try {
@@ -98,10 +109,8 @@ export default function CashDrawerPage() {
         "/api/v1/cash-sessions/open",
         {
           method: "POST",
-          body: JSON.stringify({
-            site_id: siteId,
-            opening_amount_cents: amountCents,
-          }),
+          headers: { "Idempotency-Key": requestKey },
+          body: JSON.stringify(body),
         },
         token
       )
@@ -110,6 +119,7 @@ export default function CashDrawerPage() {
       }
       setOpenDialog(false)
       setOpeningAmount("0")
+      openingRequestKeys.current.clear()
       setRefreshKey((key) => key + 1)
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : "Impossible d’ouvrir la caisse.")
@@ -126,6 +136,18 @@ export default function CashDrawerPage() {
       return
     }
 
+    const body = {
+      type: movementType,
+      amount_cents: amountCents,
+      description: movementDescription.trim() || null,
+    }
+    const fingerprint = JSON.stringify({ cash_session_id: session.id, ...body })
+    let requestKey = movementRequestKeys.current.get(fingerprint)
+    if (!requestKey) {
+      requestKey = createIdempotencyKey()
+      movementRequestKeys.current.set(fingerprint, requestKey)
+    }
+
     setSaving(true)
     setMutationError(null)
     try {
@@ -134,12 +156,8 @@ export default function CashDrawerPage() {
         `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/movements`,
         {
           method: "POST",
-          body: JSON.stringify({
-            type: movementType,
-            amount_cents: amountCents,
-            source: "manual",
-            description: movementDescription.trim() || null,
-          }),
+          headers: { "Idempotency-Key": requestKey },
+          body: JSON.stringify(body),
         },
         token
       )
@@ -149,6 +167,7 @@ export default function CashDrawerPage() {
       setMovementDialogOpen(false)
       setMovementAmount("")
       setMovementDescription("")
+      movementRequestKeys.current.clear()
       setRefreshKey((key) => key + 1)
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : "Impossible d’enregistrer le mouvement.")

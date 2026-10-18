@@ -1,5 +1,4 @@
 import * as React from "react"
-import { useNavigate } from "react-router-dom"
 import {
   Card,
   CardContent,
@@ -40,8 +39,7 @@ const EMPTY: WorkerInput = {
   joined_at: "",
 }
 
-export function WorkersStep({ progress, onDone }: OnboardingWizardProps) {
-  const navigate = useNavigate()
+export function WorkersStep({ progress, onDone, onQuit }: OnboardingWizardProps) {
   const saved = progress?.workers_data
   const [workers, setWorkers] = React.useState<WorkerInput[]>(
     saved?.workers ?? []
@@ -67,20 +65,17 @@ export function WorkersStep({ progress, onDone }: OnboardingWizardProps) {
   }
 
   async function save(quit: boolean) {
-    if (quit) {
-      navigate("/dashboard")
-      return
-    }
-    if (!validate()) return
+    if (!quit && !validate()) return
     setSaving(true)
     setServerError(null)
     try {
-      const res = await saveStage("workers", { workers } satisfies WorkersData)
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || `Erreur ${res.status}`)
+      const response = await saveStage("workers", { workers } satisfies WorkersData, undefined, quit)
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(text || `Erreur ${response.status}`)
       }
-      onDone()
+      if (quit) await onQuit()
+      else onDone()
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "Erreur inconnue")
     } finally {

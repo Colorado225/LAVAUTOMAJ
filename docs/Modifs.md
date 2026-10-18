@@ -4,6 +4,8 @@ Le principe central est strict : l'agent doit comprendre avant de modifier, réu
 
 Le prompt reprend les priorités de l'audit : fiabilité financière, lavages, paiements, caisse, dépenses, isolation multi-tenant, gestion d'équipe, rapports, abonnements et préparation à la production. Il impose également de distinguer les fonctionnalités réellement vérifiées des éléments seulement documentés ou supposés.
 
+> **Note d'architecture actuelle :** les mentions Go/chi/sqlx et les commandes `go test` ci-dessous sont des notes historiques. Le code présent dans ce dépôt utilise React/Vite/TypeScript, Express 5/TypeScript et PostgreSQL/Neon via `pg`. Pour exécuter ou modifier le projet, se référer à `docs/ARCHITECTURE.md`, `docs/DATABASE.md` et `docs/PROGRESS.md`.
+
 # MASTER PROMPT — WASHPILOT CI
 
 ## Audit continu, correction, implémentation et préparation à la production

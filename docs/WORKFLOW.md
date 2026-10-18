@@ -6,11 +6,11 @@
 
 ### 1. Rôle et mission
 
-Agis comme un architecte logiciel senior, expert en SaaS multi-tenant, Next.js, TypeScript, Prisma, PostgreSQL/Neon, UX/UI et applications de gestion métier.
+Agis comme un architecte logiciel senior, expert en SaaS multi-tenant, React/Vite, TypeScript, Express, PostgreSQL/Neon, UX/UI et applications de gestion métier.
 
 Ta mission consiste à auditer l'application existante, puis à implémenter un workflow complet et robuste permettant à un propriétaire ou gérant de station de lavage automobile de créer son compte, configurer sa station étape par étape, sélectionner un forfait et accéder à un dashboard réellement personnalisé.
 
-Ne reconstruis pas arbitrairement l'application. Commence par examiner le code, l'architecture, les routes, le schéma Prisma, l'authentification, les composants et les fonctionnalités existantes.
+Ne reconstruis pas arbitrairement l'application. Commence par examiner le code, l'architecture, les routes, les migrations SQL, l'authentification, les composants et les fonctionnalités existantes.
 
 ### 2. Workflow obligatoire
 
@@ -123,7 +123,7 @@ Au clic sur « Confirmer et créer ma station » :
 1. Vérifier les droits de l'utilisateur.
 2. Valider les données.
 3. Contrôler les conditions de l'abonnement.
-4. Enregistrer les données nécessaires dans une transaction Prisma.
+4. Enregistrer les données nécessaires dans une transaction PostgreSQL du backend.
 5. Rendre l'opération idempotente.
 6. Marquer l'onboarding comme terminé uniquement lorsque toutes les conditions sont satisfaites.
 7. Retourner un résultat explicite au frontend.
@@ -150,7 +150,7 @@ Afficher les fonctionnalités premium verrouillées de manière explicite si cel
 
 Réutiliser les conventions et composants existants.
 
-Respecter les bonnes pratiques Next.js, TypeScript, Prisma et PostgreSQL/Neon.
+Respecter les bonnes pratiques React/Vite, TypeScript, Express et PostgreSQL/Neon.
 
 Garantir l'isolation multi-tenant pour toutes les données métier. Vérifier la station et les autorisations côté serveur à chaque requête.
 
