@@ -10,6 +10,7 @@ import {
   PasswordVisibilityButton,
 } from "@/components/auth/auth-form-elements"
 import { getAuthErrorMessage } from "@/components/auth/auth-errors"
+import { MIN_PASSWORD_LENGTH } from "@/app/auth/password-policy"
 
 type SignUpStep = "details" | "verification"
 
@@ -52,8 +53,8 @@ export default function SignUpPage() {
     setNotice("")
     if (!isLoaded) return
 
-    if (password.length < 8) {
-      setError("Votre mot de passe doit contenir au moins 8 caractères.")
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setError(`Votre mot de passe doit contenir au moins ${MIN_PASSWORD_LENGTH} caractères.`)
       return
     }
     if (password !== confirmation) {
@@ -83,6 +84,7 @@ export default function SignUpPage() {
       setStep("verification")
       setNotice(`Un code de confirmation a été envoyé à ${email.trim()}.`)
     } catch (authError) {
+      console.error("Clerk sign-up error:", authError)
       setError(getAuthErrorMessage(authError, "Impossible de créer le compte pour le moment. Réessayez dans quelques instants."))
     } finally {
       setIsSubmitting(false)
@@ -251,13 +253,13 @@ export default function SignUpPage() {
             type={showPassword ? "text" : "password"}
             name="new-password"
             autoComplete="new-password"
-            placeholder="8 caractères minimum"
+            placeholder={`${MIN_PASSWORD_LENGTH} caractères minimum`}
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            minLength={8}
+            minLength={MIN_PASSWORD_LENGTH}
             required
             disabled={isSubmitting}
-            hint="Utilisez au moins 8 caractères."
+            hint={`Utilisez au moins ${MIN_PASSWORD_LENGTH} caractères.`}
             trailing={
               <PasswordVisibilityButton
                 visible={showPassword}

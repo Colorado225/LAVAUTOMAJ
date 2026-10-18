@@ -20,8 +20,8 @@ func NewUserStore(db *sqlx.DB) *UserStore {
 }
 
 // GetOrCreateMembership provisions the authenticated Clerk user within one
-// organization. The same Clerk identity may have a separate internal user row
-// in every organization it belongs to.
+// organization. A Clerk identity can belong to several organizations, so each
+// (organization_id, clerk_user_id) pair maps to its own membership row.
 func (s *UserStore) GetOrCreateMembership(ctx context.Context, orgID uuid.UUID, clerkUserID string, role models.UserRole) (*models.User, error) {
 	if orgID == uuid.Nil || clerkUserID == "" {
 		return nil, errors.New("organization and Clerk user IDs are required")
@@ -42,6 +42,56 @@ func (s *UserStore) GetOrCreateMembership(ctx context.Context, orgID uuid.UUID, 
 		return nil, err
 	}
 	return &user, nil
+}
+
+// EnsureDefaultMembership creates (or refreshes) the "self" membership of a
+// Clerk profile in Neon (user.created) and syncs profile fields across every
+// existing membership of that identity (user.updated). Chaque membership garde
+// son organization_id/role/status : une sync de profil ne déplace ni ne
+// rétrograde jamais un membre.
+func (s *UserStore) EnsureDefaultMembership(ctx context.Context, u *models.User) (*models.User, error) {
+	if u.ClerkUserID == "" {
+		return nil, errors.New("clerk_user_id is required")
+	}
+
+	// Default organization for new users (unique per Clerk user id).
+	var orgID uuid.UUID
+	err := s.DB.GetContext(ctx, &orgID, `
+		INSERT INTO organizations (clerk_org_id, name, created_at, updated_at)
+		VALUES ('self_' || $1, 'Mon espace personnel', NOW(), NOW())
+		ON CONFLICT (clerk_org_id) DO UPDATE SET updated_at = NOW()
+		RETURNING id`, u.ClerkUserID)
+	if err != nil {
+		return nil, err
+	}
+
+	var selfMembership models.User
+	err = s.DB.GetContext(ctx, &selfMembership, `
+		INSERT INTO users (id, organization_id, clerk_user_id, first_name, last_name, email, role, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (organization_id, clerk_user_id)
+		DO UPDATE SET first_name = EXCLUDED.first_name,
+			last_name = EXCLUDED.last_name,
+			email = EXCLUDED.email,
+			updated_at = NOW()
+		RETURNING *`,
+		uuid.New(), orgID, u.ClerkUserID, u.FirstName, u.LastName, u.Email,
+		models.RoleWasher, models.StatusActive)
+	if err != nil {
+		return nil, err
+	}
+
+	// Propagate profile fields to the other memberships of the same identity
+	// (e.g. stations joined later), sans toucher à leur org/role/status.
+	_, err = s.DB.ExecContext(ctx, `
+		UPDATE users SET first_name = $2, last_name = $3, email = $4, updated_at = NOW()
+		WHERE clerk_user_id = $1 AND id <> $5`,
+		u.ClerkUserID, u.FirstName, u.LastName, u.Email, selfMembership.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &selfMembership, nil
 }
 
 // ListByOrganization retrieves memberships for one organization only.

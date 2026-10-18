@@ -81,7 +81,7 @@ func TestWashCreateSnapshotsPriceAndIsIdempotent(t *testing.T) {
 
 	cashSessionID := uuid.New()
 	openingAmount := int64(5000)
-	if err := testServer.cashSessionStore.Open(ctx, &models.CashSession{
+	if err := testServer.store.CashSessionStore.Open(ctx, &models.CashSession{
 		ID:                      cashSessionID,
 		OrganizationID:          orgID,
 		SiteID:                  siteID,
@@ -105,7 +105,7 @@ func TestWashCreateSnapshotsPriceAndIsIdempotent(t *testing.T) {
 		CashSessionID:      &cashSessionID,
 		IdempotencyKey:     uuid.NewString(),
 	}
-	created, replayed, err := testServer.washStore.Create(ctx, input)
+	created, replayed, err := testServer.store.WashStore.Create(ctx, input)
 	if err != nil {
 		t.Fatalf("failed to create wash: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestWashCreateSnapshotsPriceAndIsIdempotent(t *testing.T) {
 		serviceID, orgID); err != nil {
 		t.Fatalf("failed to update current service catalog: %v", err)
 	}
-	storedDetail, err := testServer.washStore.GetDetailByID(ctx, created.Wash.ID, orgID)
+	storedDetail, err := testServer.store.WashStore.GetDetailByID(ctx, created.Wash.ID, orgID)
 	if err != nil {
 		t.Fatalf("failed to reload wash detail: %v", err)
 	}
@@ -140,14 +140,14 @@ func TestWashCreateSnapshotsPriceAndIsIdempotent(t *testing.T) {
 		t.Fatalf("catalog updates must not change historical wash snapshots: %#v", storedDetail)
 	}
 
-	replayedDetail, replayed, err := testServer.washStore.Create(ctx, input)
+	replayedDetail, replayed, err := testServer.store.WashStore.Create(ctx, input)
 	if err != nil {
 		t.Fatalf("idempotent retry failed: %v", err)
 	}
 	if !replayed || replayedDetail.Wash.ID != created.Wash.ID || len(replayedDetail.Payments) != 1 {
 		t.Fatalf("expected retry to return the original wash without duplicate payment, got %#v", replayedDetail)
 	}
-	openSession, err := testServer.cashSessionStore.GetOpenBySite(ctx, orgID, siteID)
+	openSession, err := testServer.store.CashSessionStore.GetOpenBySite(ctx, orgID, siteID)
 	if err != nil {
 		t.Fatalf("failed to read cash session after retry: %v", err)
 	}
@@ -157,13 +157,13 @@ func TestWashCreateSnapshotsPriceAndIsIdempotent(t *testing.T) {
 
 	changedInput := input
 	changedInput.Items = []stores.WashItemInput{{ServiceID: serviceID, Quantity: 3}}
-	if _, _, err := testServer.washStore.Create(ctx, changedInput); !errors.Is(err, stores.ErrWashIdempotencyConflict) {
+	if _, _, err := testServer.store.WashStore.Create(ctx, changedInput); !errors.Is(err, stores.ErrWashIdempotencyConflict) {
 		t.Fatalf("expected reuse of a key with a different payload to be rejected, got %v", err)
 	}
-	if _, err := testServer.washStore.GetDetailByID(ctx, created.Wash.ID, uuid.New()); !errors.Is(err, stores.ErrWashNotFound) {
+	if _, err := testServer.store.WashStore.GetDetailByID(ctx, created.Wash.ID, uuid.New()); !errors.Is(err, stores.ErrWashNotFound) {
 		t.Fatalf("expected wash detail to be tenant-scoped, got %v", err)
 	}
-	if _, err := testServer.washStore.Cancel(ctx, created.Wash.ID, orgID, userID, "Erreur de saisie"); !errors.Is(err, stores.ErrWashHasVerifiedPayments) {
+	if _, err := testServer.store.WashStore.Cancel(ctx, created.Wash.ID, orgID, userID, "Erreur de saisie"); !errors.Is(err, stores.ErrWashHasVerifiedPayments) {
 		t.Fatalf("expected cancellation of a verified payment to be blocked, got %v", err)
 	}
 
@@ -175,11 +175,11 @@ func TestWashCreateSnapshotsPriceAndIsIdempotent(t *testing.T) {
 		Items:              []stores.WashItemInput{{ServiceID: serviceID, Quantity: 1}},
 		IdempotencyKey:     uuid.NewString(),
 	}
-	unpaid, _, err := testServer.washStore.Create(ctx, unpaidInput)
+	unpaid, _, err := testServer.store.WashStore.Create(ctx, unpaidInput)
 	if err != nil {
 		t.Fatalf("failed to create unpaid wash fixture: %v", err)
 	}
-	cancelled, err := testServer.washStore.Cancel(ctx, unpaid.Wash.ID, orgID, userID, "Véhicule non pris en charge")
+	cancelled, err := testServer.store.WashStore.Cancel(ctx, unpaid.Wash.ID, orgID, userID, "Véhicule non pris en charge")
 	if err != nil {
 		t.Fatalf("failed to cancel unpaid wash: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestWashCreateSnapshotsPriceAndIsIdempotent(t *testing.T) {
 		cancelled.Wash.CancellationReason == nil || *cancelled.Wash.CancellationReason != "Véhicule non pris en charge" {
 		t.Fatalf("expected cancellation to be retained in the wash history, got %#v", cancelled.Wash)
 	}
-	if _, err := testServer.washStore.Cancel(ctx, unpaid.Wash.ID, uuid.New(), userID, "Autre organisation"); !errors.Is(err, stores.ErrWashNotFound) {
+	if _, err := testServer.store.WashStore.Cancel(ctx, unpaid.Wash.ID, uuid.New(), userID, "Autre organisation"); !errors.Is(err, stores.ErrWashNotFound) {
 		t.Fatalf("expected cross-tenant cancellation to be concealed, got %v", err)
 	}
 
@@ -201,7 +201,7 @@ func TestWashCreateSnapshotsPriceAndIsIdempotent(t *testing.T) {
 		ReceivedAt:     time.Now(),
 		AuthorID:       userID,
 	}
-	if err := testServer.paymentStore.Create(ctx, cancelledPayment); !errors.Is(err, stores.ErrWashCancelled) {
+	if err := testServer.store.PaymentStore.Create(ctx, cancelledPayment); !errors.Is(err, stores.ErrWashCancelled) {
 		t.Fatalf("expected a cancelled wash to reject further payments, got %v", err)
 	}
 }

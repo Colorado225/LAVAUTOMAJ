@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	svix "github.com/svix/svix-webhooks/go"
 )
 
 var (
@@ -30,48 +31,66 @@ var (
 )
 
 type ApiServer struct {
-	listenAddr           string
-	db                   *sqlx.DB
-	userStore            *stores.UserStore
-	organizationStore    *stores.OrganizationStore
-	siteStore            *stores.SiteStore
-	washStore            *stores.WashStore
-	vehicleCategoryStore *stores.VehicleCategoryStore
-	serviceCategoryStore *stores.ServiceCategoryStore
-	serviceStore         *stores.ServiceStore
-	paymentStore         *stores.PaymentStore
-	cashSessionStore     *stores.CashSessionStore
-	cashMovementStore    *stores.CashMovementStore
-	expenseCategoryStore *stores.ExpenseCategoryStore
-	expenseStore         *stores.ExpenseStore
-	onboardingStore      *stores.OnboardingStore
-	config               *config.Config
-	logger               *slog.Logger
-	router               http.Handler
+	listenAddr   string
+	db           *sqlx.DB
+	store        *stores.Store
+	config       *config.Config
+	logger       *slog.Logger
+	router       http.Handler
+	clerkWebhook *svix.Webhook
 }
 
 func NewApiServer(listenAddr string, db *sqlx.DB, cfg *config.Config, logger *slog.Logger) *ApiServer {
+	var wh *svix.Webhook
+	if cfg.ClerkWebhookSecret != "" {
+		var err error
+		wh, err = svix.NewWebhook(cfg.ClerkWebhookSecret)
+		if err != nil {
+			logger.Error("failed to create clerk webhook", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		logger.Warn("Clerk webhook secret is not set, webhook verification is disabled")
+	}
+
 	server := &ApiServer{
-		listenAddr:           listenAddr,
-		db:                   db,
-		userStore:            stores.NewUserStore(db),
-		organizationStore:    stores.NewOrganizationStore(db),
-		siteStore:            stores.NewSiteStore(db),
-		washStore:            stores.NewWashStore(db),
-		vehicleCategoryStore: stores.NewVehicleCategoryStore(db),
-		serviceCategoryStore: stores.NewServiceCategoryStore(db),
-		serviceStore:         stores.NewServiceStore(db),
-		paymentStore:         stores.NewPaymentStore(db),
-		cashSessionStore:     stores.NewCashSessionStore(db),
-		cashMovementStore:    stores.NewCashMovementStore(db),
-		expenseCategoryStore: stores.NewExpenseCategoryStore(db),
-		expenseStore:         stores.NewExpenseStore(db),
-		onboardingStore:      stores.NewOnboardingStore(db),
-		config:               cfg,
-		logger:               logger,
+		listenAddr:   listenAddr,
+		db:           db,
+		store:        stores.NewStore(db),
+		config:       cfg,
+		logger:       logger,
+		clerkWebhook: wh,
 	}
 	server.setupRouter()
 	return server
+}
+
+func (s *ApiServer) withRole(roles ...models.UserRole) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims, ok := clerk.SessionClaimsFromContext(r.Context())
+			if !ok {
+				http.Error(w, "no claims in context", http.StatusUnauthorized)
+				return
+			}
+
+			userRole := roleFromClerkClaims(claims)
+			allowed := false
+			for _, role := range roles {
+				if userRole == role {
+					allowed = true
+					break
+				}
+			}
+
+			if !allowed {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func (s *ApiServer) setupRouter() {
@@ -150,12 +169,14 @@ func (s *ApiServer) setupRouter() {
 
 		// Admin-only routes
 		r.Group(func(r chi.Router) {
-			// r.Use(middleware.WithRole("admin")) // We'll re-implement this later
+			r.Use(s.withRole(models.RoleOwner))
 			r.Get("/admin/dashboard", func(w http.ResponseWriter, r *http.Request) {
 				w.Write([]byte("Welcome to the admin dashboard!"))
 			})
 		})
 	})
+
+	r.Post("/api/v1/clerk-webhook", s.handleClerkWebhook)
 
 	s.router = r
 }
@@ -166,33 +187,13 @@ func (s *ApiServer) handleGetDashboardMetrics(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	var totalWashes int64
-	if err := s.db.GetContext(r.Context(), &totalWashes,
-		`SELECT COUNT(*) FROM washes WHERE organization_id = $1 AND status <> $2`, orgID, models.WashStatusCancelled); err != nil {
-		s.logger.Error("failed to count washes", "error", err, "organization_id", orgID)
+	metrics, err := s.store.WashStore.GetDashboardMetrics(r.Context(), orgID)
+	if err != nil {
+		s.logger.Error("failed to compute metrics", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to compute metrics", http.StatusInternalServerError)
 		return
 	}
 
-	var totalRevenue int64
-	if err := s.db.GetContext(r.Context(), &totalRevenue, `
-		SELECT COALESCE(SUM(p.amount_cents), 0)
-		FROM payments p
-		WHERE p.organization_id = $1 AND p.status = $2
-		  AND (p.wash_id IS NULL OR EXISTS (
-			SELECT 1 FROM washes w
-			WHERE w.id = p.wash_id AND w.organization_id = p.organization_id AND w.status <> $3
-		  ))`,
-		orgID, models.PaymentStatusVerified, models.WashStatusCancelled); err != nil {
-		s.logger.Error("failed to sum verified payments", "error", err, "organization_id", orgID)
-		http.Error(w, "failed to compute metrics", http.StatusInternalServerError)
-		return
-	}
-
-	metrics := map[string]int64{
-		"total_washes":        totalWashes,
-		"total_revenue_cents": totalRevenue,
-	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(metrics)
 }
@@ -230,7 +231,7 @@ func (s *ApiServer) handleOnboardingStatus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	progress, err := s.onboardingStore.GetProgress(r.Context(), org.ID)
+	progress, err := s.store.OnboardingStore.GetProgress(r.Context(), org.ID)
 	if err != nil {
 		s.logger.Error("onboarding: failed to load progress", "error", err, "org_id", org.ID)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -264,7 +265,7 @@ func (s *ApiServer) handleGetOnboardingProgress(w http.ResponseWriter, r *http.R
 		http.Error(w, "onboarding already completed", http.StatusConflict)
 		return
 	}
-	progress, err := s.onboardingStore.GetOrCreateProgress(r.Context(), org.ID)
+	progress, err := s.store.OnboardingStore.GetOrCreateProgress(r.Context(), org.ID)
 	if err != nil {
 		s.logger.Error("onboarding: failed to load progress", "error", err, "org_id", org.ID)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -300,7 +301,7 @@ func (s *ApiServer) handleSaveOnboardingProgress(w http.ResponseWriter, r *http.
 		return
 	}
 
-	progress, err := s.onboardingStore.SaveStage(r.Context(), org.ID, pl)
+	progress, err := s.store.OnboardingStore.SaveStage(r.Context(), org.ID, pl)
 	if err != nil {
 		s.logger.Error("onboarding: failed to save stage", "error", err, "org_id", org.ID, "stage", pl.Stage)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -405,7 +406,7 @@ func (s *ApiServer) handleOnboardingSummary(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	progress, err := s.onboardingStore.GetProgress(r.Context(), org.ID)
+	progress, err := s.store.OnboardingStore.GetProgress(r.Context(), org.ID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -417,7 +418,7 @@ func (s *ApiServer) handleOnboardingSummary(w http.ResponseWriter, r *http.Reque
 
 	var plan *models.Plan
 	if progress.PlanCode != nil {
-		plan, err = s.onboardingStore.PlanByCode(r.Context(), *progress.PlanCode)
+		plan, err = s.store.OnboardingStore.PlanByCode(r.Context(), *progress.PlanCode)
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
@@ -443,7 +444,7 @@ func (s *ApiServer) handleConfirmOnboarding(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	updatedOrg, alreadyCompleted, err := s.onboardingStore.ConfirmOnboarding(r.Context(), org.ID)
+	updatedOrg, alreadyCompleted, err := s.store.OnboardingStore.ConfirmOnboarding(r.Context(), org.ID)
 	if err != nil {
 		s.logger.Error("onboarding: confirmation failed", "error", err, "org_id", org.ID)
 		status := http.StatusInternalServerError
@@ -475,7 +476,7 @@ func (s *ApiServer) handleConfirmOnboarding(w http.ResponseWriter, r *http.Reque
 
 // handleListPlans — catalogue de forfaits depuis la base (§7).
 func (s *ApiServer) handleListPlans(w http.ResponseWriter, r *http.Request) {
-	plans, err := s.onboardingStore.ListPlans(r.Context())
+	plans, err := s.store.OnboardingStore.ListPlans(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -486,7 +487,7 @@ func (s *ApiServer) handleListPlans(w http.ResponseWriter, r *http.Request) {
 
 // handleListServiceCatalog — prestations standard de référence (§5).
 func (s *ApiServer) handleListServiceCatalog(w http.ResponseWriter, r *http.Request) {
-	items, err := s.onboardingStore.ListCatalogTemplates(r.Context())
+	items, err := s.store.OnboardingStore.ListCatalogTemplates(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -501,7 +502,7 @@ func (s *ApiServer) handleListWorkers(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := s.onboardingStore.ListWorkersByOrganization(r.Context(), org.ID)
+	items, err := s.store.OnboardingStore.ListWorkersByOrganization(r.Context(), org.ID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -523,7 +524,7 @@ func (s *ApiServer) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	users, err := s.userStore.ListByOrganization(r.Context(), orgID)
+	users, err := s.store.UserStore.ListByOrganization(r.Context(), orgID)
 	if err != nil {
 		s.logger.Error("failed to list users", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to list users", http.StatusInternalServerError)
@@ -568,7 +569,7 @@ func (s *ApiServer) ensureInternalUser(r *http.Request, orgID uuid.UUID, claims 
 	if claims == nil || claims.Subject == "" {
 		return nil, errors.New("missing Clerk user subject")
 	}
-	return s.userStore.GetOrCreateMembership(r.Context(), orgID, claims.Subject, roleFromClerkClaims(claims))
+	return s.store.UserStore.GetOrCreateMembership(r.Context(), orgID, claims.Subject, roleFromClerkClaims(claims))
 }
 
 // getOrganizationIDFromClaims maps the active Clerk organization to the
@@ -578,7 +579,7 @@ func (s *ApiServer) getOrganizationIDFromClaims(r *http.Request) (uuid.UUID, err
 	if err != nil {
 		return uuid.Nil, err
 	}
-	org, err := s.organizationStore.GetByClerkID(r.Context(), clerkOrgID)
+	org, err := s.store.OrganizationStore.GetByClerkID(r.Context(), clerkOrgID)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -602,14 +603,14 @@ func (s *ApiServer) getOrgFromContext(w http.ResponseWriter, r *http.Request) (*
 		return nil, false
 	}
 
-	org, err := s.organizationStore.GetByClerkID(r.Context(), clerkOrgID)
+	org, err := s.store.OrganizationStore.GetByClerkID(r.Context(), clerkOrgID)
 	if err != nil {
 		s.logger.Error("failed to retrieve organization", "error", err, "clerk_org_id", clerkOrgID)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return nil, false
 	}
 	if org == nil {
-		org, err = s.onboardingStore.CreateOrganization(r.Context(), clerkOrgID, "Nouvelle station")
+		org, err = s.store.OrganizationStore.CreateFromClerk(r.Context(), claims, clerkOrgID)
 		if err != nil {
 			s.logger.Error("failed to auto-provision organization", "error", err, "clerk_org_id", clerkOrgID)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -627,7 +628,7 @@ func (s *ApiServer) getOrgFromContext(w http.ResponseWriter, r *http.Request) (*
 // hasEntitlement vérifie si l'organisation possède la fonctionnalité donnée
 // selon son abonnement actif.
 func (s *ApiServer) hasEntitlement(ctx context.Context, orgID uuid.UUID, key string) bool {
-	sub, plan, err := s.onboardingStore.GetActiveSubscription(ctx, orgID)
+	sub, plan, err := s.store.OnboardingStore.GetActiveSubscription(ctx, orgID)
 	if err != nil || sub == nil || plan == nil {
 		return false
 	}
@@ -680,7 +681,7 @@ func (s *ApiServer) handleListSites(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sites, err := s.siteStore.ListByOrganization(r.Context(), orgID)
+	sites, err := s.store.SiteStore.ListByOrganization(r.Context(), orgID)
 	if err != nil {
 		s.logger.Error("failed to list sites", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to list sites", http.StatusInternalServerError)
@@ -695,7 +696,7 @@ func (s *ApiServer) handleListWashes(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	washes, err := s.washStore.ListByOrganization(r.Context(), orgID)
+	washes, err := s.store.WashStore.ListByOrganization(r.Context(), orgID)
 	if err != nil {
 		s.logger.Error("failed to list washes", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to list washes", http.StatusInternalServerError)
@@ -711,13 +712,13 @@ type createWashItemRequest struct {
 }
 
 type createWashRequest struct {
-	SiteID            string                 `json:"site_id"`
-	VehicleCategoryID string                 `json:"vehicle_category_id"`
+	SiteID            string                  `json:"site_id"`
+	VehicleCategoryID string                  `json:"vehicle_category_id"`
 	Items             []createWashItemRequest `json:"items"`
-	WorkerIDs         []string               `json:"worker_ids"`
-	PaymentMethod     string                 `json:"payment_method"`
-	AmountReceived    int64                  `json:"amount_received_cents"`
-	CashSessionID     *string                `json:"cash_session_id"`
+	WorkerIDs         []string                `json:"worker_ids"`
+	PaymentMethod     string                  `json:"payment_method"`
+	AmountReceived    int64                   `json:"amount_received_cents"`
+	CashSessionID     *string                 `json:"cash_session_id"`
 }
 
 func (s *ApiServer) handleCreateWash(w http.ResponseWriter, r *http.Request) {
@@ -775,18 +776,18 @@ func (s *ApiServer) handleCreateWash(w http.ResponseWriter, r *http.Request) {
 	}
 
 	input := stores.CreateWashInput{
-		OrganizationID:     orgID,
-		AuthorID:           actorID,
-		SiteID:             siteID,
-		VehicleCategoryID:  vehicleCategoryID,
-		Items:              items,
-		WorkerIDs:          workerIDs,
-		PaymentMethod:      models.PaymentMethod(strings.TrimSpace(req.PaymentMethod)),
+		OrganizationID:      orgID,
+		AuthorID:            actorID,
+		SiteID:              siteID,
+		VehicleCategoryID:   vehicleCategoryID,
+		Items:               items,
+		WorkerIDs:           workerIDs,
+		PaymentMethod:       models.PaymentMethod(strings.TrimSpace(req.PaymentMethod)),
 		AmountReceivedCents: req.AmountReceived,
-		CashSessionID:      cashSessionID,
-		IdempotencyKey:     idempotencyKey,
+		CashSessionID:       cashSessionID,
+		IdempotencyKey:      idempotencyKey,
 	}
-	detail, replayed, err := s.washStore.Create(r.Context(), input)
+	detail, replayed, err := s.store.WashStore.Create(r.Context(), input)
 	if err != nil {
 		switch {
 		case errors.Is(err, stores.ErrWashInvalidInput),
@@ -832,7 +833,7 @@ func (s *ApiServer) handleGetWash(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid wash ID", http.StatusBadRequest)
 		return
 	}
-	detail, err := s.washStore.GetDetailByID(r.Context(), id, orgID)
+	detail, err := s.store.WashStore.GetDetailByID(r.Context(), id, orgID)
 	if err != nil {
 		if errors.Is(err, stores.ErrWashNotFound) {
 			http.Error(w, "wash not found", http.StatusNotFound)
@@ -865,7 +866,7 @@ func (s *ApiServer) handleCancelWash(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	detail, err := s.washStore.Cancel(r.Context(), id, orgID, actorID, req.Reason)
+	detail, err := s.store.WashStore.Cancel(r.Context(), id, orgID, actorID, req.Reason)
 	if err != nil {
 		switch {
 		case errors.Is(err, stores.ErrWashNotFound):
@@ -891,7 +892,7 @@ func (s *ApiServer) handleListVehicleCategories(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	items, err := s.vehicleCategoryStore.ListByOrganization(r.Context(), orgID)
+	items, err := s.store.VehicleCategoryStore.ListByOrganization(r.Context(), orgID)
 	if err != nil {
 		s.logger.Error("failed to list vehicle categories", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to list vehicle categories", http.StatusInternalServerError)
@@ -930,7 +931,7 @@ func (s *ApiServer) handleCreateVehicleCategory(w http.ResponseWriter, r *http.R
 		Name:           req.Name,
 		IsActive:       isActive,
 	}
-	if err := s.vehicleCategoryStore.Create(r.Context(), c); err != nil {
+	if err := s.store.VehicleCategoryStore.Create(r.Context(), c); err != nil {
 		s.logger.Error("failed to create vehicle category", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to create vehicle category", http.StatusInternalServerError)
 		return
@@ -956,7 +957,7 @@ func (s *ApiServer) handleUpdateVehicleCategory(w http.ResponseWriter, r *http.R
 		http.Error(w, "invalid category ID", http.StatusBadRequest)
 		return
 	}
-	c, err := s.vehicleCategoryStore.GetByID(r.Context(), id)
+	c, err := s.store.VehicleCategoryStore.GetByID(r.Context(), id)
 	if err != nil || c == nil || c.OrganizationID != orgID {
 		http.Error(w, "vehicle category not found", http.StatusNotFound)
 		return
@@ -972,7 +973,7 @@ func (s *ApiServer) handleUpdateVehicleCategory(w http.ResponseWriter, r *http.R
 	if req.IsActive != nil {
 		c.IsActive = *req.IsActive
 	}
-	if err := s.vehicleCategoryStore.Update(r.Context(), c); err != nil {
+	if err := s.store.VehicleCategoryStore.Update(r.Context(), c); err != nil {
 		s.logger.Error("failed to update vehicle category", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to update vehicle category", http.StatusInternalServerError)
 		return
@@ -992,7 +993,7 @@ func (s *ApiServer) handleDeactivateVehicleCategory(w http.ResponseWriter, r *ht
 		http.Error(w, "invalid category ID", http.StatusBadRequest)
 		return
 	}
-	if err := s.vehicleCategoryStore.Deactivate(r.Context(), id, orgID); err != nil {
+	if err := s.store.VehicleCategoryStore.Deactivate(r.Context(), id, orgID); err != nil {
 		s.logger.Error("failed to deactivate vehicle category", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to deactivate vehicle category", http.StatusInternalServerError)
 		return
@@ -1007,7 +1008,7 @@ func (s *ApiServer) handleListServiceCategories(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	items, err := s.serviceCategoryStore.ListByOrganization(r.Context(), orgID)
+	items, err := s.store.ServiceCategoryStore.ListByOrganization(r.Context(), orgID)
 	if err != nil {
 		s.logger.Error("failed to list service categories", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to list service categories", http.StatusInternalServerError)
@@ -1046,7 +1047,7 @@ func (s *ApiServer) handleCreateServiceCategory(w http.ResponseWriter, r *http.R
 		Name:           req.Name,
 		IsActive:       isActive,
 	}
-	if err := s.serviceCategoryStore.Create(r.Context(), c); err != nil {
+	if err := s.store.ServiceCategoryStore.Create(r.Context(), c); err != nil {
 		s.logger.Error("failed to create service category", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to create service category", http.StatusInternalServerError)
 		return
@@ -1072,7 +1073,7 @@ func (s *ApiServer) handleUpdateServiceCategory(w http.ResponseWriter, r *http.R
 		http.Error(w, "invalid category ID", http.StatusBadRequest)
 		return
 	}
-	c, err := s.serviceCategoryStore.GetByID(r.Context(), id)
+	c, err := s.store.ServiceCategoryStore.GetByID(r.Context(), id)
 	if err != nil || c == nil || c.OrganizationID != orgID {
 		http.Error(w, "service category not found", http.StatusNotFound)
 		return
@@ -1088,7 +1089,7 @@ func (s *ApiServer) handleUpdateServiceCategory(w http.ResponseWriter, r *http.R
 	if req.IsActive != nil {
 		c.IsActive = *req.IsActive
 	}
-	if err := s.serviceCategoryStore.Update(r.Context(), c); err != nil {
+	if err := s.store.ServiceCategoryStore.Update(r.Context(), c); err != nil {
 		s.logger.Error("failed to update service category", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to update service category", http.StatusInternalServerError)
 		return
@@ -1108,7 +1109,7 @@ func (s *ApiServer) handleDeactivateServiceCategory(w http.ResponseWriter, r *ht
 		http.Error(w, "invalid category ID", http.StatusBadRequest)
 		return
 	}
-	if err := s.serviceCategoryStore.Deactivate(r.Context(), id, orgID); err != nil {
+	if err := s.store.ServiceCategoryStore.Deactivate(r.Context(), id, orgID); err != nil {
 		s.logger.Error("failed to deactivate service category", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to deactivate service category", http.StatusInternalServerError)
 		return
@@ -1123,7 +1124,7 @@ func (s *ApiServer) handleListServices(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := s.serviceStore.ListByOrganization(r.Context(), orgID)
+	items, err := s.store.ServiceStore.ListByOrganization(r.Context(), orgID)
 	if err != nil {
 		s.logger.Error("failed to list services", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to list services", http.StatusInternalServerError)
@@ -1178,7 +1179,7 @@ func (s *ApiServer) handleCreateService(w http.ResponseWriter, r *http.Request) 
 		DurationMinutes: req.DurationMinutes,
 		IsActive:        isActive,
 	}
-	if err := s.serviceStore.Create(r.Context(), svc); err != nil {
+	if err := s.store.ServiceStore.Create(r.Context(), svc); err != nil {
 		s.logger.Error("failed to create service", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to create service", http.StatusInternalServerError)
 		return
@@ -1207,7 +1208,7 @@ func (s *ApiServer) handleUpdateService(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid service ID", http.StatusBadRequest)
 		return
 	}
-	svc, err := s.serviceStore.GetByID(r.Context(), id)
+	svc, err := s.store.ServiceStore.GetByID(r.Context(), id)
 	if err != nil || svc == nil || svc.OrganizationID != orgID {
 		http.Error(w, "service not found", http.StatusNotFound)
 		return
@@ -1239,7 +1240,7 @@ func (s *ApiServer) handleUpdateService(w http.ResponseWriter, r *http.Request) 
 	if req.IsActive != nil {
 		svc.IsActive = *req.IsActive
 	}
-	if err := s.serviceStore.Update(r.Context(), svc); err != nil {
+	if err := s.store.ServiceStore.Update(r.Context(), svc); err != nil {
 		s.logger.Error("failed to update service", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to update service", http.StatusInternalServerError)
 		return
@@ -1259,7 +1260,7 @@ func (s *ApiServer) handleDeactivateService(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "invalid service ID", http.StatusBadRequest)
 		return
 	}
-	if err := s.serviceStore.Deactivate(r.Context(), id, orgID); err != nil {
+	if err := s.store.ServiceStore.Deactivate(r.Context(), id, orgID); err != nil {
 		s.logger.Error("failed to deactivate service", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to deactivate service", http.StatusInternalServerError)
 		return
@@ -1283,7 +1284,7 @@ func (s *ApiServer) handleListPayments(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := s.paymentStore.ListByOrganization(r.Context(), orgID)
+	items, err := s.store.PaymentStore.ListByOrganization(r.Context(), orgID)
 	if err != nil {
 		s.logger.Error("failed to list payments", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to list payments", http.StatusInternalServerError)
@@ -1366,7 +1367,7 @@ func (s *ApiServer) handleCreatePayment(w http.ResponseWriter, r *http.Request) 
 		ReceivedAt:     receivedAt,
 		AuthorID:       actorID,
 	}
-	if err := s.paymentStore.Create(r.Context(), p); err != nil {
+	if err := s.store.PaymentStore.Create(r.Context(), p); err != nil {
 		switch {
 		case errors.Is(err, stores.ErrWashNotFound):
 			http.Error(w, "wash not found", http.StatusNotFound)
@@ -1426,7 +1427,7 @@ func (s *ApiServer) handleOpenCashSession(w http.ResponseWriter, r *http.Request
 		TheoreticalBalanceCents: req.OpeningAmountCents,
 		Status:                  models.CashSessionStatusOpen,
 	}
-	if err := s.cashSessionStore.Open(r.Context(), cs); err != nil {
+	if err := s.store.CashSessionStore.Open(r.Context(), cs); err != nil {
 		switch {
 		case errors.Is(err, stores.ErrSiteNotFound):
 			http.Error(w, "site not found", http.StatusNotFound)
@@ -1458,7 +1459,7 @@ func (s *ApiServer) handleGetCurrentCashSession(w http.ResponseWriter, r *http.R
 		http.Error(w, "invalid site ID", http.StatusBadRequest)
 		return
 	}
-	site, err := s.siteStore.GetByIDForOrganization(r.Context(), sid, orgID)
+	site, err := s.store.SiteStore.GetByIDForOrganization(r.Context(), sid, orgID)
 	if err != nil {
 		s.logger.Error("failed to resolve cash session site", "error", err, "site_id", sid, "organization_id", orgID)
 		http.Error(w, "failed to get current cash session", http.StatusInternalServerError)
@@ -1468,7 +1469,7 @@ func (s *ApiServer) handleGetCurrentCashSession(w http.ResponseWriter, r *http.R
 		http.Error(w, "site not found", http.StatusNotFound)
 		return
 	}
-	cs, err := s.cashSessionStore.GetOpenBySite(r.Context(), orgID, sid)
+	cs, err := s.store.CashSessionStore.GetOpenBySite(r.Context(), orgID, sid)
 	if err != nil {
 		s.logger.Error("failed to get current cash session", "error", err, "site_id", sid)
 		http.Error(w, "failed to get current cash session", http.StatusInternalServerError)
@@ -1534,7 +1535,7 @@ func (s *ApiServer) handleAddCashMovement(w http.ResponseWriter, r *http.Request
 		Description:    req.Description,
 		AuthorID:       actorID,
 	}
-	if err := s.cashMovementStore.Create(r.Context(), cm); err != nil {
+	if err := s.store.CashMovementStore.Create(r.Context(), cm); err != nil {
 		switch {
 		case errors.Is(err, stores.ErrCashSessionNotOpen):
 			http.Error(w, "cash session not found or not open", http.StatusNotFound)
@@ -1575,7 +1576,7 @@ func (s *ApiServer) handleCloseCashSession(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "counted_amount_cents cannot be negative", http.StatusBadRequest)
 		return
 	}
-	cs, err := s.cashSessionStore.Close(r.Context(), id, orgID, actorID, req.CountedAmountCents, req.DiscrepancyReason)
+	cs, err := s.store.CashSessionStore.Close(r.Context(), id, orgID, actorID, req.CountedAmountCents, req.DiscrepancyReason)
 	if err != nil {
 		switch {
 		case errors.Is(err, stores.ErrCashSessionNotFound):
@@ -1604,7 +1605,7 @@ func (s *ApiServer) handleListCashMovements(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "invalid session ID", http.StatusBadRequest)
 		return
 	}
-	session, err := s.cashSessionStore.GetByIDForOrganization(r.Context(), id, orgID)
+	session, err := s.store.CashSessionStore.GetByIDForOrganization(r.Context(), id, orgID)
 	if err != nil {
 		s.logger.Error("failed to resolve cash session", "error", err, "cash_session_id", id)
 		http.Error(w, "failed to list cash movements", http.StatusInternalServerError)
@@ -1614,7 +1615,7 @@ func (s *ApiServer) handleListCashMovements(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "cash session not found", http.StatusNotFound)
 		return
 	}
-	items, err := s.cashMovementStore.ListBySession(r.Context(), id, orgID)
+	items, err := s.store.CashMovementStore.ListBySession(r.Context(), id, orgID)
 	if err != nil {
 		s.logger.Error("failed to list cash movements", "error", err, "cash_session_id", id)
 		http.Error(w, "failed to list cash movements", http.StatusInternalServerError)
@@ -1643,7 +1644,7 @@ func (s *ApiServer) handleListExpenses(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := s.expenseStore.ListByOrganization(r.Context(), orgID)
+	items, err := s.store.ExpenseStore.ListByOrganization(r.Context(), orgID)
 	if err != nil {
 		s.logger.Error("failed to list expenses", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to list expenses", http.StatusInternalServerError)
@@ -1730,7 +1731,7 @@ func (s *ApiServer) handleCreateExpense(w http.ResponseWriter, r *http.Request) 
 		Status:         models.ExpenseStatusRecorded,
 		CashSessionID:  cashSessionID,
 	}
-	if err := s.expenseStore.Create(r.Context(), e); err != nil {
+	if err := s.store.ExpenseStore.Create(r.Context(), e); err != nil {
 		switch {
 		case errors.Is(err, stores.ErrCashSessionRequired):
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1764,7 +1765,7 @@ func (s *ApiServer) handleGetExpense(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid expense ID", http.StatusBadRequest)
 		return
 	}
-	items, err := s.expenseStore.ListByOrganization(r.Context(), orgID)
+	items, err := s.store.ExpenseStore.ListByOrganization(r.Context(), orgID)
 	if err != nil {
 		s.logger.Error("failed to list expenses for get", "error", err, "organization_id", orgID)
 		http.Error(w, "failed to get expense", http.StatusInternalServerError)
@@ -1795,7 +1796,7 @@ func (s *ApiServer) handleCancelExpense(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid expense ID", http.StatusBadRequest)
 		return
 	}
-	if err := s.expenseStore.Cancel(r.Context(), id, orgID, actorID); err != nil {
+	if err := s.store.ExpenseStore.Cancel(r.Context(), id, orgID, actorID); err != nil {
 		switch {
 		case errors.Is(err, stores.ErrExpenseNotFound):
 			http.Error(w, "expense not found", http.StatusNotFound)

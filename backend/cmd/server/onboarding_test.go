@@ -20,12 +20,14 @@ func TestConfirmOnboardingRequiresCompleteStages(t *testing.T) {
 
 	ctx := context.Background()
 	clerkOrgID := "org_onboarding_test_" + uuid.NewString()
-	org, err := testServer.onboardingStore.CreateOrganization(ctx, clerkOrgID, "Onboarding Test")
-	if err != nil {
+	orgID := uuid.New()
+	if _, err := testDB.ExecContext(ctx,
+		`INSERT INTO organizations (id, clerk_org_id, name) VALUES ($1, $2, $3)`,
+		orgID, clerkOrgID, "Onboarding Test"); err != nil {
 		t.Fatalf("failed to create organization fixture: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = testDB.ExecContext(ctx, `DELETE FROM organizations WHERE id = $1`, org.ID)
+		_, _ = testDB.ExecContext(ctx, `DELETE FROM organizations WHERE id = $1`, orgID)
 	})
 
 	claims := &clerk.SessionClaims{

@@ -22,8 +22,19 @@ export function getAuthErrorMessage(error: unknown, fallback?: string): string {
   if (code.includes("code_incorrect") || code.includes("code_expired") || /code.{0,20}(incorrect|expired|invalid)/.test(rawMessage)) {
     return "Ce code est invalide ou expiré. Vérifiez-le ou demandez-en un nouveau."
   }
-  if (code.includes("password_length") || /password.{0,20}(too short|length)/.test(rawMessage)) {
-    return "Choisissez un mot de passe plus long (au moins 8 caractères)."
+  if (code.includes("password_length") || /password.{0,20}(too short|length|longer|characters)/.test(rawMessage)) {
+    return "Votre mot de passe est trop court. Choisissez-en un plus long."
+  }
+  if (code.includes("password_patten") || /password.{0,20}(pattern|special|uppercase|lowercase|number|digit)/.test(rawMessage)) {
+    return "Votre mot de passe ne respecte pas les exigences de sécurité requises."
+  }
+  if (/pwned|breach|hibp|compromised/.test(rawMessage)) {
+    return "Ce mot de passe a été compromis dans une fuite de données connue. Choisissez-en un autre."
+  }
+
+  // In development, surface the real Clerk error to make debugging possible.
+  if (import.meta.env.DEV && firstError) {
+    return `${firstError.message ?? "Erreur Clerk"} (code: ${firstError.code ?? "inconnu"})`
   }
 
   return fallback ?? "Une erreur est survenue. Vérifiez les informations puis réessayez."

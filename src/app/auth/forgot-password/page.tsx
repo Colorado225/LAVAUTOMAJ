@@ -10,6 +10,7 @@ import {
   PasswordVisibilityButton,
 } from "@/components/auth/auth-form-elements"
 import { getAuthErrorMessage } from "@/components/auth/auth-errors"
+import { MIN_PASSWORD_LENGTH } from "@/app/auth/password-policy"
 
 type ResetStep = "request" | "verification" | "new-password" | "complete"
 
@@ -90,8 +91,8 @@ export default function ForgotPasswordPage() {
     setError("")
     setNotice("")
     if (!isLoaded) return
-    if (password.length < 8) {
-      setError("Votre mot de passe doit contenir au moins 8 caractères.")
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setError(`Votre mot de passe doit contenir au moins ${MIN_PASSWORD_LENGTH} caractères.`)
       return
     }
     if (password !== confirmation) {

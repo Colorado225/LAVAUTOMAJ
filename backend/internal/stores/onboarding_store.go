@@ -24,19 +24,6 @@ func NewOnboardingStore(db *sqlx.DB) *OnboardingStore {
 	return &OnboardingStore{DB: db}
 }
 
-// CreateOrganization auto-provisionne une organisation minimale à partir du
-// claim Clerk org_id (§3 : la détection d'état se fait côté serveur).
-func (s *OnboardingStore) CreateOrganization(ctx context.Context, clerkOrgID, name string) (*models.Organization, error) {
-	var org models.Organization
-	err := s.DB.GetContext(ctx, &org, `
-		INSERT INTO organizations (clerk_org_id, name)
-		VALUES ($1, $2)
-		ON CONFLICT (clerk_org_id) DO UPDATE SET clerk_org_id = EXCLUDED.clerk_org_id
-		RETURNING *`,
-		clerkOrgID, name)
-	return &org, err
-}
-
 // GetOrCreateProgress crée la ligne de progression si absente (idempotent).
 func (s *OnboardingStore) GetOrCreateProgress(ctx context.Context, orgID uuid.UUID) (*models.OnboardingProgress, error) {
 	var p models.OnboardingProgress

@@ -83,7 +83,7 @@ func TestCashPaymentCreatesTenantScopedMovement(t *testing.T) {
 		TheoreticalBalanceCents: openingAmount,
 		Status:                  models.CashSessionStatusOpen,
 	}
-	if err := testServer.cashSessionStore.Open(ctx, session); err != nil {
+	if err := testServer.store.CashSessionStore.Open(ctx, session); err != nil {
 		t.Fatalf("failed to open cash session fixture: %v", err)
 	}
 	duplicateSession := &models.CashSession{
@@ -95,7 +95,7 @@ func TestCashPaymentCreatesTenantScopedMovement(t *testing.T) {
 		TheoreticalBalanceCents: openingAmount,
 		Status:                  models.CashSessionStatusOpen,
 	}
-	if err := testServer.cashSessionStore.Open(ctx, duplicateSession); !errors.Is(err, stores.ErrOpenCashSessionExists) {
+	if err := testServer.store.CashSessionStore.Open(ctx, duplicateSession); !errors.Is(err, stores.ErrOpenCashSessionExists) {
 		t.Fatalf("expected a second open session for the site to be rejected, got %v", err)
 	}
 
@@ -110,11 +110,11 @@ func TestCashPaymentCreatesTenantScopedMovement(t *testing.T) {
 		ReceivedAt:    time.Now(),
 		AuthorID:      userID,
 	}
-	if err := testServer.paymentStore.Create(ctx, payment); err != nil {
+	if err := testServer.store.PaymentStore.Create(ctx, payment); err != nil {
 		t.Fatalf("failed to create cash payment: %v", err)
 	}
 
-	updated, err := testServer.cashSessionStore.GetOpenBySite(ctx, orgID, siteID)
+	updated, err := testServer.store.CashSessionStore.GetOpenBySite(ctx, orgID, siteID)
 	if err != nil {
 		t.Fatalf("failed to reload open cash session: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestCashPaymentCreatesTenantScopedMovement(t *testing.T) {
 		t.Fatalf("expected balance %d, got %#v", openingAmount+payment.AmountCents, updated)
 	}
 
-	movements, err := testServer.cashMovementStore.ListBySession(ctx, sessionID, orgID)
+	movements, err := testServer.store.CashMovementStore.ListBySession(ctx, sessionID, orgID)
 	if err != nil {
 		t.Fatalf("failed to list cash movements: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestCashPaymentCreatesTenantScopedMovement(t *testing.T) {
 		ReceivedAt:     time.Now(),
 		AuthorID:       userID,
 	}
-	if err := testServer.paymentStore.Create(ctx, foreignPayment); !errors.Is(err, stores.ErrCashSessionNotOpen) {
+	if err := testServer.store.PaymentStore.Create(ctx, foreignPayment); !errors.Is(err, stores.ErrCashSessionNotOpen) {
 		t.Fatalf("expected cross-organization session reuse to be rejected, got %v", err)
 	}
 
@@ -159,7 +159,7 @@ func TestCashPaymentCreatesTenantScopedMovement(t *testing.T) {
 		Source:         "manual",
 		AuthorID:       userID,
 	}
-	if err := testServer.cashMovementStore.Create(ctx, manualExit); err != nil {
+	if err := testServer.store.CashMovementStore.Create(ctx, manualExit); err != nil {
 		t.Fatalf("failed to record manual cash exit: %v", err)
 	}
 	tooLargeExit := &models.CashMovement{
@@ -171,15 +171,15 @@ func TestCashPaymentCreatesTenantScopedMovement(t *testing.T) {
 		Source:         "manual",
 		AuthorID:       userID,
 	}
-	if err := testServer.cashMovementStore.Create(ctx, tooLargeExit); !errors.Is(err, stores.ErrInsufficientCash) {
+	if err := testServer.store.CashMovementStore.Create(ctx, tooLargeExit); !errors.Is(err, stores.ErrInsufficientCash) {
 		t.Fatalf("expected an exit larger than the balance to be rejected, got %v", err)
 	}
 
 	reason := "Écart constaté au comptage"
-	if _, err := testServer.cashSessionStore.Close(ctx, sessionID, orgID, userID, 6000, nil); !errors.Is(err, stores.ErrDiscrepancyReasonRequired) {
+	if _, err := testServer.store.CashSessionStore.Close(ctx, sessionID, orgID, userID, 6000, nil); !errors.Is(err, stores.ErrDiscrepancyReasonRequired) {
 		t.Fatalf("expected a discrepancy reason to be required, got %v", err)
 	}
-	closedSession, err := testServer.cashSessionStore.Close(ctx, sessionID, orgID, userID, 6000, &reason)
+	closedSession, err := testServer.store.CashSessionStore.Close(ctx, sessionID, orgID, userID, 6000, &reason)
 	if err != nil {
 		t.Fatalf("failed to close cash session with a reason: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestCashPaymentCreatesTenantScopedMovement(t *testing.T) {
 		ReceivedAt:     time.Now(),
 		AuthorID:       userID,
 	}
-	if err := testServer.paymentStore.Create(ctx, closedPayment); !errors.Is(err, stores.ErrCashSessionNotOpen) {
+	if err := testServer.store.PaymentStore.Create(ctx, closedPayment); !errors.Is(err, stores.ErrCashSessionNotOpen) {
 		t.Fatalf("expected payments into a closed session to be rejected, got %v", err)
 	}
 }

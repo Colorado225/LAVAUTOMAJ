@@ -32,16 +32,16 @@ type WashItemInput struct {
 }
 
 type CreateWashInput struct {
-	OrganizationID    uuid.UUID
-	AuthorID          uuid.UUID
-	SiteID            uuid.UUID
-	VehicleCategoryID uuid.UUID
-	Items             []WashItemInput
-	WorkerIDs         []uuid.UUID
-	PaymentMethod     models.PaymentMethod
+	OrganizationID      uuid.UUID
+	AuthorID            uuid.UUID
+	SiteID              uuid.UUID
+	VehicleCategoryID   uuid.UUID
+	Items               []WashItemInput
+	WorkerIDs           []uuid.UUID
+	PaymentMethod       models.PaymentMethod
 	AmountReceivedCents int64
-	CashSessionID     *uuid.UUID
-	IdempotencyKey    string
+	CashSessionID       *uuid.UUID
+	IdempotencyKey      string
 }
 
 // Create stores the wash, service price snapshots, worker assignments and any
@@ -420,6 +420,33 @@ func loadWashDetail(ctx context.Context, queryer washQueryer, id, orgID uuid.UUI
 		return nil, err
 	}
 	return detail, nil
+}
+
+func (s *WashStore) GetDashboardMetrics(ctx context.Context, orgID uuid.UUID) (map[string]int64, error) {
+	var totalWashes int64
+	if err := s.DB.GetContext(ctx, &totalWashes,
+		`SELECT COUNT(*) FROM washes WHERE organization_id = $1 AND status <> $2`, orgID, models.WashStatusCancelled); err != nil {
+		return nil, err
+	}
+
+	var totalRevenue int64
+	if err := s.DB.GetContext(ctx, &totalRevenue, `
+		SELECT COALESCE(SUM(p.amount_cents), 0)
+		FROM payments p
+		WHERE p.organization_id = $1 AND p.status = $2
+		  AND (p.wash_id IS NULL OR EXISTS (
+			SELECT 1 FROM washes w
+			WHERE w.id = p.wash_id AND w.organization_id = p.organization_id AND w.status <> $3
+		  ))`,
+		orgID, models.PaymentStatusVerified, models.WashStatusCancelled); err != nil {
+		return nil, err
+	}
+
+	metrics := map[string]int64{
+		"total_washes":        totalWashes,
+		"total_revenue_cents": totalRevenue,
+	}
+	return metrics, nil
 }
 
 func (s *WashStore) Cancel(ctx context.Context, id, orgID, actorID uuid.UUID, reason string) (*models.WashDetail, error) {
