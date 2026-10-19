@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react"
-import { ArrowRight, KeyRound, LogOut, Mail } from "lucide-react"
+import { ArrowRight, KeyRound, LogOut, Mail, ShieldCheck } from "lucide-react"
 import { useAuth, useClerk, useSignIn, useUser } from "@clerk/clerk-react"
 import { Link, useNavigate } from "react-router-dom"
 import { AuthPageLayout } from "@/components/auth/auth-page-layout"
@@ -13,6 +13,32 @@ import { getAuthErrorMessage, isSessionExistsError } from "@/components/auth/aut
 import { apiFetch } from "@/lib/api"
 
 const REMEMBERED_EMAIL_KEY = "washpilot.remembered-email"
+
+type SecondFactorStrategy = "phone_code" | "totp" | "backup_code"
+
+interface SecondFactorState {
+  strategy: SecondFactorStrategy
+  /** Masked identifier (e.g. +225 ••• 45) shown to the user for phone codes. */
+  detail?: string
+}
+
+const SECOND_FACTOR_LABELS: Record<SecondFactorStrategy, { title: string; hint: string; placeholder: string }> = {
+  phone_code: {
+    title: "Code reçu par SMS",
+    hint: "Saisissez le code de vérification envoyé sur votre téléphone.",
+    placeholder: "Code à 6 chiffres",
+  },
+  totp: {
+    title: "Code de votre application d’authentification",
+    hint: "Ouvrez votre application (Google Authenticator, 1Password…) et saisissez le code en cours.",
+    placeholder: "Code à 6 chiffres",
+  },
+  backup_code: {
+    title: "Code de secours",
+    hint: "Saisissez l’un des codes de secours générés lors de l’activation de la double vérification.",
+    placeholder: "Code de secours",
+  },
+}
 
 function getInitialEmail() {
   if (typeof window === "undefined") return ""
@@ -48,6 +74,8 @@ export default function SignInPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isDisconnecting, setIsDisconnecting] = useState(false)
   const [error, setError] = useState("")
+  const [secondFactor, setSecondFactor] = useState<SecondFactorState | null>(null)
+  const [secondFactorCode, setSecondFactorCode] = useState("")
 
   const handleDisconnect = async () => {
     setIsDisconnecting(true)
@@ -135,29 +163,19 @@ export default function SignInPage() {
         password,
       })
 
-      if (attempt.status !== "complete" || !attempt.createdSessionId) {
-        setError(
-          attempt.status === "needs_second_factor"
-            ? "Une vérification supplémentaire est activée pour ce compte. Contactez l’administrateur de votre station pour finaliser l’accès."
-            : "La connexion n’a pas pu être finalisée. Vérifiez vos identifiants puis réessayez.",
-        )
+      if (attempt.status === "complete" && attempt.createdSessionId) {
+        await finalizeSession(attempt.createdSessionId)
         return
       }
 
-      await setActive({ session: attempt.createdSessionId })
-
-      // Neon reads the user identity and active Clerk organization from the
-      // verified session; browser-supplied identity fields are never trusted.
-      try {
-        const syncResponse = await apiFetch("/api/v1/auth/sync", { method: "POST" })
-        if (!syncResponse.ok) {
-          console.warn("Clerk-to-Neon sync will be retried on the next API request:", await syncResponse.text())
-        }
-      } catch (syncError) {
-        console.warn("Clerk-to-Neon sync deferred:", syncError)
+      if (attempt.status === "needs_second_factor") {
+        // Double vérification activée sur le compte : on démarre l'étape MFA
+        // au lieu de bloquer la connexion.
+        await startSecondFactor()
+        return
       }
 
-      navigate("/dashboard", { replace: true })
+      setError("La connexion n’a pas pu être finalisée. Vérifiez vos identifiants puis réessayez.")
     } catch (authError) {
       // En cas de session déjà active, on affiche le message avec un bouton
       // de déconnexion explicite (rendu sous le formulaire) plutôt qu'une
@@ -165,6 +183,93 @@ export default function SignInPage() {
       setError(getAuthErrorMessage(authError, "Connexion impossible pour le moment. Réessayez dans quelques instants."))
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  /** Activate the Clerk session, sync Neon and enter the app. */
+  async function finalizeSession(sessionId: string) {
+    if (!setActive) return
+    await setActive({ session: sessionId })
+
+    // Neon reads the user identity and active Clerk organization from the
+    // verified session; browser-supplied identity fields are never trusted.
+    try {
+      const syncResponse = await apiFetch("/api/v1/auth/sync", { method: "POST" })
+      if (!syncResponse.ok) {
+        console.warn("Clerk-to-Neon sync will be retried on the next API request:", await syncResponse.text())
+      }
+    } catch (syncError) {
+      console.warn("Clerk-to-Neon sync deferred:", syncError)
+    }
+
+    navigate("/dashboard", { replace: true })
+  }
+
+  /** Pick the strongest supported second factor and prepare it if needed. */
+  async function startSecondFactor() {
+    if (!signIn) return
+    const factors = signIn.supportedSecondFactors ?? []
+
+    const phoneFactor = factors.find((factor) => factor.strategy === "phone_code")
+    if (phoneFactor && phoneFactor.strategy === "phone_code") {
+      await signIn.prepareSecondFactor({ strategy: "phone_code", phoneNumberId: phoneFactor.phoneNumberId })
+      setSecondFactor({ strategy: "phone_code", detail: phoneFactor.safeIdentifier })
+      setSecondFactorCode("")
+      return
+    }
+    if (factors.some((factor) => factor.strategy === "totp")) {
+      setSecondFactor({ strategy: "totp" })
+      setSecondFactorCode("")
+      return
+    }
+    if (factors.some((factor) => factor.strategy === "backup_code")) {
+      setSecondFactor({ strategy: "backup_code" })
+      setSecondFactorCode("")
+      return
+    }
+    setError(
+      "Ce compte exige une double vérification dont la méthode n’est pas prise en charge ici. Désactivez l’authentification multifacteur dans votre tableau de bord Clerk ou contactez l’administrateur.",
+    )
+  }
+
+  async function handleSecondFactorSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError("")
+    if (!isLoaded || !signIn || !secondFactor) return
+
+    const code = secondFactorCode.trim()
+    if (!code) {
+      setError("Saisissez le code de vérification.")
+      return
+    }
+
+    setIsSubmitting(true)
+    try {
+      const attempt =
+        secondFactor.strategy === "phone_code"
+          ? await signIn.attemptSecondFactor({ strategy: "phone_code", code })
+          : secondFactor.strategy === "totp"
+            ? await signIn.attemptSecondFactor({ strategy: "totp", code })
+            : await signIn.attemptSecondFactor({ strategy: "backup_code", code })
+
+      if (attempt.status === "complete" && attempt.createdSessionId) {
+        await finalizeSession(attempt.createdSessionId)
+        return
+      }
+      setError("Le code n’a pas pu être vérifié. Réessayez.")
+    } catch (authError) {
+      setError(getAuthErrorMessage(authError, "Code invalide ou expiré. Réessayez."))
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  async function resendPhoneCode() {
+    setError("")
+    try {
+      await startSecondFactor()
+    } catch (authError) {
+      setError(getAuthErrorMessage(authError, "Impossible de renvoyer le code. Réessayez dans un instant."))
     }
   }
 
@@ -189,6 +294,63 @@ export default function SignInPage() {
         </>
       }
     >
+      {secondFactor ? (
+        <form onSubmit={handleSecondFactorSubmit} className="space-y-5" noValidate>
+          <AuthNotice tone="info">
+            <strong>Double vérification requise.</strong>{" "}
+            {SECOND_FACTOR_LABELS[secondFactor.strategy].hint}
+            {secondFactor.strategy === "phone_code" && secondFactor.detail
+              ? ` (envoyé au ${secondFactor.detail})`
+              : ""}
+          </AuthNotice>
+
+          <AuthField
+            id="sign-in-second-factor"
+            label={SECOND_FACTOR_LABELS[secondFactor.strategy].title}
+            icon={ShieldCheck}
+            type="text"
+            name="code"
+            autoComplete="one-time-code"
+            inputMode={secondFactor.strategy === "backup_code" ? "text" : "numeric"}
+            placeholder={SECOND_FACTOR_LABELS[secondFactor.strategy].placeholder}
+            value={secondFactorCode}
+            onChange={(event) => setSecondFactorCode(event.target.value)}
+            required
+            disabled={isSubmitting}
+          />
+
+          {error ? <AuthNotice>{error}</AuthNotice> : null}
+
+          <AuthSubmitButton pending={isSubmitting} disabled={!isLoaded}>
+            Vérifier et se connecter <ArrowRight className="size-4" />
+          </AuthSubmitButton>
+
+          <div className="flex items-center justify-between text-xs">
+            {secondFactor.strategy === "phone_code" ? (
+              <button
+                type="button"
+                onClick={resendPhoneCode}
+                disabled={isSubmitting}
+                className="font-semibold text-blue-700 transition-colors hover:text-blue-900 hover:underline hover:underline-offset-4 disabled:opacity-60"
+              >
+                Renvoyer le code
+              </button>
+            ) : <span />}
+            <button
+              type="button"
+              onClick={() => {
+                setSecondFactor(null)
+                setSecondFactorCode("")
+                setError("")
+              }}
+              disabled={isSubmitting}
+              className="font-semibold text-slate-500 transition-colors hover:text-slate-700 hover:underline hover:underline-offset-4 disabled:opacity-60"
+            >
+              ← Revenir à la connexion
+            </button>
+          </div>
+        </form>
+      ) : (
       <form onSubmit={handleSubmit} className="space-y-5" noValidate>
         <AuthField
           id="sign-in-email"
@@ -268,6 +430,7 @@ export default function SignInPage() {
           Se connecter <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" aria-hidden="true" />
         </AuthSubmitButton>
       </form>
+      )}
     </AuthPageLayout>
   )
 }
