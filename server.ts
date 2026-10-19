@@ -65,9 +65,11 @@ app.get("/healthz", (_req, res) => {
 })
 
 app.get("/readyz", (_req, res) => {
+  // Clerk is usable with either the secret key (full API access) or the JWT
+  // public key alone (offline token verification + claims-based provisioning).
   const missingDependencies = [
     ...(!isDatabaseReady() ? ["database"] : []),
-    ...(!env.CLERK_SECRET_KEY ? ["clerk"] : []),
+    ...(!env.CLERK_SECRET_KEY && !env.CLERK_JWT_KEY ? ["clerk"] : []),
   ]
   if (missingDependencies.length) {
     res.status(503).json({ status: "not_ready", dependencies: missingDependencies })
