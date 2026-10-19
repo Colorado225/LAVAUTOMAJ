@@ -48,9 +48,19 @@ CREATE TABLE IF NOT EXISTS sites (
  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS onboarding_progress (
- organization_id uuid PRIMARY KEY REFERENCES organizations(id), current_stage text NOT NULL DEFAULT 'station',
- completed_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now()
+  organization_id uuid PRIMARY KEY REFERENCES organizations(id), current_stage text NOT NULL DEFAULT 'station',
+  station_data jsonb, services_data jsonb, workers_data jsonb, plan_code text, draft boolean NOT NULL DEFAULT false,
+  completed_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS service_catalog (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), category text NOT NULL, name text NOT NULL,
+  price_cents integer, sort_order integer NOT NULL DEFAULT 0, is_active boolean NOT NULL DEFAULT true
+);
+INSERT INTO service_catalog(category,name,price_cents,sort_order) VALUES
+  ('exterieur','Nettoyage extérieur',5000,1),('exterieur','Nettoyage intérieur',7000,2),
+  ('complet','Nettoyage complet',10000,3),('detailing','Lustrage',15000,4),
+  ('deux-roues','Nettoyage moto',4000,5),('utilitaire','Nettoyage utilitaire',6000,6)
+ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS service_categories (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  name text NOT NULL, is_active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(),
