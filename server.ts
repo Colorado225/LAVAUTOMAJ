@@ -41,7 +41,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Idempotency-Key"],
+  allowedHeaders: ["Content-Type", "Idempotency-Key", "Authorization", "X-Session-Token"],
   exposedHeaders: ["Idempotency-Replayed"],
   maxAge: 600,
 }))
@@ -139,7 +139,10 @@ app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
   }
   // Development aid: surface auth/tenant failures so session issues are diagnosable.
   if (env.NODE_ENV !== "production" && (status === 401 || status === 403)) {
-    console.warn(`[auth] ${status} ${code} on ${_req.method} ${_req.originalUrl}`)
+    const cookieNames = (_req.get("cookie") || "").split(";").map(v => v.split("=")[0].trim()).filter(Boolean).join(",") || "none"
+    const hasAuth = Boolean(_req.get("authorization"))
+    const hasCustom = Boolean(_req.get("x-session-token"))
+    console.warn(`[auth] ${status} ${code} on ${_req.method} ${_req.originalUrl} | cookies:[${cookieNames}] authHeader:${hasAuth} xSessionToken:${hasCustom} ua:${(_req.get("user-agent") || "?").slice(0, 40)}`)
   }
   res.status(status).json({ error: { code, message } })
 })

@@ -41,7 +41,7 @@ export function storeSessionToken(token: string | null): void {
 
 export function authHeaders(): Record<string, string> {
   const token = getStoredSessionToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
+  return token ? { Authorization: `Bearer ${token}`, "X-Session-Token": token } : {}
 }
 
 export interface UseApiResult<T> {
@@ -122,6 +122,7 @@ export async function apiFetch(path: string, options: RequestInit = {}): Promise
   }
   const token = getStoredSessionToken()
   if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`)
+  if (token && !headers.has("X-Session-Token")) headers.set("X-Session-Token", token)
 
   return fetch(`${API_BASE_URL}${path}`, {
     ...options,

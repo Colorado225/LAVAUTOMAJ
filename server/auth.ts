@@ -114,7 +114,10 @@ export function readSessionToken(req: Request): string | null {
   }
   const authorization = req.get("authorization") || ""
   const match = /^Bearer\s+(.+)$/i.exec(authorization)
-  return match ? match[1].trim() : null
+  if (match) return match[1].trim()
+  // Dernier recours : certains proxys consomment l'en-tête Authorization.
+  const custom = req.get("x-session-token")
+  return custom ? custom.trim() : null
 }
 
 export interface SessionUser {
