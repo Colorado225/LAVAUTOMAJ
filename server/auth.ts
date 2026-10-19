@@ -3,9 +3,18 @@ import { verifyToken } from "@clerk/backend"
 import { env } from "./env.ts"
 
 export class HttpError extends Error {
-  constructor(public status: number, public code: string, message: string) { super(message); this.name = "HttpError" }
+  status: number
+  code: string
+  constructor(status: number, code: string, message: string) {
+    super(message)
+    this.name = "HttpError"
+    this.status = status
+    this.code = code
+  }
 }
 export interface AuthContext { clerkUserId: string; clerkOrgId: string | null; clerkRole: string | null; sessionId: string | null }
+// Express request augmentation requires a namespace declaration by design.
+// eslint-disable-next-line @typescript-eslint/no-namespace
 declare global { namespace Express { interface Request { auth?: AuthContext; tenant?: { organizationId: string; userId: string; role: string; siteId?: string } } } }
 
 export async function requireClerkSession(req: Request, _res: Response, next: NextFunction) {

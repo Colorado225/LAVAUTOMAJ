@@ -1,772 +1,589 @@
-import { Router } from "express";
-import { z } from "zod";
-import { getPool } from "./db.ts";
-import {
-  asyncRoute,
-  body,
-  tenant,
-  parseId,
-  pageParams,
-  requireRole,
-  HttpError,
-} from "./http.ts";
+import { Router } from "express"
+import { z } from "zod"
+import type { Pool } from "pg"
+import { getPool } from "./db.ts"
+import { asyncRoute, body, tenant, parseId, requireRole, HttpError } from "./http.ts"
+import { fingerprint, withIdempotency } from "./idempotency.ts"
+
 export const catalogValidators = {
   category: z
     .object({
-      name: z.string().trim().min(1).max(100),
+      name: z.string().trim().min(1, "Le nom est obligatoire.").max(100),
       is_active: z.boolean().optional(),
     })
-    .strict(),
+    .strip(),
   service: z
     .object({
-      name: z.string().trim().min(1).max(120),
-      description: z.string().max(1000).optional(),
+      name: z.string().trim().min(1, "Le nom est obligatoire.").max(120),
+      description: z.string().max(1000).nullable().optional(),
       category_id: z.string().uuid().nullable().optional(),
       price_cents: z.number().int().min(0).max(100000000),
       duration_minutes: z.number().int().min(1).max(1440).nullable().optional(),
       is_active: z.boolean().optional(),
     })
-    .strict(),
-};
-const db = () => {
-  const p = getPool();
-  if (!p)
-    throw new HttpError(
-      503,
-      "database_not_configured",
-      "Base de données indisponible.",
-    );
-  return p;
-};
-export function createApiRouter() {
-  const r = Router();
-
-  // ========== SITES CRUD ==========
-  r.get(
-    "/sites",
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        pg = pageParams(req),
-        q = await db().query(
-          "SELECT id,name,city,address,phone,is_active,created_at FROM sites WHERE organization_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-          [t.organizationId, pg.limit, pg.offset],
-        );
-      res.json({
-        data: q.rows,
-        pagination: { page: pg.page, limit: pg.limit },
-      });
-    }),
-  );
-  r.get(
-    "/sites/:id",
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        q = await db().query(
-          "SELECT * FROM sites WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!q.rowCount)
-        throw new HttpError(404, "site_not_found", "Site introuvable.");
-      res.json({ data: q.rows[0] });
-    }),
-  );
-  r.post(
-    "/sites",
-    requireRole("owner", "manager"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        b = body(
-          z
-            .object({
-              name: z.string().trim().min(1).max(120),
-              city: z.string().trim().min(1).max(120),
-              address: z.string().max(300).optional(),
-              phone: z.string().max(40).optional(),
-              is_active: z.boolean().optional(),
-            })
-            .strict(),
-          req.body,
-        ),
-        q = await db().query(
-          "INSERT INTO sites(organization_id,name,city,address,phone,is_active) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",
-          [
-            t.organizationId,
-            b.name,
-            b.city,
-            b.address || null,
-            b.phone || null,
-            b.is_active ?? true,
-          ],
-        );
-      res.status(201).json({ data: q.rows[0] });
-    }),
-  );
-  r.patch(
-    "/sites/:id",
-    requireRole("owner", "manager"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        b = body(
-          z
-            .object({
-              name: z.string().trim().min(1).max(120),
-              city: z.string().trim().min(1).max(120),
-              address: z.string().max(300).optional(),
-              phone: z.string().max(40).optional(),
-              is_active: z.boolean().optional(),
-            })
-            .partial()
-            .strict(),
-          req.body,
-        ),
-        old = await db().query(
-          "SELECT * FROM sites WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!old.rowCount)
-        throw new HttpError(404, "site_not_found", "Site introuvable.");
-      const v = { ...old.rows[0], ...b },
-        q = await db().query(
-          "UPDATE sites SET name=$3,city=$4,address=$5,phone=$6,is_active=$7,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING *",
-          [
-            id,
-            t.organizationId,
-            v.name,
-            v.city,
-            v.address || null,
-            v.phone || null,
-            v.is_active,
-          ],
-        );
-      res.json({ data: q.rows[0] });
-    }),
-  );
-  r.delete(
-    "/sites/:id",
-    requireRole("owner"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        q = await db().query(
-          "DELETE FROM sites WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!q.rowCount)
-        throw new HttpError(404, "site_not_found", "Site introuvable.");
-      res.status(204).send();
-    }),
-  );
-
-  // ========== SERVICES CRUD ==========
-  r.get(
-    "/services",
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        pg = pageParams(req),
-        q = await db().query(
-          "SELECT * FROM services WHERE organization_id=$1 ORDER BY name LIMIT $2 OFFSET $3",
-          [t.organizationId, pg.limit, pg.offset],
-        );
-      res.json({
-        data: q.rows,
-        pagination: { page: pg.page, limit: pg.limit },
-      });
-    }),
-  );
-  r.get(
-    "/services/:id",
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        q = await db().query(
-          "SELECT * FROM services WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!q.rowCount)
-        throw new HttpError(
-          404,
-          "service_not_found",
-          "Prestation introuvable.",
-        );
-      res.json({ data: q.rows[0] });
-    }),
-  );
-  r.post(
-    "/services",
-    requireRole("owner", "manager"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        b = body(catalogValidators.service, req.body),
-        q = await db().query(
-          "INSERT INTO services(organization_id,category_id,name,description,price_cents,duration_minutes,is_active) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",
-          [
-            t.organizationId,
-            b.category_id || null,
-            b.name,
-            b.description || null,
-            b.price_cents,
-            b.duration_minutes ?? null,
-            b.is_active ?? true,
-          ],
-        );
-      res.status(201).json({ data: q.rows[0] });
-    }),
-  );
-  r.patch(
-    "/services/:id",
-    requireRole("owner", "manager"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        b = body(catalogValidators.service.partial(), req.body),
-        old = await db().query(
-          "SELECT * FROM services WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!old.rowCount)
-        throw new HttpError(
-          404,
-          "service_not_found",
-          "Prestation introuvable.",
-        );
-      const v = { ...old.rows[0], ...b },
-        q = await db().query(
-          "UPDATE services SET category_id=$3,name=$4,description=$5,price_cents=$6,duration_minutes=$7,is_active=$8,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING *",
-          [
-            id,
-            t.organizationId,
-            v.category_id,
-            v.name,
-            v.description,
-            v.price_cents,
-            v.duration_minutes,
-            v.is_active,
-          ],
-        );
-      res.json({ data: q.rows[0] });
-    }),
-  );
-  r.delete(
-    "/services/:id",
-    requireRole("owner", "manager"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        q = await db().query(
-          "DELETE FROM services WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!q.rowCount)
-        throw new HttpError(
-          404,
-          "service_not_found",
-          "Prestation introuvable.",
-        );
-      res.status(204).send();
-    }),
-  );
-
-  // ========== SERVICE CATEGORIES CRUD ==========
-  r.get(
-    "/service-categories",
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        pg = pageParams(req),
-        q = await db().query(
-          "SELECT * FROM service_categories WHERE organization_id=$1 ORDER BY name LIMIT $2 OFFSET $3",
-          [t.organizationId, pg.limit, pg.offset],
-        );
-      res.json({
-        data: q.rows,
-        pagination: { page: pg.page, limit: pg.limit },
-      });
-    }),
-  );
-  r.get(
-    "/service-categories/:id",
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        q = await db().query(
-          "SELECT * FROM service_categories WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!q.rowCount)
-        throw new HttpError(
-          404,
-          "category_not_found",
-          "Catégorie de prestation introuvable.",
-        );
-      res.json({ data: q.rows[0] });
-    }),
-  );
-  r.post(
-    "/service-categories",
-    requireRole("owner", "manager"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        b = body(catalogValidators.category, req.body),
-        q = await db().query(
-          "INSERT INTO service_categories(organization_id,name,is_active) VALUES($1,$2,$3) RETURNING *",
-          [t.organizationId, b.name, b.is_active ?? true],
-        );
-      res.status(201).json({ data: q.rows[0] });
-    }),
-  );
-  r.patch(
-    "/service-categories/:id",
-    requireRole("owner", "manager"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        b = body(catalogValidators.category.partial(), req.body),
-        old = await db().query(
-          "SELECT * FROM service_categories WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!old.rowCount)
-        throw new HttpError(
-          404,
-          "category_not_found",
-          "Catégorie de prestation introuvable.",
-        );
-      const v = { ...old.rows[0], ...b },
-        q = await db().query(
-          "UPDATE service_categories SET name=$3,is_active=$4,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING *",
-          [id, t.organizationId, v.name, v.is_active],
-        );
-      res.json({ data: q.rows[0] });
-    }),
-  );
-  r.delete(
-    "/service-categories/:id",
-    requireRole("owner", "manager"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        q = await db().query(
-          "DELETE FROM service_categories WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!q.rowCount)
-        throw new HttpError(
-          404,
-          "category_not_found",
-          "Catégorie de prestation introuvable.",
-        );
-      res.status(204).send();
-    }),
-  );
-
-  // ========== VEHICLE CATEGORIES CRUD ==========
-  r.get(
-    "/vehicle-categories",
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        pg = pageParams(req),
-        q = await db().query(
-          "SELECT * FROM vehicle_categories WHERE organization_id=$1 ORDER BY name LIMIT $2 OFFSET $3",
-          [t.organizationId, pg.limit, pg.offset],
-        );
-      res.json({
-        data: q.rows,
-        pagination: { page: pg.page, limit: pg.limit },
-      });
-    }),
-  );
-  r.get(
-    "/vehicle-categories/:id",
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        q = await db().query(
-          "SELECT * FROM vehicle_categories WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!q.rowCount)
-        throw new HttpError(
-          404,
-          "vehicle_category_not_found",
-          "Catégorie de véhicule introuvable.",
-        );
-      res.json({ data: q.rows[0] });
-    }),
-  );
-  r.post(
-    "/vehicle-categories",
-    requireRole("owner", "manager"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        b = body(
-          z
-            .object({
-              name: z.string().trim().min(1).max(100),
-              is_active: z.boolean().optional(),
-            })
-            .strict(),
-          req.body,
-        ),
-        q = await db().query(
-          "INSERT INTO vehicle_categories(organization_id,name,is_active) VALUES($1,$2,$3) RETURNING *",
-          [t.organizationId, b.name, b.is_active ?? true],
-        );
-      res.status(201).json({ data: q.rows[0] });
-    }),
-  );
-  r.patch(
-    "/vehicle-categories/:id",
-    requireRole("owner", "manager"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        b = body(
-          z
-            .object({
-              name: z.string().trim().min(1).max(100),
-              is_active: z.boolean().optional(),
-            })
-            .partial()
-            .strict(),
-          req.body,
-        ),
-        old = await db().query(
-          "SELECT * FROM vehicle_categories WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!old.rowCount)
-        throw new HttpError(
-          404,
-          "vehicle_category_not_found",
-          "Catégorie de véhicule introuvable.",
-        );
-      const v = { ...old.rows[0], ...b },
-        q = await db().query(
-          "UPDATE vehicle_categories SET name=$3,is_active=$4,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING *",
-          [id, t.organizationId, v.name, v.is_active],
-        );
-      res.json({ data: q.rows[0] });
-    }),
-  );
-  r.delete(
-    "/vehicle-categories/:id",
-    requireRole("owner", "manager"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        q = await db().query(
-          "DELETE FROM vehicle_categories WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!q.rowCount)
-        throw new HttpError(
-          404,
-          "vehicle_category_not_found",
-          "Catégorie de véhicule introuvable.",
-        );
-      res.status(204).send();
-    }),
-  );
-
-  // ========== EMPLOYEES/WORKERS CRUD ==========
-  const workerValidator = z
+    .strip(),
+  site: z
     .object({
-      first_name: z.string().trim().min(1).max(100),
-      last_name: z.string().trim().min(1).max(100),
-      email: z.string().email().optional(),
-      phone: z.string().max(40).optional(),
-      role: z.enum(["owner", "manager", "worker"]),
+      name: z.string().trim().min(2).max(120),
+      city: z.string().trim().min(1).max(120),
+      address: z.string().trim().max(300).nullable().optional(),
+      phone: z.string().trim().max(30).nullable().optional(),
+      email: z.string().trim().max(200).nullable().optional(),
+      description: z.string().trim().max(1000).nullable().optional(),
       is_active: z.boolean().optional(),
     })
-    .strict();
-  r.get(
-    "/employees",
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        pg = pageParams(req),
-        q = await db().query(
-          "SELECT * FROM workers WHERE organization_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-          [t.organizationId, pg.limit, pg.offset],
-        );
-      res.json({
-        data: q.rows,
-        pagination: { page: pg.page, limit: pg.limit },
-      });
-    }),
-  );
-  r.get(
-    "/employees/:id",
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        q = await db().query(
-          "SELECT * FROM workers WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!q.rowCount)
-        throw new HttpError(404, "employee_not_found", "Employé introuvable.");
-      res.json({ data: q.rows[0] });
-    }),
-  );
-  r.post(
-    "/employees",
-    requireRole("owner", "manager"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        b = body(workerValidator, req.body),
-        q = await db().query(
-          "INSERT INTO workers(organization_id,first_name,last_name,email,phone,role,is_active) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",
-          [
-            t.organizationId,
-            b.first_name,
-            b.last_name,
-            b.email || null,
-            b.phone || null,
-            b.role,
-            b.is_active ?? true,
-          ],
-        );
-      res.status(201).json({ data: q.rows[0] });
-    }),
-  );
-  r.patch(
-    "/employees/:id",
-    requireRole("owner", "manager"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        b = body(workerValidator.partial(), req.body),
-        old = await db().query(
-          "SELECT * FROM workers WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!old.rowCount)
-        throw new HttpError(404, "employee_not_found", "Employé introuvable.");
-      const v = { ...old.rows[0], ...b },
-        q = await db().query(
-          "UPDATE workers SET first_name=$3,last_name=$4,email=$5,phone=$6,role=$7,is_active=$8,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING *",
-          [
-            id,
-            t.organizationId,
-            v.first_name,
-            v.last_name,
-            v.email || null,
-            v.phone || null,
-            v.role,
-            v.is_active,
-          ],
-        );
-      res.json({ data: q.rows[0] });
-    }),
-  );
-  r.delete(
-    "/employees/:id",
-    requireRole("owner"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        q = await db().query(
-          "DELETE FROM workers WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!q.rowCount)
-        throw new HttpError(404, "employee_not_found", "Employé introuvable.");
-      res.status(204).send();
-    }),
-  );
+    .strip(),
+}
 
-  // ========== WASHES (LAVAGES) CRUD ==========
-  const washItemValidator = z
-    .object({
-      service_id: z.string().uuid(),
-      price_cents: z.number().int().min(0),
-      worker_id: z.string().uuid().nullable().optional(),
-    })
-    .strict();
-  const washValidator = z
+export const washValidators = {
+  create: z
     .object({
       site_id: z.string().uuid(),
-      vehicle_category_id: z.string().uuid().nullable().optional(),
-      license_plate: z.string().trim().min(1).max(20),
-      customer_name: z.string().trim().min(1).max(200).optional(),
-      customer_phone: z.string().max(40).optional(),
-      total_amount_cents: z.number().int().min(0),
-      payment_method: z.enum(["cash", "mobile_money", "card", "transfer"]),
-      status: z
-        .enum(["pending", "in_progress", "completed", "cancelled"])
-        .optional(),
-      items: z.array(washItemValidator).min(1).optional(),
+      vehicle_category_id: z.string().uuid(),
+      items: z
+        .array(
+          z.object({
+            service_id: z.string().uuid(),
+            quantity: z.number().int().min(1).max(100),
+          }),
+        )
+        .min(1, "Sélectionnez au moins une prestation."),
+      worker_ids: z.array(z.string().uuid()).max(50).default([]),
+      payment_method: z.enum(["cash", "orange_money", "mtn_momo", "moov_money", "wave", "other"]),
+      amount_received_cents: z.number().int().min(0).max(100000000),
+      cash_session_id: z.string().uuid().optional(),
     })
-    .strict();
+    .strip(),
+  cancel: z
+    .object({
+      reason: z.string().trim().min(3, "Indiquez le motif de l’annulation.").max(500),
+    })
+    .strip(),
+}
+
+function db(): Pool {
+  const pool = getPool()
+  if (!pool) throw new HttpError(503, "database_not_configured", "Base de données indisponible.")
+  return pool
+}
+
+const WASH_FIELDS = `id, reference, site_id, vehicle_category_id, customer_id, status, payment_status,
+  total_cents, payment_method, created_by AS author_id, cancelled_by AS cancelled_by_id,
+  cancelled_at, cancellation_reason, created_at`
+
+export function createApiRouter() {
+  const r = Router()
+
+  // ---------------------------------------------------------------- sites --
   r.get(
-    "/washes",
+    "/sites",
     asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        pg = pageParams(req),
-        q = await db().query(
-          "SELECT * FROM washes WHERE organization_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-          [t.organizationId, pg.limit, pg.offset],
-        );
-      res.json({
-        data: q.rows,
-        pagination: { page: pg.page, limit: pg.limit },
-      });
-    }),
-  );
-  r.get(
-    "/washes/:id",
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        q = await db().query(
-          "SELECT * FROM washes WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!q.rowCount)
-        throw new HttpError(404, "wash_not_found", "Lavage introuvable.");
-      const items = await db().query(
-        "SELECT * FROM wash_items WHERE wash_id=$1",
-        [id],
-      );
-      res.json({ data: { ...q.rows[0], items: items.rows } });
-    }),
-  );
-  r.post(
-    "/washes",
-    requireRole("owner", "manager", "worker"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        b = body(washValidator, req.body);
-      const client = db();
-      await client.query("BEGIN");
-      try {
-        const washQ = await client.query(
-          "INSERT INTO washes(organization_id,site_id,vehicle_category_id,license_plate,customer_name,customer_phone,total_amount_cents,payment_method,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",
-          [
-            t.organizationId,
-            b.site_id,
-            b.vehicle_category_id || null,
-            b.license_plate,
-            b.customer_name || null,
-            b.customer_phone || null,
-            b.total_amount_cents,
-            b.payment_method,
-            b.status ?? "pending",
-          ],
-        );
-        const washId = washQ.rows[0].id;
-        if (b.items) {
-          for (const item of b.items) {
-            await client.query(
-              "INSERT INTO wash_items(wash_id,service_id,price_cents,worker_id) VALUES($1,$2,$3,$4)",
-              [
-                washId,
-                item.service_id,
-                item.price_cents,
-                item.worker_id || null,
-              ],
-            );
-          }
-        }
-        await client.query("COMMIT");
-        res.status(201).json({ data: washQ.rows[0] });
-      } catch (e) {
-        await client.query("ROLLBACK");
-        throw e;
-      }
-    }),
-  );
-  r.patch(
-    "/washes/:id",
-    requireRole("owner", "manager", "worker"),
-    asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string),
-        b = body(washValidator.partial(), req.body),
-        old = await db().query(
-          "SELECT * FROM washes WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-      if (!old.rowCount)
-        throw new HttpError(404, "wash_not_found", "Lavage introuvable.");
-      const v = { ...old.rows[0], ...b };
-
-      const updateFields: string[] = [];
-      const updateValues: (string | number | null)[] = [id, t.organizationId];
-      let paramIndex = 3;
-
-      if (v.site_id !== undefined) {
-        updateFields.push(`site_id=$${paramIndex++}`);
-        updateValues.push(v.site_id);
-      }
-      if (v.vehicle_category_id !== undefined) {
-        updateFields.push(`vehicle_category_id=$${paramIndex++}`);
-        updateValues.push(v.vehicle_category_id);
-      }
-      if (v.license_plate !== undefined) {
-        updateFields.push(`license_plate=$${paramIndex++}`);
-        updateValues.push(v.license_plate);
-      }
-      if (v.customer_name !== undefined) {
-        updateFields.push(`customer_name=$${paramIndex++}`);
-        updateValues.push(v.customer_name);
-      }
-      if (v.customer_phone !== undefined) {
-        updateFields.push(`customer_phone=$${paramIndex++}`);
-        updateValues.push(v.customer_phone);
-      }
-      if (v.total_amount_cents !== undefined) {
-        updateFields.push(`total_amount_cents=$${paramIndex++}`);
-        updateValues.push(v.total_amount_cents);
-      }
-      if (v.payment_method !== undefined) {
-        updateFields.push(`payment_method=$${paramIndex++}`);
-        updateValues.push(v.payment_method);
-      }
-      if (v.status !== undefined) {
-        updateFields.push(`status=$${paramIndex++}`);
-        updateValues.push(v.status);
-      }
-
-      updateFields.push("updated_at=now()");
-
-      if (updateFields.length === 1) {
-        return res.json({ data: old.rows[0] });
-      }
-
+      const t = tenant(req)
       const q = await db().query(
-        `UPDATE washes SET ${updateFields.join(", ")} WHERE id=$1 AND organization_id=$2 RETURNING *`,
-        updateValues,
-      );
-      res.json({ data: q.rows[0] });
+        "SELECT id, name, city, address, phone, email, description, logo_url, slug, is_active, created_at, updated_at FROM sites WHERE organization_id=$1 ORDER BY created_at",
+        [t.organizationId],
+      )
+      res.json(q.rows)
     }),
-  );
-  r.delete(
-    "/washes/:id",
+  )
+
+  r.get(
+    "/sites/:id",
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const q = await db().query("SELECT * FROM sites WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      if (!q.rowCount) throw new HttpError(404, "site_not_found", "Station introuvable.")
+      res.json(q.rows[0])
+    }),
+  )
+
+  r.post(
+    "/sites",
     requireRole("owner", "manager"),
     asyncRoute(async (req, res) => {
-      const t = tenant(req),
-        id = parseId(req.params.id as string);
-      const client = db();
-      await client.query("BEGIN");
+      const t = tenant(req)
+      const input = body(catalogValidators.site, req.body)
+      const q = await db().query(
+        `INSERT INTO sites(organization_id, name, city, address, phone, email, description, is_active)
+         VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE($8,true)) RETURNING *`,
+        [t.organizationId, input.name, input.city, input.address ?? null, input.phone ?? null, input.email ?? null, input.description ?? null, input.is_active ?? null],
+      )
+      res.status(201).json(q.rows[0])
+    }),
+  )
+
+  r.patch(
+    "/sites/:id",
+    requireRole("owner", "manager"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const input = body(catalogValidators.site.partial(), req.body)
+      const oldQ = await db().query("SELECT * FROM sites WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      if (!oldQ.rowCount) throw new HttpError(404, "site_not_found", "Station introuvable.")
+      const merged = { ...oldQ.rows[0], ...input }
+      const q = await db().query(
+        `UPDATE sites SET name=$3, city=$4, address=$5, phone=$6, email=$7, description=$8, is_active=$9, updated_at=now()
+         WHERE id=$1 AND organization_id=$2 RETURNING *`,
+        [id, t.organizationId, merged.name, merged.city, merged.address, merged.phone, merged.email, merged.description, merged.is_active],
+      )
+      res.json(q.rows[0])
+    }),
+  )
+
+  // --------------------------------------------------- service categories --
+  r.get(
+    "/service-categories",
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const q = await db().query(
+        "SELECT id, name, is_active, created_at, updated_at FROM service_categories WHERE organization_id=$1 ORDER BY name",
+        [t.organizationId],
+      )
+      res.json(q.rows)
+    }),
+  )
+
+  r.post(
+    "/service-categories",
+    requireRole("owner", "manager"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const input = body(catalogValidators.category, req.body)
       try {
-        await client.query("DELETE FROM wash_items WHERE wash_id=$1", [id]);
-        const q = await client.query(
-          "DELETE FROM washes WHERE id=$1 AND organization_id=$2",
-          [id, t.organizationId],
-        );
-        if (!q.rowCount) {
-          await client.query("ROLLBACK");
-          throw new HttpError(404, "wash_not_found", "Lavage introuvable.");
+        const q = await db().query(
+          "INSERT INTO service_categories(organization_id, name, is_active) VALUES($1,$2,COALESCE($3,true)) RETURNING id, name, is_active, created_at, updated_at",
+          [t.organizationId, input.name, input.is_active ?? null],
+        )
+        res.status(201).json(q.rows[0])
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505") {
+          throw new HttpError(409, "category_exists", "Une catégorie portant ce nom existe déjà.")
         }
-        await client.query("COMMIT");
-        res.status(204).send();
-      } catch (e) {
-        await client.query("ROLLBACK");
-        throw e;
+        throw error
       }
     }),
-  );
-  return r;
+  )
+
+  r.patch(
+    "/service-categories/:id",
+    requireRole("owner", "manager"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const input = body(catalogValidators.category.partial(), req.body)
+      const oldQ = await db().query("SELECT * FROM service_categories WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      if (!oldQ.rowCount) throw new HttpError(404, "category_not_found", "Catégorie introuvable.")
+      const merged = { ...oldQ.rows[0], ...input }
+      try {
+        const q = await db().query(
+          "UPDATE service_categories SET name=$3, is_active=$4, updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id, name, is_active, created_at, updated_at",
+          [id, t.organizationId, merged.name, merged.is_active],
+        )
+        res.json(q.rows[0])
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505") {
+          throw new HttpError(409, "category_exists", "Une catégorie portant ce nom existe déjà.")
+        }
+        throw error
+      }
+    }),
+  )
+
+  r.delete(
+    "/service-categories/:id",
+    requireRole("owner", "manager"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const used = await db().query("SELECT 1 FROM services WHERE category_id=$1 AND organization_id=$2 LIMIT 1", [id, t.organizationId])
+      if (used.rowCount) {
+        throw new HttpError(409, "category_in_use", "Des prestations utilisent cette catégorie. Désactivez-la plutôt.")
+      }
+      const q = await db().query("DELETE FROM service_categories WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      if (!q.rowCount) throw new HttpError(404, "category_not_found", "Catégorie introuvable.")
+      res.status(204).send()
+    }),
+  )
+
+  // --------------------------------------------------- vehicle categories --
+  r.get(
+    "/vehicle-categories",
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const q = await db().query(
+        "SELECT id, name, is_active, created_at, created_at AS updated_at FROM vehicle_categories WHERE organization_id=$1 ORDER BY name",
+        [t.organizationId],
+      )
+      res.json(q.rows)
+    }),
+  )
+
+  r.post(
+    "/vehicle-categories",
+    requireRole("owner", "manager"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const input = body(catalogValidators.category, req.body)
+      try {
+        const q = await db().query(
+          "INSERT INTO vehicle_categories(organization_id, name, is_active) VALUES($1,$2,COALESCE($3,true)) RETURNING id, name, is_active, created_at, created_at AS updated_at",
+          [t.organizationId, input.name, input.is_active ?? null],
+        )
+        res.status(201).json(q.rows[0])
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505") {
+          throw new HttpError(409, "category_exists", "Une catégorie portant ce nom existe déjà.")
+        }
+        throw error
+      }
+    }),
+  )
+
+  r.patch(
+    "/vehicle-categories/:id",
+    requireRole("owner", "manager"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const input = body(catalogValidators.category.partial(), req.body)
+      const oldQ = await db().query("SELECT * FROM vehicle_categories WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      if (!oldQ.rowCount) throw new HttpError(404, "category_not_found", "Catégorie introuvable.")
+      const merged = { ...oldQ.rows[0], ...input }
+      try {
+        const q = await db().query(
+          "UPDATE vehicle_categories SET name=$3, is_active=$4 WHERE id=$1 AND organization_id=$2 RETURNING id, name, is_active, created_at, created_at AS updated_at",
+          [id, t.organizationId, merged.name, merged.is_active],
+        )
+        res.json(q.rows[0])
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505") {
+          throw new HttpError(409, "category_exists", "Une catégorie portant ce nom existe déjà.")
+        }
+        throw error
+      }
+    }),
+  )
+
+  r.delete(
+    "/vehicle-categories/:id",
+    requireRole("owner", "manager"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const used = await db().query("SELECT 1 FROM washes WHERE vehicle_category_id=$1 AND organization_id=$2 LIMIT 1", [id, t.organizationId])
+      if (used.rowCount) {
+        throw new HttpError(409, "category_in_use", "Des lavages utilisent cette catégorie. Désactivez-la plutôt.")
+      }
+      const q = await db().query("DELETE FROM vehicle_categories WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      if (!q.rowCount) throw new HttpError(404, "category_not_found", "Catégorie introuvable.")
+      res.status(204).send()
+    }),
+  )
+
+  // ------------------------------------------------------------- services --
+  r.get(
+    "/services",
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const q = await db().query(
+        "SELECT id, name, description, category_id, price_cents, duration_minutes, is_active, created_at, updated_at FROM services WHERE organization_id=$1 ORDER BY name",
+        [t.organizationId],
+      )
+      res.json(q.rows)
+    }),
+  )
+
+  r.get(
+    "/services/:id",
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const q = await db().query("SELECT * FROM services WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      if (!q.rowCount) throw new HttpError(404, "service_not_found", "Prestation introuvable.")
+      res.json(q.rows[0])
+    }),
+  )
+
+  r.post(
+    "/services",
+    requireRole("owner", "manager"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const input = body(catalogValidators.service, req.body)
+      if (input.category_id) {
+        const categoryQ = await db().query("SELECT 1 FROM service_categories WHERE id=$1 AND organization_id=$2", [input.category_id, t.organizationId])
+        if (!categoryQ.rowCount) throw new HttpError(400, "invalid_category", "Catégorie de prestation invalide.")
+      }
+      const q = await db().query(
+        `INSERT INTO services(organization_id, name, description, category_id, price_cents, duration_minutes, is_active)
+         VALUES($1,$2,$3,$4,$5,$6,COALESCE($7,true)) RETURNING *`,
+        [t.organizationId, input.name, input.description ?? null, input.category_id ?? null, input.price_cents, input.duration_minutes ?? null, input.is_active ?? null],
+      )
+      res.status(201).json(q.rows[0])
+    }),
+  )
+
+  r.patch(
+    "/services/:id",
+    requireRole("owner", "manager"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const input = body(catalogValidators.service.partial(), req.body)
+      const oldQ = await db().query("SELECT * FROM services WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      if (!oldQ.rowCount) throw new HttpError(404, "service_not_found", "Prestation introuvable.")
+      if (input.category_id) {
+        const categoryQ = await db().query("SELECT 1 FROM service_categories WHERE id=$1 AND organization_id=$2", [input.category_id, t.organizationId])
+        if (!categoryQ.rowCount) throw new HttpError(400, "invalid_category", "Catégorie de prestation invalide.")
+      }
+      const merged = { ...oldQ.rows[0], ...input }
+      const q = await db().query(
+        `UPDATE services SET name=$3, description=$4, category_id=$5, price_cents=$6, duration_minutes=$7, is_active=$8, updated_at=now()
+         WHERE id=$1 AND organization_id=$2 RETURNING *`,
+        [id, t.organizationId, merged.name, merged.description, merged.category_id, merged.price_cents, merged.duration_minutes, merged.is_active],
+      )
+      res.json(q.rows[0])
+    }),
+  )
+
+  r.delete(
+    "/services/:id",
+    requireRole("owner", "manager"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const used = await db().query("SELECT 1 FROM wash_items WHERE service_id=$1 LIMIT 1", [id])
+      if (used.rowCount) {
+        throw new HttpError(409, "service_in_use", "Des lavages référencent cette prestation. Désactivez-la plutôt.")
+      }
+      const q = await db().query("DELETE FROM services WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      if (!q.rowCount) throw new HttpError(404, "service_not_found", "Prestation introuvable.")
+      res.status(204).send()
+    }),
+  )
+
+  // --------------------------------------------------------------- washes --
+  r.get(
+    "/washes",
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const q = await db().query(
+        `SELECT ${WASH_FIELDS} FROM washes WHERE organization_id=$1 ORDER BY created_at DESC LIMIT 200`,
+        [t.organizationId],
+      )
+      res.json(q.rows)
+    }),
+  )
+
+  r.get(
+    "/washes/:id",
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const pool = db()
+      const washQ = await pool.query(`SELECT ${WASH_FIELDS} FROM washes WHERE id=$1 AND organization_id=$2`, [id, t.organizationId])
+      if (!washQ.rowCount) throw new HttpError(404, "wash_not_found", "Lavage introuvable.")
+      const [items, workers, payments] = await Promise.all([
+        pool.query(
+          "SELECT id, service_id, service_name AS service_name_snapshot, unit_price_cents AS price_cents_snapshot, quantity, line_total_cents FROM wash_items WHERE wash_id=$1",
+          [id],
+        ),
+        pool.query(
+          `SELECT w.id, w.first_name, w.last_name, w.role FROM wash_assignments a
+           JOIN workers w ON w.id = a.worker_id WHERE a.wash_id=$1`,
+          [id],
+        ),
+        pool.query(
+          "SELECT id, amount_cents, method, status, reference, created_at AS received_at FROM payments WHERE wash_id=$1 ORDER BY created_at",
+          [id],
+        ),
+      ])
+      res.json({ wash: washQ.rows[0], items: items.rows, workers: workers.rows, payments: payments.rows })
+    }),
+  )
+
+  // POST /api/v1/washes — idempotent creation: items are priced server-side
+  // from the catalog, cash payments require an open cash session.
+  r.post(
+    "/washes",
+    requireRole("owner", "manager", "cashier"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const input = body(washValidators.create, req.body)
+      const pool = db()
+
+      await withIdempotency(pool, req, res, t.organizationId, fingerprint(input), async () => {
+        const client = await pool.connect()
+        try {
+          await client.query("BEGIN")
+
+          const siteQ = await client.query("SELECT id FROM sites WHERE id=$1 AND organization_id=$2 AND is_active", [input.site_id, t.organizationId])
+          if (!siteQ.rowCount) throw new HttpError(400, "invalid_site", "Station invalide.")
+
+          const categoryQ = await client.query(
+            "SELECT id FROM vehicle_categories WHERE id=$1 AND organization_id=$2 AND is_active",
+            [input.vehicle_category_id, t.organizationId],
+          )
+          if (!categoryQ.rowCount) throw new HttpError(400, "invalid_vehicle_category", "Catégorie de véhicule invalide.")
+
+          const serviceIds = input.items.map((item) => item.service_id)
+          const servicesQ = await client.query(
+            "SELECT id, name, price_cents FROM services WHERE organization_id=$1 AND id = ANY($2::uuid[]) AND is_active",
+            [t.organizationId, serviceIds],
+          )
+          if (servicesQ.rowCount !== new Set(serviceIds).size) {
+            throw new HttpError(400, "invalid_service", "Une prestation sélectionnée est invalide ou inactive.")
+          }
+          const serviceById = new Map(servicesQ.rows.map((row) => [row.id as string, row]))
+
+          if (input.worker_ids.length) {
+            const workersQ = await client.query(
+              "SELECT id FROM workers WHERE organization_id=$1 AND id = ANY($2::uuid[]) AND status='active'",
+              [t.organizationId, input.worker_ids],
+            )
+            if (workersQ.rowCount !== new Set(input.worker_ids).size) {
+              throw new HttpError(400, "invalid_worker", "Un travailleur sélectionné est invalide ou inactif.")
+            }
+          }
+
+          const totalCents = input.items.reduce((total, item) => {
+            const service = serviceById.get(item.service_id)!
+            return total + Number(service.price_cents) * item.quantity
+          }, 0)
+          if (input.amount_received_cents > totalCents) {
+            throw new HttpError(400, "amount_exceeds_total", "Le montant reçu dépasse le total du lavage.")
+          }
+
+          const isCash = input.payment_method === "cash" && input.amount_received_cents > 0
+          let cashSessionId: string | null = null
+          if (isCash) {
+            if (!input.cash_session_id) {
+              throw new HttpError(400, "cash_session_required", "Une session de caisse ouverte est requise pour un paiement en espèces.")
+            }
+            const sessionQ = await client.query(
+              "SELECT id FROM cash_sessions WHERE id=$1 AND organization_id=$2 AND site_id=$3 AND status='open' FOR UPDATE",
+              [input.cash_session_id, t.organizationId, input.site_id],
+            )
+            if (!sessionQ.rowCount) {
+              throw new HttpError(400, "cash_session_invalid", "Session de caisse introuvable, fermée ou d'une autre station.")
+            }
+            cashSessionId = sessionQ.rows[0].id
+          }
+
+          const paymentStatus =
+            input.amount_received_cents === 0 ? "unpaid" : input.amount_received_cents < totalCents ? "partial" : "paid"
+
+          const washQ = await client.query(
+            `INSERT INTO washes(organization_id, site_id, vehicle_category_id, status, payment_status, total_cents, payment_method, created_by, reference)
+             VALUES($1,$2,$3,'completed',$4,$5,$6,$7,
+               'LAV-' || to_char(now(),'YYYYMMDD') || '-' || upper(substr(md5(random()::text),1,6)))
+             RETURNING ${WASH_FIELDS}`,
+            [t.organizationId, input.site_id, input.vehicle_category_id, paymentStatus, totalCents, input.payment_method, t.userId],
+          )
+          const wash = washQ.rows[0]
+
+          for (const item of input.items) {
+            const service = serviceById.get(item.service_id)!
+            await client.query(
+              "INSERT INTO wash_items(wash_id, service_id, service_name, quantity, unit_price_cents, line_total_cents) VALUES($1,$2,$3,$4,$5,$6)",
+              [wash.id, item.service_id, service.name, item.quantity, service.price_cents, Number(service.price_cents) * item.quantity],
+            )
+          }
+          for (const workerId of new Set(input.worker_ids)) {
+            await client.query("INSERT INTO wash_assignments(wash_id, worker_id) VALUES($1,$2)", [wash.id, workerId])
+          }
+
+          if (input.amount_received_cents > 0) {
+            await client.query(
+              "INSERT INTO payments(organization_id, wash_id, method, amount_cents, status) VALUES($1,$2,$3,$4,$5)",
+              [t.organizationId, wash.id, input.payment_method, input.amount_received_cents, input.payment_method === "cash" ? "verified" : "pending"],
+            )
+          }
+          if (isCash && cashSessionId) {
+            await client.query(
+              `INSERT INTO cash_movements(organization_id, cash_session_id, type, amount_cents, source, description, wash_id, created_by)
+               VALUES($1,$2,'entry',$3,'wash',$4,$5,$6)`,
+              [t.organizationId, cashSessionId, input.amount_received_cents, `Encaissement lavage ${wash.reference}`, wash.id, t.userId],
+            )
+          }
+
+          await client.query(
+            "INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id) VALUES($1,$2,'wash.created','wash',$3)",
+            [t.organizationId, t.userId, wash.id],
+          )
+          await client.query("COMMIT")
+          return { status: 201, body: wash }
+        } catch (error) {
+          await client.query("ROLLBACK")
+          throw error
+        } finally {
+          client.release()
+        }
+      })
+    }),
+  )
+
+  // POST /api/v1/washes/:id/cancel — soft cancellation with mandatory reason.
+  r.post(
+    "/washes/:id/cancel",
+    requireRole("owner", "manager"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const input = body(washValidators.cancel, req.body)
+      const pool = db()
+      const client = await pool.connect()
+      try {
+        await client.query("BEGIN")
+        const washQ = await client.query(
+          "SELECT id, reference, status FROM washes WHERE id=$1 AND organization_id=$2 FOR UPDATE",
+          [id, t.organizationId],
+        )
+        if (!washQ.rowCount) throw new HttpError(404, "wash_not_found", "Lavage introuvable.")
+        if (washQ.rows[0].status === "cancelled") {
+          throw new HttpError(409, "wash_already_cancelled", "Ce lavage est déjà annulé.")
+        }
+
+        // Reverse the cash entry when the originating session is still open.
+        const movementQ = await client.query(
+          `SELECT m.cash_session_id, m.amount_cents FROM cash_movements m
+           JOIN cash_sessions s ON s.id = m.cash_session_id
+           WHERE m.wash_id=$1 AND m.type='entry' AND s.status='open'`,
+          [id],
+        )
+        for (const movement of movementQ.rows) {
+          await client.query(
+            `INSERT INTO cash_movements(organization_id, cash_session_id, type, amount_cents, source, description, wash_id, created_by)
+             VALUES($1,$2,'exit',$3,'wash_cancellation',$4,$5,$6)`,
+            [t.organizationId, movement.cash_session_id, movement.amount_cents, `Annulation lavage ${washQ.rows[0].reference}`, id, t.userId],
+          )
+        }
+
+        const hadPayments = await client.query("SELECT 1 FROM payments WHERE wash_id=$1 LIMIT 1", [id])
+        await client.query("UPDATE payments SET status='refunded' WHERE wash_id=$1", [id])
+
+        const q = await client.query(
+          `UPDATE washes SET status='cancelled', payment_status=CASE WHEN $4 THEN 'refunded' ELSE payment_status END,
+             cancelled_at=now(), cancelled_by=$3, cancellation_reason=$5
+           WHERE id=$1 AND organization_id=$2 RETURNING ${WASH_FIELDS}`,
+          [id, t.organizationId, t.userId, Boolean(hadPayments.rowCount), input.reason],
+        )
+        await client.query(
+          "INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, metadata) VALUES($1,$2,'wash.cancelled','wash',$3,$4)",
+          [t.organizationId, t.userId, id, JSON.stringify({ reason: input.reason })],
+        )
+        await client.query("COMMIT")
+        res.json(q.rows[0])
+      } catch (error) {
+        await client.query("ROLLBACK")
+        throw error
+      } finally {
+        client.release()
+      }
+    }),
+  )
+
+  return r
 }
