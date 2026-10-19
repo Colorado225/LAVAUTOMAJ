@@ -14,15 +14,20 @@ import { apiFetch } from "@/lib/api"
 
 const REMEMBERED_EMAIL_KEY = "washpilot.remembered-email"
 
-type SecondFactorStrategy = "phone_code" | "totp" | "backup_code"
+type SecondFactorStrategy = "email_code" | "phone_code" | "totp" | "backup_code"
 
 interface SecondFactorState {
   strategy: SecondFactorStrategy
-  /** Masked identifier (e.g. +225 ••• 45) shown to the user for phone codes. */
+  /** Masked identifier (e.g. d•••@gmail.com, +225 ••• 45) shown to the user. */
   detail?: string
 }
 
 const SECOND_FACTOR_LABELS: Record<SecondFactorStrategy, { title: string; hint: string; placeholder: string }> = {
+  email_code: {
+    title: "Code reçu par e-mail",
+    hint: "Par sécurité, un code de vérification vient d’être envoyé à votre adresse e-mail.",
+    placeholder: "Code à 6 chiffres",
+  },
   phone_code: {
     title: "Code reçu par SMS",
     hint: "Saisissez le code de vérification envoyé sur votre téléphone.",
@@ -210,6 +215,16 @@ export default function SignInPage() {
     if (!signIn) return
     const factors = signIn.supportedSecondFactors ?? []
 
+    // Clerk peut exiger un code e-mail à la connexion (nouvel appareil), même
+    // sans MFA « classique » activée sur l'instance.
+    const emailFactor = factors.find((factor) => factor.strategy === "email_code")
+    if (emailFactor && emailFactor.strategy === "email_code") {
+      await signIn.prepareSecondFactor({ strategy: "email_code", emailAddressId: emailFactor.emailAddressId })
+      setSecondFactor({ strategy: "email_code", detail: emailFactor.safeIdentifier })
+      setSecondFactorCode("")
+      return
+    }
+
     const phoneFactor = factors.find((factor) => factor.strategy === "phone_code")
     if (phoneFactor && phoneFactor.strategy === "phone_code") {
       await signIn.prepareSecondFactor({ strategy: "phone_code", phoneNumberId: phoneFactor.phoneNumberId })
@@ -227,8 +242,9 @@ export default function SignInPage() {
       setSecondFactorCode("")
       return
     }
+    const strategies = factors.map((factor) => factor.strategy).join(", ") || "aucune"
     setError(
-      "Ce compte exige une double vérification dont la méthode n’est pas prise en charge ici. Désactivez l’authentification multifacteur dans votre tableau de bord Clerk ou contactez l’administrateur.",
+      `Ce compte exige une double vérification dont la méthode n’est pas prise en charge ici (méthodes proposées : ${strategies}). Contactez l’administrateur de votre station.`,
     )
   }
 
@@ -246,11 +262,13 @@ export default function SignInPage() {
     setIsSubmitting(true)
     try {
       const attempt =
-        secondFactor.strategy === "phone_code"
-          ? await signIn.attemptSecondFactor({ strategy: "phone_code", code })
-          : secondFactor.strategy === "totp"
-            ? await signIn.attemptSecondFactor({ strategy: "totp", code })
-            : await signIn.attemptSecondFactor({ strategy: "backup_code", code })
+        secondFactor.strategy === "email_code"
+          ? await signIn.attemptSecondFactor({ strategy: "email_code", code })
+          : secondFactor.strategy === "phone_code"
+            ? await signIn.attemptSecondFactor({ strategy: "phone_code", code })
+            : secondFactor.strategy === "totp"
+              ? await signIn.attemptSecondFactor({ strategy: "totp", code })
+              : await signIn.attemptSecondFactor({ strategy: "backup_code", code })
 
       if (attempt.status === "complete" && attempt.createdSessionId) {
         await finalizeSession(attempt.createdSessionId)
@@ -264,7 +282,7 @@ export default function SignInPage() {
     }
   }
 
-  async function resendPhoneCode() {
+  async function resendSecondFactorCode() {
     setError("")
     try {
       await startSecondFactor()
@@ -299,8 +317,8 @@ export default function SignInPage() {
           <AuthNotice tone="info">
             <strong>Double vérification requise.</strong>{" "}
             {SECOND_FACTOR_LABELS[secondFactor.strategy].hint}
-            {secondFactor.strategy === "phone_code" && secondFactor.detail
-              ? ` (envoyé au ${secondFactor.detail})`
+            {(secondFactor.strategy === "phone_code" || secondFactor.strategy === "email_code") && secondFactor.detail
+              ? ` (envoyé à ${secondFactor.detail})`
               : ""}
           </AuthNotice>
 
@@ -326,10 +344,10 @@ export default function SignInPage() {
           </AuthSubmitButton>
 
           <div className="flex items-center justify-between text-xs">
-            {secondFactor.strategy === "phone_code" ? (
+            {secondFactor.strategy === "phone_code" || secondFactor.strategy === "email_code" ? (
               <button
                 type="button"
-                onClick={resendPhoneCode}
+                onClick={resendSecondFactorCode}
                 disabled={isSubmitting}
                 className="font-semibold text-blue-700 transition-colors hover:text-blue-900 hover:underline hover:underline-offset-4 disabled:opacity-60"
               >
