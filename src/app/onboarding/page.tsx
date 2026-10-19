@@ -3,7 +3,7 @@ import { OnboardingWizard } from "./components/onboarding-wizard"
 import { LoadingSpinner } from "@/components/ui/loading-spinner"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { Button } from "@/components/ui/button"
-import { useAuth, useClerk } from "@clerk/clerk-react"
+import { useAuth } from "@/lib/auth"
 import { useNavigate } from "react-router-dom"
 import type { OnboardingProgress } from "@/lib/onboarding-api"
 
@@ -13,8 +13,7 @@ import type { OnboardingProgress } from "@/lib/onboarding-api"
  * se déconnecter ne perd jamais la progression.
  */
 export default function OnboardingPage() {
-  const { isSignedIn } = useAuth()
-  const { signOut } = useClerk()
+  const { isSignedIn, signOut } = useAuth()
   const navigate = useNavigate()
   const {
     data: progress,

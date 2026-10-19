@@ -26,11 +26,20 @@ CREATE TABLE IF NOT EXISTS plans (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), code text NOT NULL UNIQUE, name text NOT NULL,
  max_users integer, max_workers integer, max_sites integer, features jsonb NOT NULL DEFAULT '{}'::jsonb
 );
-INSERT INTO plans(code,name,max_users,max_workers,max_sites,features) VALUES
- ('free','Free',1,3,1,'{"reports.advanced":false,"reports.export":false,"sites.multiple":false}'::jsonb),
- ('pro','Pro',10,20,1,'{"reports.advanced":true,"reports.export":true,"sites.multiple":false}'::jsonb),
- ('business','Business',NULL,NULL,NULL,'{"reports.advanced":true,"reports.export":true,"sites.multiple":true}'::jsonb)
-ON CONFLICT(code) DO NOTHING;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS description text;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS price_cents integer NOT NULL DEFAULT 0;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS billing_cycle text NOT NULL DEFAULT 'monthly';
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_services integer;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS sort_order integer NOT NULL DEFAULT 0;
+INSERT INTO plans(code,name,description,price_cents,billing_cycle,max_users,max_workers,max_sites,max_services,sort_order,features) VALUES
+ ('free','Gratuit','Pour démarrer : une station, une petite équipe.',0,'monthly',1,3,1,10,1,'{"reports.advanced":false,"reports.export":false,"sites.multiple":false}'::jsonb),
+ ('pro','Pro','Pour les stations en croissance : rapports avancés et exports.',1000000,'monthly',10,20,1,NULL,2,'{"reports.advanced":true,"reports.export":true,"sites.multiple":false}'::jsonb),
+ ('business','Business','Multi-stations, équipe illimitée, analyses consolidées.',2500000,'monthly',NULL,NULL,NULL,NULL,3,'{"reports.advanced":true,"reports.export":true,"sites.multiple":true}'::jsonb)
+ON CONFLICT(code) DO UPDATE SET
+ name=EXCLUDED.name, description=EXCLUDED.description, price_cents=EXCLUDED.price_cents,
+ billing_cycle=EXCLUDED.billing_cycle, max_users=EXCLUDED.max_users, max_workers=EXCLUDED.max_workers,
+ max_sites=EXCLUDED.max_sites, max_services=EXCLUDED.max_services, sort_order=EXCLUDED.sort_order,
+ features=EXCLUDED.features;
 CREATE TABLE IF NOT EXISTS subscriptions (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL UNIQUE REFERENCES organizations(id),
  plan_id uuid NOT NULL REFERENCES plans(id), status text NOT NULL DEFAULT 'trialing',
@@ -47,6 +56,10 @@ CREATE TABLE IF NOT EXISTS sites (
  name text NOT NULL, city text NOT NULL, address text, phone text, is_active boolean NOT NULL DEFAULT true,
  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS email text;
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS description text;
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS logo_url text;
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS slug text;
 CREATE TABLE IF NOT EXISTS onboarding_progress (
   organization_id uuid PRIMARY KEY REFERENCES organizations(id), current_stage text NOT NULL DEFAULT 'station',
   station_data jsonb, services_data jsonb, workers_data jsonb, plan_code text, draft boolean NOT NULL DEFAULT false,
@@ -84,6 +97,8 @@ CREATE TABLE IF NOT EXISTS workers (
  role text NOT NULL DEFAULT 'car_washer', custom_role text, status text NOT NULL DEFAULT 'active',
  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS district text;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS joined_at date;
 CREATE TABLE IF NOT EXISTS customers (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  full_name text NOT NULL, phone text, created_at timestamptz NOT NULL DEFAULT now()
@@ -96,6 +111,10 @@ CREATE TABLE IF NOT EXISTS washes (
  created_by uuid REFERENCES users(id), cancelled_at timestamptz, cancellation_reason text,
  created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE washes ADD COLUMN IF NOT EXISTS reference text;
+ALTER TABLE washes ADD COLUMN IF NOT EXISTS payment_status text NOT NULL DEFAULT 'pending';
+ALTER TABLE washes ADD COLUMN IF NOT EXISTS cancelled_by uuid REFERENCES users(id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_washes_org_reference ON washes(organization_id,reference);
 CREATE TABLE IF NOT EXISTS wash_items (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), wash_id uuid NOT NULL REFERENCES washes(id),
  service_id uuid REFERENCES services(id), service_name text NOT NULL, quantity integer NOT NULL CHECK(quantity > 0),
@@ -109,6 +128,7 @@ CREATE TABLE IF NOT EXISTS payments (
  wash_id uuid NOT NULL REFERENCES washes(id), method text NOT NULL, amount_cents integer NOT NULL CHECK(amount_cents >= 0),
  status text NOT NULL DEFAULT 'completed', created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS reference text;
 CREATE TABLE IF NOT EXISTS cash_sessions (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  site_id uuid NOT NULL REFERENCES sites(id), opened_by uuid REFERENCES users(id), closed_by uuid REFERENCES users(id),
@@ -116,6 +136,7 @@ CREATE TABLE IF NOT EXISTS cash_sessions (
  expected_amount_cents integer, status text NOT NULL DEFAULT 'open' CHECK(status IN ('open','closed')),
  opened_at timestamptz NOT NULL DEFAULT now(), closed_at timestamptz
 );
+ALTER TABLE cash_sessions ADD COLUMN IF NOT EXISTS discrepancy_reason text;
 CREATE TABLE IF NOT EXISTS cash_movements (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  cash_session_id uuid NOT NULL REFERENCES cash_sessions(id), type text NOT NULL CHECK(type IN ('entry','exit')),
@@ -132,6 +153,10 @@ CREATE TABLE IF NOT EXISTS expenses (
  payment_method text NOT NULL, cash_session_id uuid REFERENCES cash_sessions(id), description text,
  status text NOT NULL DEFAULT 'completed', created_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE expenses ALTER COLUMN site_id DROP NOT NULL;
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS beneficiary text;
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS reference text;
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS expense_date date NOT NULL DEFAULT CURRENT_DATE;
 CREATE TABLE IF NOT EXISTS idempotency_keys (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  key text NOT NULL, fingerprint text NOT NULL, response_status integer, response_body jsonb,
@@ -150,6 +175,29 @@ CREATE INDEX IF NOT EXISTS idx_services_org ON services(organization_id);
 CREATE INDEX IF NOT EXISTS idx_washes_org_created ON washes(organization_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_expenses_org_created ON expenses(organization_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workers_org_status ON workers(organization_id,status);
+CREATE INDEX IF NOT EXISTS idx_payments_org_created ON payments(organization_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cash_movements_session ON cash_movements(cash_session_id);
+CREATE INDEX IF NOT EXISTS idx_cash_sessions_org_site ON cash_sessions(organization_id,site_id,status);
+CREATE INDEX IF NOT EXISTS idx_wash_items_wash ON wash_items(wash_id);
+-- Authentification maison (e-mail + mot de passe, sessions en base) ---------
+ALTER TABLE users ALTER COLUMN clerk_user_id DROP NOT NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash text;
+ALTER TABLE organizations ALTER COLUMN clerk_org_id DROP NOT NULL;
+DO $do$ BEGIN
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower(email));
+EXCEPTION WHEN others THEN
+  RAISE NOTICE 'idx_users_email_lower non créé (e-mails en double existants)';
+END $do$;
+CREATE TABLE IF NOT EXISTS auth_sessions (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ token_hash text NOT NULL UNIQUE,
+ expires_at timestamptz NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ last_used_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
 `
 
 export async function initDatabaseSchema(): Promise<boolean> {

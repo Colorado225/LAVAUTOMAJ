@@ -3,7 +3,7 @@
 import { useMemo, useState, type FormEvent } from "react"
 import { Link } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { apiFetch, getClerkToken, useApi } from "@/lib/api"
+import { apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -194,7 +194,6 @@ export default function WashesPage() {
     setIdempotencyKey(requestKey)
     setSaving(true)
     try {
-      const token = await getClerkToken()
       const response = await apiFetch(
         "/api/v1/washes",
         {
@@ -212,8 +211,7 @@ export default function WashesPage() {
             amount_received_cents: amountReceivedCents,
             ...(cashNeedsSession && cashSession ? { cash_session_id: cashSession.id } : {}),
           }),
-        },
-        token
+        }
       )
       if (!response.ok) {
         throw new Error((await response.text()) || `Erreur ${response.status}`)

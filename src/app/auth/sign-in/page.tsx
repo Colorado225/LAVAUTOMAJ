@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react"
-import { ArrowRight, KeyRound, LogOut, Mail } from "lucide-react"
-import { useAuth, useClerk, useSignIn, useUser } from "@clerk/clerk-react"
+import { ArrowRight, KeyRound, Mail } from "lucide-react"
 import { Link, useNavigate } from "react-router-dom"
+import { useAuth } from "@/lib/auth"
 import { AuthPageLayout } from "@/components/auth/auth-page-layout"
 import {
   AuthField,
@@ -9,12 +9,10 @@ import {
   AuthSubmitButton,
   PasswordVisibilityButton,
 } from "@/components/auth/auth-form-elements"
-import { getAuthErrorMessage, isSessionExistsError } from "@/components/auth/auth-errors"
-import { apiFetch } from "@/lib/api"
 
 const REMEMBERED_EMAIL_KEY = "washpilot.remembered-email"
 
-function getInitialEmail() {
+function getInitialEmail(): string {
   if (typeof window === "undefined") return ""
   try {
     return window.localStorage.getItem(REMEMBERED_EMAIL_KEY) ?? ""
@@ -25,103 +23,38 @@ function getInitialEmail() {
 
 function persistRememberedEmail(email: string, remember: boolean) {
   try {
-    if (remember) {
-      window.localStorage.setItem(REMEMBERED_EMAIL_KEY, email)
-    } else {
-      window.localStorage.removeItem(REMEMBERED_EMAIL_KEY)
-    }
+    if (remember) window.localStorage.setItem(REMEMBERED_EMAIL_KEY, email)
+    else window.localStorage.removeItem(REMEMBERED_EMAIL_KEY)
   } catch {
-    // Sign-in should keep working if browser storage is unavailable.
+    // Stockage local indisponible : non bloquant.
   }
 }
 
 export default function SignInPage() {
-  const { isLoaded: authLoaded, isSignedIn } = useAuth()
-  const { user } = useUser()
-  const { signOut } = useClerk()
-  const { isLoaded, signIn, setActive } = useSignIn()
+  const { signIn } = useAuth()
   const navigate = useNavigate()
   const [email, setEmail] = useState(getInitialEmail)
   const [password, setPassword] = useState("")
   const [rememberMe, setRememberMe] = useState(() => Boolean(getInitialEmail()))
   const [showPassword, setShowPassword] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [isDisconnecting, setIsDisconnecting] = useState(false)
   const [error, setError] = useState("")
-
-  const handleDisconnect = async () => {
-    setIsDisconnecting(true)
-    try {
-      await signOut()
-      setError("")
-    } catch (signOutError) {
-      setError(getAuthErrorMessage(signOutError, "La déconnexion a échoué. Réessayez pour changer de compte."))
-    } finally {
-      setIsDisconnecting(false)
-    }
-  }
-
-  if (authLoaded && isSignedIn) {
-    return (
-      <AuthPageLayout
-        eyebrow="SESSION ACTIVE"
-        title="Vous êtes déjà connecté"
-        description="Une session est déjà active avec un compte existant sur cet appareil."
-        imageSrc="/images/wash-car.jpg"
-        imageAlt="Station de lavage"
-        panelTitle="Votre station, à son meilleur."
-        panelDescription="Passez à votre tableau de bord ou changez de compte."
-        topAction={
-          <button
-            type="button"
-            onClick={handleDisconnect}
-            className="flex items-center gap-1.5 font-bold text-red-600 transition hover:text-red-800"
-          >
-            <LogOut className="size-4" /> Se déconnecter
-          </button>
-        }
-      >
-        <div className="space-y-5">
-          <AuthNotice tone="info">
-            Connecté avec le compte :{" "}
-            <strong>{user?.primaryEmailAddress?.emailAddress || "Utilisateur actif"}</strong>
-          </AuthNotice>
-          {error ? <AuthNotice>{error}</AuthNotice> : null}
-
-          <div className="flex flex-col gap-3 pt-2">
-            <Link
-              to="/dashboard"
-              className="flex h-[50px] w-full items-center justify-center gap-2 rounded-xl bg-[#123d79] px-5 text-sm font-bold text-white shadow-lg shadow-blue-900/15 transition hover:bg-[#0d3268]"
-            >
-              Accéder au tableau de bord <ArrowRight className="size-4" />
-            </Link>
-            <button
-              type="button"
-              onClick={handleDisconnect}
-              disabled={isDisconnecting}
-              className="flex h-[48px] w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-            >
-              <LogOut className="size-4" />
-              {isDisconnecting ? "Déconnexion…" : "Se déconnecter pour changer de compte"}
-            </button>
-          </div>
-        </div>
-      </AuthPageLayout>
-    )
-  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError("")
-    if (!isLoaded) return
 
-    const normalizedEmail = email.trim()
-    if (!normalizedEmail || !password) {
-      setError("Saisissez votre adresse e-mail et votre mot de passe.")
+    const normalizedEmail = email.trim().toLowerCase()
+    if (!normalizedEmail) {
+      setError("Saisissez votre adresse e-mail.")
       return
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       setError("Saisissez une adresse e-mail valide.")
+      return
+    }
+    if (!password) {
+      setError("Saisissez votre mot de passe.")
       return
     }
 
@@ -129,40 +62,10 @@ export default function SignInPage() {
 
     setIsSubmitting(true)
     try {
-      const attempt = await signIn.create({
-        strategy: "password",
-        identifier: normalizedEmail,
-        password,
-      })
-
-      if (attempt.status !== "complete" || !attempt.createdSessionId) {
-        setError(
-          attempt.status === "needs_second_factor"
-            ? "Une vérification supplémentaire est activée pour ce compte. Contactez l’administrateur de votre station pour finaliser l’accès."
-            : "La connexion n’a pas pu être finalisée. Vérifiez vos identifiants puis réessayez.",
-        )
-        return
-      }
-
-      await setActive({ session: attempt.createdSessionId })
-
-      // Neon reads the user identity and active Clerk organization from the
-      // verified session; browser-supplied identity fields are never trusted.
-      try {
-        const syncResponse = await apiFetch("/api/v1/auth/sync", { method: "POST" })
-        if (!syncResponse.ok) {
-          console.warn("Clerk-to-Neon sync will be retried on the next API request:", await syncResponse.text())
-        }
-      } catch (syncError) {
-        console.warn("Clerk-to-Neon sync deferred:", syncError)
-      }
-
+      await signIn(normalizedEmail, password)
       navigate("/dashboard", { replace: true })
     } catch (authError) {
-      // En cas de session déjà active, on affiche le message avec un bouton
-      // de déconnexion explicite (rendu sous le formulaire) plutôt qu'une
-      // déconnexion silencieuse qui surprendrait l'utilisateur.
-      setError(getAuthErrorMessage(authError, "Connexion impossible pour le moment. Réessayez dans quelques instants."))
+      setError(authError instanceof Error ? authError.message : "Connexion impossible pour le moment. Réessayez.")
     } finally {
       setIsSubmitting(false)
     }
@@ -247,24 +150,9 @@ export default function SignInPage() {
           </span>
         </label>
 
-        {error ? (
-          <div className="space-y-2">
-            <AuthNotice>{error}</AuthNotice>
-            {isSessionExistsError(error) ? (
-              <button
-                type="button"
-                onClick={handleDisconnect}
-                disabled={isDisconnecting}
-                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-red-50 py-2 text-xs font-bold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <LogOut className="size-3.5" />
-                {isDisconnecting ? "Déconnexion…" : "Se déconnecter de la session active pour continuer"}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
+        {error ? <AuthNotice>{error}</AuthNotice> : null}
 
-        <AuthSubmitButton pending={isSubmitting} disabled={!isLoaded}>
+        <AuthSubmitButton pending={isSubmitting}>
           Se connecter <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" aria-hidden="true" />
         </AuthSubmitButton>
       </form>

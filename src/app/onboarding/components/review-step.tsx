@@ -11,8 +11,7 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { LoadingSpinner } from "@/components/ui/loading-spinner"
 import { PartyPopper } from "lucide-react"
-import { useApi, getClerkToken } from "@/lib/api"
-import { API_BASE_URL } from "@/lib/api"
+import { useApi, apiFetch } from "@/lib/api"
 import {
   type OnboardingSummary,
   type StationData,
@@ -46,14 +45,7 @@ export function ReviewStep({ onQuit, onCompleted }: ReviewStepProps) {
     setServerError(null)
     try {
       // Protection double soumission côté UI : un seul POST à la fois.
-      const token = await getClerkToken()
-      const res = await fetch(`${API_BASE_URL}/api/v1/onboarding/confirm`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      })
+      const res = await apiFetch("/api/v1/onboarding/confirm", { method: "POST" })
       if (!res.ok && res.status !== 200 && res.status !== 201) {
         const text = await res.text()
         throw new Error(text || `Erreur ${res.status}`)

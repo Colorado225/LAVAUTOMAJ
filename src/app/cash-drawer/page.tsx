@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { useApi, apiFetch, getClerkToken } from "@/lib/api"
+import { useApi, apiFetch } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import {
   Table,
@@ -104,15 +104,13 @@ export default function CashDrawerPage() {
     setSaving(true)
     setMutationError(null)
     try {
-      const token = await getClerkToken()
       const response = await apiFetch(
         "/api/v1/cash-sessions/open",
         {
           method: "POST",
           headers: { "Idempotency-Key": requestKey },
           body: JSON.stringify(body),
-        },
-        token
+        }
       )
       if (!response.ok) {
         throw new Error((await response.text()) || `Erreur ${response.status}`)
@@ -151,15 +149,13 @@ export default function CashDrawerPage() {
     setSaving(true)
     setMutationError(null)
     try {
-      const token = await getClerkToken()
       const response = await apiFetch(
         `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/movements`,
         {
           method: "POST",
           headers: { "Idempotency-Key": requestKey },
           body: JSON.stringify(body),
-        },
-        token
+        }
       )
       if (!response.ok) {
         throw new Error((await response.text()) || `Erreur ${response.status}`)
@@ -192,7 +188,6 @@ export default function CashDrawerPage() {
     setSaving(true)
     setMutationError(null)
     try {
-      const token = await getClerkToken()
       const response = await apiFetch(
         `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/close`,
         {
@@ -201,8 +196,7 @@ export default function CashDrawerPage() {
             counted_amount_cents: countedAmountCents,
             discrepancy_reason: discrepancyReason.trim() || null,
           }),
-        },
-        token
+        }
       )
       if (!response.ok) {
         throw new Error((await response.text()) || `Erreur ${response.status}`)

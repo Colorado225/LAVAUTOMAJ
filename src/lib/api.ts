@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/clerk-react"
 import { useEffect, useState } from "react"
 
 const configuredApiBase = (import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "")
@@ -8,40 +7,42 @@ const API_BASE_URL = /^(https?:\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(
   ? ""
   : configuredApiBase
 
-let clerkTokenGetter: (() => Promise<string | null>) | null = null
-
-/** Keep non-hook API helpers connected to the same Clerk session as React hooks. */
-export function ClerkTokenBridge() {
-  const { getToken, isLoaded } = useAuth()
-
-  useEffect(() => {
-    if (!isLoaded) return
-    const getter = () => getToken()
-    clerkTokenGetter = getter
-    return () => {
-      if (clerkTokenGetter === getter) clerkTokenGetter = null
-    }
-  }, [getToken, isLoaded])
-
-  return null
-}
-
-/** Get a current Clerk session token for API calls made outside a React hook. */
-export async function getClerkToken(): Promise<string | null> {
-  if (clerkTokenGetter) return clerkTokenGetter()
-
-  // Clerk also exposes its browser instance on window in supported deployments;
-  // this is a fallback for helpers invoked during provider startup only.
-  if (typeof window !== "undefined") {
-    const clerk = (window as unknown as {
-      Clerk?: { session?: { getToken: () => Promise<string | null> } }
-    }).Clerk
-    if (clerk?.session) return clerk.session.getToken()
-  }
-  return null
-}
-
 export { API_BASE_URL }
+
+// ---------------------------------------------------------------------------
+// Jeton de session de secours : le cookie httpOnly reste la voie principale,
+// mais certains contextes (aperçu intégré dans une iframe) bloquent les
+// cookies tiers. Le serveur accepte alors `Authorization: Bearer <jeton>`.
+// ---------------------------------------------------------------------------
+const SESSION_TOKEN_KEY = "washpilot.session-token"
+
+// Repli ultime : certains contextes intégrés (iframe) bloquent cookies ET
+// localStorage. Le jeton vit alors en mémoire pour la durée de la page.
+let inMemorySessionToken: string | null = null
+
+export function getStoredSessionToken(): string | null {
+  if (inMemorySessionToken) return inMemorySessionToken
+  try {
+    return window.localStorage.getItem(SESSION_TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function storeSessionToken(token: string | null): void {
+  inMemorySessionToken = token
+  try {
+    if (token) window.localStorage.setItem(SESSION_TOKEN_KEY, token)
+    else window.localStorage.removeItem(SESSION_TOKEN_KEY)
+  } catch {
+    // Stockage local indisponible : le jeton en mémoire prend le relais.
+  }
+}
+
+export function authHeaders(): Record<string, string> {
+  const token = getStoredSessionToken()
+  return token ? { Authorization: `Bearer ${token}`, "X-Session-Token": token } : {}
+}
 
 export interface UseApiResult<T> {
   data: T | null
@@ -62,14 +63,14 @@ export async function apiErrorMessage(response: Response): Promise<string> {
 
 const responseError = apiErrorMessage
 
+/** Fetch an API resource; the session cookie authenticates the request. */
 export function useApi<T = unknown>(path: string): UseApiResult<T> {
-  const { getToken, isLoaded } = useAuth()
   const [data, setData] = useState<T | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!isLoaded || !path) return
+    if (!path) return
 
     const controller = new AbortController()
 
@@ -78,16 +79,10 @@ export function useApi<T = unknown>(path: string): UseApiResult<T> {
       setData(null)
       setError(null)
       try {
-        const token = await getToken()
-        if (controller.signal.aborted) return
-
-        const headers = new Headers({ Accept: "application/json" })
-        if (token) headers.set("Authorization", `Bearer ${token}`)
-
         const res = await fetch(`${API_BASE_URL}${path}`, {
-          headers,
+          headers: new Headers({ Accept: "application/json", ...authHeaders() }),
           signal: controller.signal,
-          credentials: "same-origin",
+          credentials: "include",
         })
         if (controller.signal.aborted) return
         if (!res.ok) throw new Error(await responseError(res))
@@ -109,32 +104,29 @@ export function useApi<T = unknown>(path: string): UseApiResult<T> {
     })()
 
     return () => controller.abort()
-  }, [path, getToken, isLoaded])
+  }, [path])
 
   return {
-    data: isLoaded && path ? data : null,
-    loading: !isLoaded ? true : path ? loading : false,
-    error: isLoaded && path ? error : null,
+    data: path ? data : null,
+    loading: path ? loading : false,
+    error: path ? error : null,
   }
 }
 
-export async function apiFetch(
-  path: string,
-  options: RequestInit = {},
-  token?: string | null
-): Promise<Response> {
+/** Authenticated fetch helper — the httpOnly session cookie is sent automatically. */
+export async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
   const headers = new Headers(options.headers)
   headers.set("Accept", "application/json")
   if (options.body !== undefined && !headers.has("Content-Type") && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json")
   }
-
-  const resolvedToken = token === undefined ? await getClerkToken() : token
-  if (resolvedToken) headers.set("Authorization", `Bearer ${resolvedToken}`)
+  const token = getStoredSessionToken()
+  if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`)
+  if (token && !headers.has("X-Session-Token")) headers.set("X-Session-Token", token)
 
   return fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers,
-    credentials: options.credentials ?? "same-origin",
+    credentials: options.credentials ?? "include",
   })
 }

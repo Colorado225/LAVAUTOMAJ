@@ -200,7 +200,7 @@ export default function TeamPage() {
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
           <div>
             <p className="text-sm text-muted-foreground">
-              Les travailleurs n’ont pas besoin d’un compte de connexion Clerk.
+              Les travailleurs n’ont pas besoin d’un compte de connexion.
             </p>
           </div>
           {canManage && (
@@ -330,7 +330,7 @@ export default function TeamPage() {
         <Card>
           <CardHeader>
             <CardTitle>Comptes ayant accès à WashPilot</CardTitle>
-            <CardDescription>Utilisateurs authentifiés via Clerk et synchronisés dans cette organisation.</CardDescription>
+            <CardDescription>Utilisateurs disposant d’un compte de connexion dans cette organisation.</CardDescription>
           </CardHeader>
           <CardContent>
             {accountsError && <p role="alert" className="mb-3 text-sm text-destructive">{accountsError}</p>}
@@ -354,7 +354,7 @@ export default function TeamPage() {
             ) : !accountsError ? (
               <p className="text-sm text-muted-foreground">Aucun compte d’accès synchronisé.</p>
             ) : null}
-            <p className="mt-3 text-xs text-muted-foreground">Les connexions et invitations de comptes sont gérées par Clerk. Cette liste est en lecture seule.</p>
+            <p className="mt-3 text-xs text-muted-foreground">Cette liste est en lecture seule. La gestion des invitations arrive prochainement.</p>
           </CardContent>
         </Card>
       </div>

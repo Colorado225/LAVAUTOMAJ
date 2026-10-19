@@ -2,13 +2,12 @@
 
 import {
   CreditCard,
-  Building2,
   EllipsisVertical,
   LogOut,
   CircleUser,
 } from "lucide-react"
 import { Link, useNavigate } from "react-router-dom"
-import { useClerk, useUser } from "@clerk/clerk-react"
+import { useAuth } from "@/lib/auth"
 
 import { Logo } from "@/components/logo"
 import {
@@ -37,19 +36,14 @@ export function NavUser({
   }
 }) {
   const { isMobile } = useSidebar()
-  const { signOut } = useClerk()
-  const { user: clerkUser } = useUser()
+  const { signOut, user } = useAuth()
   const navigate = useNavigate()
 
   const displayName =
-    clerkUser?.fullName ||
-    clerkUser?.firstName ||
+    [user?.firstName, user?.lastName].filter(Boolean).join(" ") ||
     initialUser?.name ||
     "Utilisateur"
-  const displayEmail =
-    clerkUser?.primaryEmailAddress?.emailAddress ||
-    initialUser?.email ||
-    ""
+  const displayEmail = user?.email || initialUser?.email || ""
 
   const handleSignOut = async () => {
     try {
@@ -111,13 +105,6 @@ export function NavUser({
               >
                 <CircleUser className="size-4 mr-2" />
                 Mon compte
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="cursor-pointer"
-                render={<Link to="/auth/select-organization" />}
-              >
-                <Building2 className="size-4 mr-2" />
-                Changer d'organisation
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="cursor-pointer"

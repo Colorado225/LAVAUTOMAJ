@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useAuth } from '@clerk/clerk-react'
+import { apiFetch, apiErrorMessage } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { CarFront, DollarSign } from 'lucide-react'
 
@@ -16,7 +16,6 @@ const formatXOF = (cents: number) =>
     })}`
 
 export function DashboardMetrics() {
-    const { getToken } = useAuth()
     const [data, setData] = useState<DashboardMetricsData | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -24,20 +23,10 @@ export function DashboardMetrics() {
     useEffect(() => {
         const fetchMetrics = async () => {
             try {
-                const token = await getToken()
-                if (!token) {
-                    throw new Error('Not authenticated')
-                }
-
-                const response = await fetch('/api/v1/dashboard/metrics', {
-                    headers: {
-                        'Content-Type': 'application/json',
-                        Authorization: `Bearer ${token}`,
-                    },
-                })
+                const response = await apiFetch('/api/v1/dashboard/metrics')
 
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`)
+                    throw new Error(await apiErrorMessage(response))
                 }
 
                 const result: DashboardMetricsData = await response.json()
@@ -50,7 +39,7 @@ export function DashboardMetrics() {
         }
 
         fetchMetrics()
-    }, [getToken])
+    }, [])
 
     if (loading) {
         return (
