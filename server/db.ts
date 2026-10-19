@@ -1,8 +1,37 @@
 import pg from "pg";
+import { PGlite } from "@electric-sql/pglite";
 import { env } from "./env.ts";
+import { hashPassword } from "./auth.ts";
 
 const { Pool } = pg;
+
+export interface DbQueryResult<R = Record<string, unknown>> {
+  rows: R[];
+  rowCount: number;
+  fields: unknown[];
+  command: string;
+  affectedRows?: number;
+}
+
+export interface DbClient {
+  query: <R = Record<string, unknown>>(
+    sqlOrConfig: string | { text?: string; sql?: string; values?: unknown[] },
+    params?: unknown[],
+  ) => Promise<DbQueryResult<R>>;
+  release: () => void;
+}
+
+export interface DbPool {
+  query: <R = Record<string, unknown>>(
+    sqlOrConfig: string | { text?: string; sql?: string; values?: unknown[] },
+    params?: unknown[],
+  ) => Promise<DbQueryResult<R>>;
+  connect: () => Promise<DbClient>;
+  end: () => Promise<void>;
+}
+
 let pool: pg.Pool | null = null;
+let pgliteInstance: PGlite | null = null;
 let ready = false;
 
 export function getPool(): pg.Pool | null {
@@ -13,7 +42,6 @@ export function isDatabaseReady(): boolean {
 }
 
 const schemaSql = `
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS users (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), clerk_user_id text UNIQUE,
  organization_id uuid, email text NOT NULL, first_name text, last_name text, phone text,
@@ -202,36 +230,307 @@ CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
 `;
 
-export async function initDatabaseSchema(): Promise<boolean> {
-  if (!env.DATABASE_URL) {
-    ready = false;
-    return false;
+async function seedDemoData(
+  queryFn: (sql: string, params?: unknown[]) => Promise<DbQueryResult<Record<string, unknown>>>,
+) {
+  const existingUser = await queryFn("SELECT id FROM users WHERE lower(email) = $1", ["demo@washpilot.ci"]);
+  if (existingUser.rows && existingUser.rows.length > 0) return;
+
+  const demoPasswordHash = await hashPassword("WashPilot2026!");
+
+  const orgRes = await queryFn(
+    `INSERT INTO organizations (name, slug, onboarding_completed)
+     VALUES ('Station Cocody Riviera', 'station-cocody-riviera', true)
+     RETURNING id`
+  );
+  const orgId = orgRes.rows[0].id;
+
+  const userRes = await queryFn(
+    `INSERT INTO users (email, first_name, last_name, phone, password_hash, status, organization_id)
+     VALUES ('demo@washpilot.ci', 'Awa', 'Kouassi', '+225 07 01 02 03 04', $1, 'active', $2)
+     RETURNING id`,
+    [demoPasswordHash, orgId]
+  );
+  const userId = userRes.rows[0].id;
+
+  await queryFn(
+    `INSERT INTO organization_members (organization_id, user_id, role)
+     VALUES ($1, $2, 'owner')`,
+    [orgId, userId]
+  );
+
+  const proPlanRes = await queryFn("SELECT id FROM plans WHERE code = 'pro'");
+  if (proPlanRes.rows.length > 0) {
+    await queryFn(
+      `INSERT INTO subscriptions (organization_id, plan_id, status)
+       VALUES ($1, $2, 'active')`,
+      [orgId, proPlanRes.rows[0].id]
+    );
   }
-  if (!pool)
-    pool = new Pool({
-      connectionString: env.DATABASE_URL,
-      max: env.PG_POOL_MAX,
-      ssl: /localhost|127\.0\.0\.1/.test(env.DATABASE_URL)
-        ? false
-        : { rejectUnauthorized: true },
-      connectionTimeoutMillis: 8000,
-      idleTimeoutMillis: 30000,
-    });
+
+  const siteRes = await queryFn(
+    `INSERT INTO sites (organization_id, name, city, address, phone, is_active)
+     VALUES ($1, 'Station Cocody Riviera', 'Abidjan', 'Boulevard de France, Cocody', '+225 27 22 44 55 66', true)
+     RETURNING id`,
+    [orgId]
+  );
+  const siteId = siteRes.rows[0].id;
+
+  const berlineRes = await queryFn(
+    `INSERT INTO vehicle_categories (organization_id, name, is_active) VALUES ($1, 'Berline', true) RETURNING id`,
+    [orgId]
+  );
+  const suvRes = await queryFn(
+    `INSERT INTO vehicle_categories (organization_id, name, is_active) VALUES ($1, 'SUV / 4x4', true) RETURNING id`,
+    [orgId]
+  );
+  await queryFn(
+    `INSERT INTO vehicle_categories (organization_id, name, is_active) VALUES ($1, 'Moto', true) RETURNING id`,
+    [orgId]
+  );
+
+  const catLavage = await queryFn(
+    `INSERT INTO service_categories (organization_id, name, is_active) VALUES ($1, 'Lavage classique', true) RETURNING id`,
+    [orgId]
+  );
+  const catDetailing = await queryFn(
+    `INSERT INTO service_categories (organization_id, name, is_active) VALUES ($1, 'Detailing & Soins', true) RETURNING id`,
+    [orgId]
+  );
+
+  await queryFn(
+    `INSERT INTO services (organization_id, category_id, name, description, price_cents, duration_minutes, is_active)
+     VALUES ($1, $2, 'Lavage Extérieur Rapide', 'Lavage haute pression, mousse active et séchage microfibre.', 300000, 20, true)
+     RETURNING id`,
+    [orgId, catLavage.rows[0].id]
+  );
+  const s2 = await queryFn(
+    `INSERT INTO services (organization_id, category_id, name, description, price_cents, duration_minutes, is_active)
+     VALUES ($1, $2, 'Lavage Complet Intérieur + Extérieur', 'Aspiration intégrale, plastiques, vitres et carrosserie éclatante.', 600000, 45, true)
+     RETURNING id`,
+    [orgId, catLavage.rows[0].id]
+  );
+  const s3 = await queryFn(
+    `INSERT INTO services (organization_id, category_id, name, description, price_cents, duration_minutes, is_active)
+     VALUES ($1, $2, 'Formule VIP Prestige', 'Lavage minutieux, cire protectrice, shampoing sièges et parfum habitacle.', 1200000, 75, true)
+     RETURNING id`,
+    [orgId, catDetailing.rows[0].id]
+  );
+  await queryFn(
+    `INSERT INTO services (organization_id, category_id, name, description, price_cents, duration_minutes, is_active)
+     VALUES ($1, $2, 'Lustrage & Brillance Carrosserie', 'Décontamination et lustrage haute brillance.', 2500000, 120, true)
+     RETURNING id`,
+    [orgId, catDetailing.rows[0].id]
+  );
+  await queryFn(
+    `INSERT INTO services (organization_id, category_id, name, description, price_cents, duration_minutes, is_active)
+     VALUES ($1, $2, 'Lavage Deux-Roues', 'Nettoyage complet moto / scooter avec dégraissage jantes.', 200000, 20, true)
+     RETURNING id`,
+    [orgId, catLavage.rows[0].id]
+  );
+
+  const w1 = await queryFn(
+    `INSERT INTO workers (organization_id, site_id, first_name, last_name, phone, role, status, district)
+     VALUES ($1, $2, 'Jean-Marc', 'Koffi', '+225 07 10 20 30 40', 'car_washer', 'active', 'Cocody')
+     RETURNING id`,
+    [orgId, siteId]
+  );
+  const w2 = await queryFn(
+    `INSERT INTO workers (organization_id, site_id, first_name, last_name, phone, role, status, district)
+     VALUES ($1, $2, 'Ibrahim', 'Touré', '+225 05 20 30 40 50', 'versatile_washer', 'active', 'Plateau Dokui')
+     RETURNING id`,
+    [orgId, siteId]
+  );
+  await queryFn(
+    `INSERT INTO workers (organization_id, site_id, first_name, last_name, phone, role, status, district)
+     VALUES ($1, $2, 'Fatou', 'Cissé', '+225 01 30 40 50 60', 'team_lead', 'active', 'Riviera Palmeraie')
+     RETURNING id`,
+    [orgId, siteId]
+  );
+
+  const cashSessionRes = await queryFn(
+    `INSERT INTO cash_sessions (organization_id, site_id, opened_by, opening_amount_cents, status)
+     VALUES ($1, $2, $3, 2500000, 'open')
+     RETURNING id`,
+    [orgId, siteId, userId]
+  );
+  const cashSessionId = cashSessionRes.rows[0].id;
+
+  const wash1 = await queryFn(
+    `INSERT INTO washes (organization_id, site_id, vehicle_category_id, reference, status, total_cents, payment_status, payment_method, created_by)
+     VALUES ($1, $2, $3, 'LAV-2026-0001', 'completed', 600000, 'paid', 'cash', $4)
+     RETURNING id`,
+    [orgId, siteId, berlineRes.rows[0].id, userId]
+  );
+  await queryFn(
+    `INSERT INTO wash_items (wash_id, service_id, service_name, quantity, unit_price_cents, line_total_cents)
+     VALUES ($1, $2, 'Lavage Complet Intérieur + Extérieur', 1, 600000, 600000)`,
+    [wash1.rows[0].id, s2.rows[0].id]
+  );
+  await queryFn(
+    `INSERT INTO wash_assignments (wash_id, worker_id) VALUES ($1, $2)`,
+    [wash1.rows[0].id, w1.rows[0].id]
+  );
+  await queryFn(
+    `INSERT INTO payments (organization_id, wash_id, method, amount_cents, status)
+     VALUES ($1, $2, 'cash', 600000, 'verified')`,
+    [orgId, wash1.rows[0].id]
+  );
+  await queryFn(
+    `INSERT INTO cash_movements (organization_id, cash_session_id, type, amount_cents, source, description, wash_id, created_by)
+     VALUES ($1, $2, 'entry', 600000, 'wash_payment', 'Encaissement lavage LAV-2026-0001', $3, $4)`,
+    [orgId, cashSessionId, wash1.rows[0].id, userId]
+  );
+
+  const wash2 = await queryFn(
+    `INSERT INTO washes (organization_id, site_id, vehicle_category_id, reference, status, total_cents, payment_status, payment_method, created_by)
+     VALUES ($1, $2, $3, 'LAV-2026-0002', 'completed', 1200000, 'paid', 'wave', $4)
+     RETURNING id`,
+    [orgId, siteId, suvRes.rows[0].id, userId]
+  );
+  await queryFn(
+    `INSERT INTO wash_items (wash_id, service_id, service_name, quantity, unit_price_cents, line_total_cents)
+     VALUES ($1, $2, 'Formule VIP Prestige', 1, 1200000, 1200000)`,
+    [wash2.rows[0].id, s3.rows[0].id]
+  );
+  await queryFn(
+    `INSERT INTO wash_assignments (wash_id, worker_id) VALUES ($1, $2), ($1, $3)`,
+    [wash2.rows[0].id, w1.rows[0].id, w2.rows[0].id]
+  );
+  await queryFn(
+    `INSERT INTO payments (organization_id, wash_id, method, amount_cents, status)
+     VALUES ($1, $2, 'wave', 1200000, 'verified')`,
+    [orgId, wash2.rows[0].id]
+  );
+
+  await queryFn(
+    `INSERT INTO onboarding_progress (organization_id, current_stage, completed_at, plan_code)
+     VALUES ($1, 'completed', NOW(), 'pro')
+     ON CONFLICT (organization_id) DO UPDATE SET current_stage = 'completed', completed_at = NOW()`,
+    [orgId]
+  );
+}
+
+function createPglitePool(pglite: PGlite): pg.Pool {
+  let transactionLock: Promise<void> = Promise.resolve();
+
+  const runQuery = async <R = Record<string, unknown>>(
+    sqlOrConfig: string | { text?: string; sql?: string; values?: unknown[] },
+    params?: unknown[],
+  ): Promise<DbQueryResult<R>> => {
+    let sql: string;
+    let values: unknown[] | undefined = params;
+    if (typeof sqlOrConfig === "string") {
+      sql = sqlOrConfig;
+    } else if (sqlOrConfig && typeof sqlOrConfig === "object") {
+      sql = sqlOrConfig.text || sqlOrConfig.sql || "";
+      values = sqlOrConfig.values || params;
+    } else {
+      sql = String(sqlOrConfig);
+    }
+
+    if (!values || values.length === 0) {
+      const trimmed = sql.trim();
+      const statements = trimmed.split(";").map((s) => s.trim()).filter(Boolean);
+      if (statements.length > 1) {
+        await pglite.exec(sql);
+        return { rows: [] as R[], rowCount: 0, fields: [], command: "EXEC" };
+      }
+    }
+
+    const res = await pglite.query(sql, values);
+    return {
+      rows: (res.rows || []) as R[],
+      rowCount: res.rowCount ?? (res.rows ? res.rows.length : 0),
+      fields: res.fields || [],
+      command: res.command || "SELECT",
+      affectedRows: res.affectedRows,
+    };
+  };
+
+  return {
+    async query<R = Record<string, unknown>>(
+      sqlOrConfig: string | { text?: string; sql?: string; values?: unknown[] },
+      params?: unknown[],
+    ) {
+      return runQuery<R>(sqlOrConfig, params);
+    },
+    async connect() {
+      let releaseLock: () => void = () => {};
+      const prevLock = transactionLock;
+      transactionLock = new Promise<void>((resolve) => {
+        releaseLock = resolve;
+      });
+      await prevLock;
+
+      let released = false;
+      const client: DbClient = {
+        async query<R = Record<string, unknown>>(
+          sqlOrConfig: string | { text?: string; sql?: string; values?: unknown[] },
+          params?: unknown[],
+        ) {
+          return runQuery<R>(sqlOrConfig, params);
+        },
+        release() {
+          if (!released) {
+            released = true;
+            releaseLock();
+          }
+        },
+      };
+      return client;
+    },
+    async end() {
+      await pglite.close();
+    },
+  } as unknown as pg.Pool;
+}
+
+export async function initDatabaseSchema(): Promise<boolean> {
+  if (env.DATABASE_URL) {
+    try {
+      const externalPool = new Pool({
+        connectionString: env.DATABASE_URL,
+        max: env.PG_POOL_MAX,
+        ssl: /localhost|127\.0\.0\.1/.test(env.DATABASE_URL)
+          ? false
+          : { rejectUnauthorized: true },
+        connectionTimeoutMillis: 8000,
+        idleTimeoutMillis: 30000,
+      });
+      await externalPool.query("SELECT 1");
+      await externalPool.query(schemaSql);
+      pool = externalPool;
+      ready = true;
+      console.info("[db] Connecté à PostgreSQL via DATABASE_URL");
+      return true;
+    } catch (error) {
+      console.warn(
+        "[db] Connexion DATABASE_URL échouée, basculement sur PostgreSQL embarqué (PGlite):",
+        error instanceof Error ? error.message : "unknown",
+      );
+    }
+  }
+
   try {
-    await pool.query("SELECT 1");
+    pgliteInstance = new PGlite();
+    pool = createPglitePool(pgliteInstance);
     await pool.query(schemaSql);
+    await seedDemoData(pool.query.bind(pool));
     ready = true;
+    console.info("[db] PostgreSQL embarqué (PGlite) initialisé avec les données de démonstration");
     return true;
   } catch (error) {
     ready = false;
     console.error(
-      "[db] Database initialization failed:",
+      "[db] Initialisation de la base de données échouée:",
       error instanceof Error ? error.message : "unknown",
     );
-    if (env.NODE_ENV === "production") throw error;
+    if (env.NODE_ENV === "production" && env.DATABASE_URL) throw error;
     return false;
   }
 }
+
 export async function closeDatabase(): Promise<void> {
   ready = false;
   if (pool) {

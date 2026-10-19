@@ -32,11 +32,9 @@ app.use((_req, res, next) => {
 
 app.use(cors({
   origin(origin, callback) {
-    if (!origin) return callback(null, false)
+    if (!origin) return callback(null, true)
     if (env.CORS_ORIGINS.includes(origin)) return callback(null, true)
-    if (env.NODE_ENV !== "production" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) {
-      return callback(null, true)
-    }
+    if (env.NODE_ENV !== "production") return callback(null, true)
     return callback(null, false)
   },
   credentials: true,

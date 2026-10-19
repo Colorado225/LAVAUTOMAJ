@@ -235,10 +235,8 @@ export default function ExpensesPage() {
             </p>
           </div>
           <Dialog open={open} onOpenChange={handleOpenChange}>
-            <DialogTrigger>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" /> Nouvelle dépense
-              </Button>
+            <DialogTrigger render={<Button />}>
+              <Plus className="mr-2 h-4 w-4" /> Nouvelle dépense
             </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
