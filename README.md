@@ -10,7 +10,7 @@ rapports d'activité et onboarding guidé. Montants en **F CFA (XOF)**, stockés
 |---|---|
 | Frontend | React 19 · Vite · TypeScript · Tailwind CSS 4 · shadcn/ui · React Router 7 · Recharts |
 | Backend | Express 5 (exécuté via `tsx`), API REST `/api/v1` |
-| Authentification | [Clerk](https://clerk.com) (sessions + organisations + webhooks) |
+| Authentification | Maison : e-mail + mot de passe (scrypt), sessions httpOnly stockées dans PostgreSQL |
 | Base de données | PostgreSQL ([Neon](https://neon.tech)) — schéma auto-créé au démarrage |
 
 Un seul serveur sert l'API **et** la SPA (middleware Vite en développement, `dist/` en production).
@@ -22,7 +22,7 @@ Un seul serveur sert l'API **et** la SPA (middleware Vite en développement, `di
 npm install
 
 # 2. Environnement
-cp .env.example .env     # puis complétez DATABASE_URL + clés Clerk
+cp .env.example .env     # puis complétez DATABASE_URL
 
 # 3. Développement (API + frontend sur http://localhost:3000)
 npm run dev
@@ -43,24 +43,22 @@ npm run dev
 Variables d'environnement (voir [`.env.example`](.env.example)) :
 
 - `DATABASE_URL` — connexion Neon/PostgreSQL. **Obligatoire en production.**
-- `VITE_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` — clés Clerk. **Obligatoires.**
-- `CLERK_WEBHOOK_SIGNING_SECRET` — secret svix du webhook `POST /api/webhooks/clerk`
-  (événements `user.*`, `organization.*`, `organizationMembership.*`).
 - `CORS_ORIGINS` — origines frontend autorisées (séparées par des virgules).
 
-> Sans webhook configuré (développement), le serveur **auto-provisionne** l'organisation
-> et l'adhésion depuis l'API Clerk à la première requête authentifiée.
+> L'authentification ne dépend d'aucun service externe : les comptes (mot de passe
+> haché scrypt) et les sessions (cookies httpOnly, table `auth_sessions`) vivent
+> dans la base PostgreSQL/Neon.
 
 ## Architecture
 
 ```
-server.ts            # Express : sécurité, CORS, webhook Clerk, montage des routeurs, SPA
+server.ts            # Express : sécurité, CORS, montage des routeurs, SPA
 server/
   env.ts             # Validation zod des variables d'environnement
   db.ts              # Pool pg + schéma SQL idempotent (CREATE/ALTER IF NOT EXISTS)
-  auth.ts            # Vérification des tokens Clerk + profils via l'API Clerk
-  tenant.ts          # Résolution du tenant (org + rôle) et auto-provisionnement
-  auth-router.ts     # /auth/sync, /auth/me
+  auth.ts            # Hachage scrypt, sessions cookie httpOnly, middleware requireSession
+  tenant.ts          # Résolution du tenant (organisation + rôle) de l'utilisateur
+  auth-router.ts     # /auth/register, /auth/login, /auth/logout, /auth/me, /auth/profile, /auth/password
   onboarding.ts      # Assistant : status, progress, summary, confirm, plans, catalogue
   api.ts             # CRUD sites, services, catégories + lavages (création idempotente, annulation)
   operations.ts      # Sessions de caisse, mouvements, clôture, dépenses
@@ -77,19 +75,19 @@ tests/               # Tests unitaires (node:test via tsx)
 ### Principes de l'API
 
 - **Multi-tenant strict** : chaque requête SQL filtre par `organization_id`, le tenant est
-  résolu côté serveur depuis le token Clerk — jamais depuis le navigateur.
-- **Rôles** : `owner` / `manager` / `cashier` (mappés depuis les rôles d'organisation Clerk).
+  résolu côté serveur depuis la session — jamais depuis le navigateur.
+- **Rôles** : `owner` / `manager` / `cashier` (stockés dans `organization_members`).
 - **Idempotence** : `POST /washes`, `/cash-sessions/open`, `/cash-sessions/:id/movements` et
   `/expenses` exigent l'en-tête `Idempotency-Key`. Un rejeu renvoie la réponse d'origine avec
   l'en-tête `Idempotency-Replayed: true` ; une réutilisation avec un contenu différent → `409`.
 - **Limites de forfait** : `max_workers` / `max_users` imposés sous verrou advisory PostgreSQL.
 - **Argent** : entiers en centimes de XOF (`*_cents`), jamais de flottants.
 
-### Endpoints principaux (`/api/v1`, session Clerk requise)
+### Endpoints principaux (`/api/v1`, session requise sauf `/auth/*` publics)
 
 | Domaine | Routes |
 |---|---|
-| Auth | `POST /auth/sync` · `GET /auth/me` |
+| Auth | `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /auth/me` · `PATCH /auth/profile` · `POST /auth/password` |
 | Onboarding | `GET /onboarding/status` · `GET/PUT /onboarding/progress` · `GET /onboarding/summary` · `POST /onboarding/confirm` · `GET /plans` · `GET /service-catalog` |
 | Catalogue | CRUD `/sites`, `/services`, `/service-categories`, `/vehicle-categories` |
 | Lavages | `GET /washes` · `GET /washes/:id` · `POST /washes` (idempotent) · `POST /washes/:id/cancel` |
@@ -100,8 +98,8 @@ tests/               # Tests unitaires (node:test via tsx)
 
 ## Flux métier clés
 
-1. **Inscription → Organisation → Onboarding** : après la création du compte et de
-   l'organisation Clerk, l'assistant en 5 étapes (station → services → travailleurs →
+1. **Inscription → Onboarding** : l'inscription crée le compte **et** son organisation,
+   puis l'assistant en 5 étapes (station → services → travailleurs →
    forfait → confirmation) persiste chaque étape côté serveur ; `POST /onboarding/confirm`
    matérialise le tout (site, services, travailleurs, abonnement) en une transaction.
 2. **Lavage** : prix recopiés depuis le catalogue au moment de l'enregistrement

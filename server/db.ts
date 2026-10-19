@@ -179,6 +179,25 @@ CREATE INDEX IF NOT EXISTS idx_payments_org_created ON payments(organization_id,
 CREATE INDEX IF NOT EXISTS idx_cash_movements_session ON cash_movements(cash_session_id);
 CREATE INDEX IF NOT EXISTS idx_cash_sessions_org_site ON cash_sessions(organization_id,site_id,status);
 CREATE INDEX IF NOT EXISTS idx_wash_items_wash ON wash_items(wash_id);
+-- Authentification maison (e-mail + mot de passe, sessions en base) ---------
+ALTER TABLE users ALTER COLUMN clerk_user_id DROP NOT NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash text;
+ALTER TABLE organizations ALTER COLUMN clerk_org_id DROP NOT NULL;
+DO $do$ BEGIN
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower(email));
+EXCEPTION WHEN others THEN
+  RAISE NOTICE 'idx_users_email_lower non créé (e-mails en double existants)';
+END $do$;
+CREATE TABLE IF NOT EXISTS auth_sessions (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ token_hash text NOT NULL UNIQUE,
+ expires_at timestamptz NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ last_used_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
 `
 
 export async function initDatabaseSchema(): Promise<boolean> {

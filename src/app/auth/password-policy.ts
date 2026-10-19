@@ -1,6 +1,5 @@
 /**
- * Password policy — must match the Clerk dashboard configuration
- * (Dashboard > Settings > Authentication > Password > minimum length).
- * Current Clerk instance: min_length = 15 (verified via API — form_password_length_too_short).
+ * Politique de mot de passe — doit rester alignée avec la validation
+ * serveur (server/auth-router.ts, MIN_PASSWORD_LENGTH).
  */
-export const MIN_PASSWORD_LENGTH = 15;
+export const MIN_PASSWORD_LENGTH = 8;

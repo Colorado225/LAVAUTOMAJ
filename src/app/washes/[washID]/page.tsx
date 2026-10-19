@@ -4,7 +4,7 @@ import { useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { ArrowLeft, Ban, RefreshCw } from "lucide-react"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { apiFetch, getClerkToken, useApi } from "@/lib/api"
+import { apiFetch, useApi } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -111,14 +111,12 @@ export default function WashDetailPage() {
     setSaving(true)
     setMutationError(null)
     try {
-      const token = await getClerkToken()
       const response = await apiFetch(
         `/api/v1/washes/${encodeURIComponent(washID)}/cancel`,
         {
           method: "POST",
           body: JSON.stringify({ reason: reason.trim() }),
-        },
-        token
+        }
       )
       if (!response.ok) throw new Error((await response.text()) || `Erreur ${response.status}`)
       setCancelOpen(false)

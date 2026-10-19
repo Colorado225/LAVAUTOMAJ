@@ -1,8 +1,7 @@
 import { Outlet, useLocation, useNavigation, Navigate } from "react-router-dom"
-import { useAuth } from "@clerk/clerk-react"
+import { useAuth } from "@/lib/auth"
 import { LoadingSpinner } from "@/components/ui/loading-spinner"
 import { OnboardingGate } from "@/components/router/onboarding-gate"
-import { OrganizationGate } from "@/components/router/organization-gate"
 
 /** Thin top bar shown while the next route's code is loading. */
 function RouteProgress() {
@@ -19,21 +18,24 @@ function RouteProgress() {
 
 function AuthLoading() {
   return (
-    <div className="flex min-h-svh items-center justify-center" role="status" aria-label="Vérification de la session Clerk">
+    <div className="flex min-h-svh items-center justify-center" role="status" aria-label="Vérification de la session">
       <LoadingSpinner className="size-8" />
     </div>
   )
 }
 
+/**
+ * Workflow (§WORKFLOW) :
+ * - landing publique ;
+ * - inscription → onboarding → tableau de bord ;
+ * - connexion suivante → tableau de bord directement.
+ */
 export function RootLayout() {
   const navigation = useNavigation()
   const location = useLocation()
   const { isLoaded, isSignedIn } = useAuth()
   const isPublicLandingRoute = location.pathname === "/" || location.pathname === "/landing"
   const isAuthRoute = location.pathname.startsWith("/auth/")
-  const isOrganizationCreationRoute = location.pathname === "/auth/create-organization"
-  const isOrganizationSelectionRoute = location.pathname === "/auth/select-organization"
-  const isSignUpRoute = location.pathname === "/auth/sign-up"
 
   if (!isLoaded) return <AuthLoading />
 
@@ -45,26 +47,13 @@ export function RootLayout() {
   }
 
   if (isAuthRoute) {
-    if (!isSignedIn) {
-      if (isOrganizationCreationRoute || isOrganizationSelectionRoute) {
-        return <Navigate to="/auth/sign-in" replace state={{ from: location.pathname }} />
-      }
-      return <>
-        {navigation.state === "loading" && <RouteProgress />}
-        <Outlet />
-      </>
+    if (isSignedIn) {
+      return <Navigate to="/dashboard" replace />
     }
-
-    // Sign-up stays reachable to explain an existing session and provide an
-    // explicit account-switch flow. Organization creation is also a valid next
-    // step for a freshly authenticated user. Sign-in/reset pages redirect.
-    if (isOrganizationCreationRoute || isOrganizationSelectionRoute || isSignUpRoute) {
-      return <>
-        {navigation.state === "loading" && <RouteProgress />}
-        <Outlet />
-      </>
-    }
-    return <Navigate to="/dashboard" replace />
+    return <>
+      {navigation.state === "loading" && <RouteProgress />}
+      <Outlet />
+    </>
   }
 
   if (!isSignedIn) {
@@ -74,11 +63,9 @@ export function RootLayout() {
   return (
     <>
       {navigation.state === "loading" && <RouteProgress />}
-      <OrganizationGate>
-        <OnboardingGate>
-          <Outlet />
-        </OnboardingGate>
-      </OrganizationGate>
+      <OnboardingGate>
+        <Outlet />
+      </OnboardingGate>
     </>
   )
 }

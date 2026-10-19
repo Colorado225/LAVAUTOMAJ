@@ -67,7 +67,7 @@ const WORKER_FIELDS =
 export function createTeamRouter() {
   const r = Router()
 
-  // GET /api/v1/workers — field workers of the organization (no Clerk account needed).
+  // GET /api/v1/workers — field workers of the organization (no login account needed).
   r.get(
     "/workers",
     asyncRoute(async (req, res) => {
@@ -181,13 +181,13 @@ export function createTeamRouter() {
     }),
   )
 
-  // GET /api/v1/users — login accounts (Clerk members) of the organization.
+  // GET /api/v1/users — login accounts of the organization.
   r.get(
     "/users",
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
-        `SELECT u.id, u.clerk_user_id, u.first_name, u.last_name, u.email, m.role, u.status, u.created_at, u.updated_at
+        `SELECT u.id, u.first_name, u.last_name, u.email, m.role, u.status, u.created_at, u.updated_at
          FROM organization_members m JOIN users u ON u.id = m.user_id
          WHERE m.organization_id=$1 ORDER BY m.created_at`,
         [t.organizationId],

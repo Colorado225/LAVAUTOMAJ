@@ -26,15 +26,7 @@ export const routes: RouteObject[] = [
   { path: "/services", lazy: page(() => import("@/app/services/page")) },
   { path: "/service-categories", lazy: page(() => import("@/app/service-categories/page")) },
   { path: "/vehicle-categories", lazy: page(() => import("@/app/vehicle-categories/page")) },
-  // Authentication and first-organization setup routes
-  {
-    path: "/auth/create-organization",
-    lazy: page(() => import("@/app/auth/create-organization/page")),
-  },
-  {
-    path: "/auth/select-organization",
-    lazy: page(() => import("@/app/auth/select-organization/page")),
-  },
+  // Authentication routes
   {
     path: "/auth/sign-in",
     lazy: page(() => import("@/app/auth/sign-in/page")),
