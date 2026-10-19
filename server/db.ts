@@ -1,23 +1,28 @@
-import pg from "pg"
-import { env } from "./env.ts"
+import pg from "pg";
+import { env } from "./env.ts";
 
-const { Pool } = pg
-let pool: pg.Pool | null = null
-let ready = false
+const { Pool } = pg;
+let pool: pg.Pool | null = null;
+let ready = false;
 
-export function getPool(): pg.Pool | null { return pool }
-export function isDatabaseReady(): boolean { return ready && pool !== null }
+export function getPool(): pg.Pool | null {
+  return pool;
+}
+export function isDatabaseReady(): boolean {
+  return ready && pool !== null;
+}
 
 const schemaSql = `
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS users (
- id uuid PRIMARY KEY DEFAULT gen_random_uuid(), clerk_user_id text NOT NULL UNIQUE,
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), clerk_user_id text UNIQUE,
  organization_id uuid, email text NOT NULL, first_name text, last_name text, phone text,
  avatar_url text, status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive')),
+ password_hash text,
  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS organizations (
- id uuid PRIMARY KEY DEFAULT gen_random_uuid(), clerk_org_id text NOT NULL UNIQUE,
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), clerk_org_id text UNIQUE,
  name text NOT NULL, slug text, onboarding_completed boolean NOT NULL DEFAULT false,
  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -180,9 +185,6 @@ CREATE INDEX IF NOT EXISTS idx_cash_movements_session ON cash_movements(cash_ses
 CREATE INDEX IF NOT EXISTS idx_cash_sessions_org_site ON cash_sessions(organization_id,site_id,status);
 CREATE INDEX IF NOT EXISTS idx_wash_items_wash ON wash_items(wash_id);
 -- Authentification maison (e-mail + mot de passe, sessions en base) ---------
-ALTER TABLE users ALTER COLUMN clerk_user_id DROP NOT NULL;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash text;
-ALTER TABLE organizations ALTER COLUMN clerk_org_id DROP NOT NULL;
 DO $do$ BEGIN
   CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower(email));
 EXCEPTION WHEN others THEN
@@ -198,12 +200,43 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
-`
+`;
 
 export async function initDatabaseSchema(): Promise<boolean> {
-  if (!env.DATABASE_URL) { ready = false; return false }
-  if (!pool) pool = new Pool({ connectionString: env.DATABASE_URL, max: env.PG_POOL_MAX, ssl: /localhost|127\.0\.0\.1/.test(env.DATABASE_URL) ? false : { rejectUnauthorized: true }, connectionTimeoutMillis: 8000, idleTimeoutMillis: 30000 })
-  try { await pool.query("SELECT 1"); await pool.query(schemaSql); ready = true; return true }
-  catch (error) { ready = false; console.error("[db] Database initialization failed:", error instanceof Error ? error.message : "unknown"); if (env.NODE_ENV === "production") throw error; return false }
+  if (!env.DATABASE_URL) {
+    ready = false;
+    return false;
+  }
+  if (!pool)
+    pool = new Pool({
+      connectionString: env.DATABASE_URL,
+      max: env.PG_POOL_MAX,
+      ssl: /localhost|127\.0\.0\.1/.test(env.DATABASE_URL)
+        ? false
+        : { rejectUnauthorized: true },
+      connectionTimeoutMillis: 8000,
+      idleTimeoutMillis: 30000,
+    });
+  try {
+    await pool.query("SELECT 1");
+    await pool.query(schemaSql);
+    ready = true;
+    return true;
+  } catch (error) {
+    ready = false;
+    console.error(
+      "[db] Database initialization failed:",
+      error instanceof Error ? error.message : "unknown",
+    );
+    if (env.NODE_ENV === "production") throw error;
+    return false;
+  }
 }
-export async function closeDatabase(): Promise<void> { ready = false; if (pool) { const current = pool; pool = null; await current.end() } }
+export async function closeDatabase(): Promise<void> {
+  ready = false;
+  if (pool) {
+    const current = pool;
+    pool = null;
+    await current.end();
+  }
+}
