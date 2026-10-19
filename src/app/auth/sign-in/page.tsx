@@ -69,7 +69,8 @@ function persistRememberedEmail(email: string, remember: boolean) {
 export default function SignInPage() {
   const { isLoaded: authLoaded, isSignedIn } = useAuth()
   const { user } = useUser()
-  const { signOut } = useClerk()
+  const clerk = useClerk()
+  const { signOut } = clerk
   const { isLoaded, signIn, setActive } = useSignIn()
   const navigate = useNavigate()
   const [email, setEmail] = useState(getInitialEmail)
@@ -182,13 +183,35 @@ export default function SignInPage() {
 
       setError("La connexion n’a pas pu être finalisée. Vérifiez vos identifiants puis réessayez.")
     } catch (authError) {
-      // En cas de session déjà active, on affiche le message avec un bouton
-      // de déconnexion explicite (rendu sous le formulaire) plutôt qu'une
-      // déconnexion silencieuse qui surprendrait l'utilisateur.
+      // Une session existe déjà sur le client Clerk (connexion précédente
+      // réussie mais jamais activée) : on l'active et on entre dans l'app au
+      // lieu de bloquer l'utilisateur.
+      if (isSessionExistsError(authError)) {
+        try {
+          if (await activateExistingSession()) return
+        } catch (activationError) {
+          console.warn("Impossible d’activer la session existante :", activationError)
+        }
+      }
+      // Sinon : message avec un bouton de déconnexion explicite (rendu sous
+      // le formulaire) plutôt qu'une déconnexion silencieuse.
       setError(getAuthErrorMessage(authError, "Connexion impossible pour le moment. Réessayez dans quelques instants."))
     } finally {
       setIsSubmitting(false)
     }
+  }
+
+  /**
+   * Clerk refuse une nouvelle connexion quand le client détient déjà une
+   * session (ex. : connexion précédente réussie mais jamais activée dans cet
+   * onglet). On réutilise cette session au lieu de bloquer l'utilisateur.
+   */
+  async function activateExistingSession(): Promise<boolean> {
+    const sessions = clerk.client?.sessions ?? []
+    const existing = sessions.find((session) => session.status === "active") ?? sessions[0]
+    if (!existing) return false
+    await finalizeSession(existing.id)
+    return true
   }
 
   /** Activate the Clerk session, sync Neon and enter the app. */
