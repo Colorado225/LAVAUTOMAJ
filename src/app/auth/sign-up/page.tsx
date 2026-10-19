@@ -9,7 +9,8 @@ import {
   AuthSubmitButton,
   PasswordVisibilityButton,
 } from "@/components/auth/auth-form-elements"
-import { getAuthErrorMessage } from "@/components/auth/auth-errors"
+import { getAuthErrorMessage, isSessionExistsError } from "@/components/auth/auth-errors"
+import { MIN_PASSWORD_LENGTH } from "@/app/auth/password-policy"
 import { apiFetch } from "@/lib/api"
 
 type SignUpStep = "details" | "verification"
@@ -133,8 +134,8 @@ export default function SignUpPage() {
     setNotice("")
     if (!isLoaded) return
 
-    if (password.length < 8) {
-      setError("Votre mot de passe doit contenir au moins 8 caractères.")
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setError(`Votre mot de passe doit contenir au moins ${MIN_PASSWORD_LENGTH} caractères.`)
       return
     }
     if (password !== confirmation) {
@@ -164,8 +165,12 @@ export default function SignUpPage() {
       setStep("verification")
       setNotice(`Un code de confirmation a été envoyé à ${email.trim()}.`)
     } catch (authError: unknown) {
-      const errMsg = getAuthErrorMessage(authError, "Impossible de créer le compte pour le moment. Réessayez dans quelques instants.")
-      setError(errMsg)
+      if (isSessionExistsError(authError)) {
+        setError(getAuthErrorMessage(authError))
+      } else {
+        const errMsg = getAuthErrorMessage(authError, "Impossible de créer le compte pour le moment. Réessayez dans quelques instants.")
+        setError(errMsg)
+      }
     } finally {
       setIsSubmitting(false)
     }
@@ -176,6 +181,10 @@ export default function SignUpPage() {
     setError("")
     setNotice("")
     if (!isLoaded) return
+    if (!verificationCode.trim()) {
+      setError("Saisissez le code reçu par e-mail.")
+      return
+    }
 
     setIsSubmitting(true)
     try {

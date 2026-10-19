@@ -9,7 +9,7 @@ import {
   AuthSubmitButton,
   PasswordVisibilityButton,
 } from "@/components/auth/auth-form-elements"
-import { getAuthErrorMessage } from "@/components/auth/auth-errors"
+import { getAuthErrorMessage, isSessionExistsError } from "@/components/auth/auth-errors"
 import { apiFetch } from "@/lib/api"
 
 const REMEMBERED_EMAIL_KEY = "washpilot.remembered-email"
@@ -159,6 +159,9 @@ export default function SignInPage() {
 
       navigate("/dashboard", { replace: true })
     } catch (authError) {
+      // En cas de session déjà active, on affiche le message avec un bouton
+      // de déconnexion explicite (rendu sous le formulaire) plutôt qu'une
+      // déconnexion silencieuse qui surprendrait l'utilisateur.
       setError(getAuthErrorMessage(authError, "Connexion impossible pour le moment. Réessayez dans quelques instants."))
     } finally {
       setIsSubmitting(false)
@@ -244,7 +247,22 @@ export default function SignInPage() {
           </span>
         </label>
 
-        {error ? <AuthNotice>{error}</AuthNotice> : null}
+        {error ? (
+          <div className="space-y-2">
+            <AuthNotice>{error}</AuthNotice>
+            {isSessionExistsError(error) ? (
+              <button
+                type="button"
+                onClick={handleDisconnect}
+                disabled={isDisconnecting}
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-red-50 py-2 text-xs font-bold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <LogOut className="size-3.5" />
+                {isDisconnecting ? "Déconnexion…" : "Se déconnecter de la session active pour continuer"}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         <AuthSubmitButton pending={isSubmitting} disabled={!isLoaded}>
           Se connecter <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" aria-hidden="true" />

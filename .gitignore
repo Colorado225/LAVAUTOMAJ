@@ -17,6 +17,7 @@ dist-ssr/
 # Binaire backend Go
 backend/server
 backend/*.exe
+backend/bin/
 
 # Logs / OS / éditeurs
 *.log

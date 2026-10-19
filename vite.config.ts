@@ -19,8 +19,15 @@ export default defineConfig({
     ),
   },
   server: {
-    port: 3000,
+    port: 5173,
     host: "0.0.0.0",
     allowedHosts: true,
+    proxy: {
+      // Le backend Go écoute sur :3000. Sans proxy, les appels /api/v1/*
+      // partent vers le serveur Vite et retournent index.html au lieu du JSON.
+      "/api": "http://localhost:3000",
+      "/healthz": "http://localhost:3000",
+      "/readyz": "http://localhost:3000",
+    },
   },
 });
