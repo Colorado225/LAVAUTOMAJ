@@ -219,7 +219,7 @@ export default function SignUpPage() {
 
   const passwordsMismatch = confirmation.length > 0 && password !== confirmation
   const isVerification = step === "verification"
-  const isSessionExists = error.includes("session est déjà active") || error.includes("session_exists")
+  const isSessionExists = isSessionExistsError(error)
 
   return (
     <AuthPageLayout

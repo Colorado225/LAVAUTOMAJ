@@ -1,41 +1,80 @@
-interface ClerkErrorShape {
-  errors?: Array<{ code?: string; longMessage?: string; message?: string }>
+interface ClerkErrorItem {
+  code?: string
+  longMessage?: string
+  long_message?: string
   message?: string
 }
 
-export function isSessionExistsError(error: unknown): boolean {
-  // Clerk renvoie ce cas avec le code `session_exists`, mais le message brut
-  // affiché à l'utilisateur est : "Une session est déjà active. Veuillez
-  // actualiser la page ou vous déconnecter puis réessayer." — on matche donc
-  // aussi le français et l'anglais pour afficher le bouton de déconnexion.
+interface ClerkErrorShape {
+  errors?: ClerkErrorItem[]
+  code?: string
+  longMessage?: string
+  long_message?: string
+  message?: string
+}
+
+interface NormalizedAuthError {
+  code: string
+  rawMessage: string
+  errors: ClerkErrorItem[]
+}
+
+function normalizeAuthError(error: unknown): NormalizedAuthError {
   if (typeof error === "string") {
-    const text = error.toLowerCase()
-    return (
-      text.includes("session_exists") ||
-      text.includes("session est déjà active") ||
-      text.includes("déjà connecté") ||
-      /active session|already signed in|refresh the page|sign out/.test(text)
-    )
+    return { code: "", rawMessage: error.toLowerCase(), errors: [] }
   }
-  const clerkError = error as ClerkErrorShape | null
-  const firstError = clerkError?.errors?.[0]
-  const code = firstError?.code?.toLowerCase() ?? ""
-  const rawMessage = `${firstError?.longMessage ?? ""} ${firstError?.message ?? ""} ${clerkError?.message ?? ""}`.toLowerCase()
+
+  if (error instanceof Error) {
+    const clerkError = error as Error & ClerkErrorShape
+    const errors = Array.isArray(clerkError.errors) ? clerkError.errors : []
+    const messages = [
+      clerkError.message,
+      clerkError.longMessage,
+      clerkError.long_message,
+      ...errors.flatMap((item) => [item.longMessage, item.long_message, item.message]),
+    ].filter((value): value is string => typeof value === "string" && value.length > 0)
+    const codes = [clerkError.code, ...errors.map((item) => item.code)]
+      .filter((value): value is string => typeof value === "string")
+
+    return { code: codes.join(" ").toLowerCase(), rawMessage: messages.join(" ").toLowerCase(), errors }
+  }
+
+  if (!error || typeof error !== "object") {
+    return { code: "", rawMessage: "", errors: [] }
+  }
+
+  const clerkError = error as ClerkErrorShape
+  const errors = Array.isArray(clerkError.errors) ? clerkError.errors : []
+  const messages = [
+    clerkError.message,
+    clerkError.longMessage,
+    clerkError.long_message,
+    ...errors.flatMap((item) => [item.longMessage, item.long_message, item.message]),
+  ].filter((value): value is string => typeof value === "string" && value.length > 0)
+  const codes = [clerkError.code, ...errors.map((item) => item.code)]
+    .filter((value): value is string => typeof value === "string")
+
+  return { code: codes.join(" ").toLowerCase(), rawMessage: messages.join(" ").toLowerCase(), errors }
+}
+
+function isSessionExistsDetails({ code, rawMessage }: NormalizedAuthError): boolean {
   return (
     code.includes("session_exists") ||
     code.includes("form_session_exists") ||
     rawMessage.includes("session est déjà active") ||
     rawMessage.includes("déjà connecté") ||
-    /session_exists|active session|already signed in|refresh the page|sign out/.test(rawMessage)
+    /session_exists|active session|already signed in|you're already signed in|session already exists|refresh the page|sign out/.test(rawMessage)
   )
+}
+
+export function isSessionExistsError(error: unknown): boolean {
+  return isSessionExistsDetails(normalizeAuthError(error))
 }
 
 /** Return short French feedback without exposing low-level Clerk/API errors. */
 export function getAuthErrorMessage(error: unknown, fallback?: string): string {
-  const clerkError = error as ClerkErrorShape | null
-  const firstError = clerkError?.errors?.[0]
-  const code = firstError?.code?.toLowerCase() ?? ""
-  const rawMessage = `${firstError?.longMessage ?? ""} ${firstError?.message ?? ""} ${clerkError?.message ?? ""}`.toLowerCase()
+  const details = normalizeAuthError(error)
+  const { code, rawMessage, errors } = details
 
   if (
     code.includes("identifier_not_found") ||
@@ -85,14 +124,8 @@ export function getAuthErrorMessage(error: unknown, fallback?: string): string {
   if (/pwned|breach|hibp|compromised|data breach|exposed password/.test(rawMessage)) {
     return "Ce mot de passe a été compromis dans une fuite de données connue. Choisissez-en un autre."
   }
-  if (
-    code.includes("session_exists") ||
-    code.includes("form_session_exists") ||
-    rawMessage.includes("session est déjà active") ||
-    rawMessage.includes("déjà connecté") ||
-    /session_exists|active session|already signed in|refresh the page|sign out/.test(rawMessage)
-  ) {
-    return "Une session est déjà active sur cet appareil. Déconnectez-vous ci-dessous puis reconnectez-vous avec le bon compte."
+  if (isSessionExistsDetails(details)) {
+    return "Une session est déjà active sur cet appareil. Déconnectez-vous ci-dessous puis réessayez."
   }
   if (code.includes("too_many_requests") || /too many requests|rate limit/.test(rawMessage)) {
     return "Trop de tentatives en peu de temps. Patientez quelques instants puis réessayez."
@@ -102,6 +135,7 @@ export function getAuthErrorMessage(error: unknown, fallback?: string): string {
   }
 
   // In development, surface the real Clerk error to make debugging possible.
+  const firstError = errors[0]
   if (import.meta.env.DEV && firstError) {
     return `${firstError.message ?? "Erreur Clerk"} (code: ${firstError.code ?? "inconnu"})`
   }
