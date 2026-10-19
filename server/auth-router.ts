@@ -169,8 +169,10 @@ export function createAuthRouter() {
       }
 
       const token = await createSession(pool, userId)
-      setSessionCookie(res, token)
-      res.status(201).json(await buildMePayload(userId))
+      setSessionCookie(req, res, token)
+      // Le jeton est aussi renvoyé pour les contextes où le cookie est bloqué
+      // (aperçu intégré / iframe) : le client l'enverra en Authorization: Bearer.
+      res.status(201).json({ ...(await buildMePayload(userId)), session_token: token })
     }),
   )
 
@@ -201,8 +203,8 @@ export function createAuthRouter() {
       }
 
       const token = await createSession(pool, row.id)
-      setSessionCookie(res, token)
-      res.json(await buildMePayload(row.id))
+      setSessionCookie(req, res, token)
+      res.json({ ...(await buildMePayload(row.id)), session_token: token })
     }),
   )
 
@@ -213,7 +215,7 @@ export function createAuthRouter() {
       const pool = getPool()
       const token = readSessionToken(req)
       if (pool && token) await destroySession(pool, token)
-      clearSessionCookie(res)
+      clearSessionCookie(req, res)
       res.status(204).end()
     }),
   )

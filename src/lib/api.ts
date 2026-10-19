@@ -9,6 +9,35 @@ const API_BASE_URL = /^(https?:\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(
 
 export { API_BASE_URL }
 
+// ---------------------------------------------------------------------------
+// Jeton de session de secours : le cookie httpOnly reste la voie principale,
+// mais certains contextes (aperçu intégré dans une iframe) bloquent les
+// cookies tiers. Le serveur accepte alors `Authorization: Bearer <jeton>`.
+// ---------------------------------------------------------------------------
+const SESSION_TOKEN_KEY = "washpilot.session-token"
+
+export function getStoredSessionToken(): string | null {
+  try {
+    return window.localStorage.getItem(SESSION_TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function storeSessionToken(token: string | null): void {
+  try {
+    if (token) window.localStorage.setItem(SESSION_TOKEN_KEY, token)
+    else window.localStorage.removeItem(SESSION_TOKEN_KEY)
+  } catch {
+    // Stockage local indisponible : le cookie reste la seule voie.
+  }
+}
+
+export function authHeaders(): Record<string, string> {
+  const token = getStoredSessionToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 export interface UseApiResult<T> {
   data: T | null
   loading: boolean
@@ -45,7 +74,7 @@ export function useApi<T = unknown>(path: string): UseApiResult<T> {
       setError(null)
       try {
         const res = await fetch(`${API_BASE_URL}${path}`, {
-          headers: new Headers({ Accept: "application/json" }),
+          headers: new Headers({ Accept: "application/json", ...authHeaders() }),
           signal: controller.signal,
           credentials: "include",
         })
@@ -85,6 +114,8 @@ export async function apiFetch(path: string, options: RequestInit = {}): Promise
   if (options.body !== undefined && !headers.has("Content-Type") && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json")
   }
+  const token = getStoredSessionToken()
+  if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`)
 
   return fetch(`${API_BASE_URL}${path}`, {
     ...options,

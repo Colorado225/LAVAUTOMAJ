@@ -3,7 +3,6 @@ import { promisify } from "node:util"
 import type { NextFunction, Request, Response } from "express"
 import type pg from "pg"
 import { getPool } from "./db.ts"
-import { env } from "./env.ts"
 
 const scrypt = promisify(scryptCallback) as (password: string, salt: Buffer, keylen: number) => Promise<Buffer>
 
@@ -75,33 +74,47 @@ export async function destroySession(pool: pg.Pool, token: string): Promise<void
   await pool.query("DELETE FROM auth_sessions WHERE token_hash = $1", [hashSessionToken(token)])
 }
 
-export function setSessionCookie(res: Response, token: string): void {
+/** The preview/production proxy serves HTTPS: cross-site iframes then require SameSite=None; Secure. */
+function cookieSecurity(req: Request): { secure: boolean; sameSite: "none" | "lax" } {
+  const secure = req.secure || req.get("x-forwarded-proto") === "https"
+  return { secure, sameSite: secure ? "none" : "lax" }
+}
+
+export function setSessionCookie(req: Request, res: Response, token: string): void {
+  const { secure, sameSite } = cookieSecurity(req)
   res.cookie(SESSION_COOKIE, token, {
     httpOnly: true,
-    sameSite: "lax",
-    secure: env.NODE_ENV === "production",
+    sameSite,
+    secure,
     maxAge: SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,
     path: "/",
   })
 }
 
-export function clearSessionCookie(res: Response): void {
-  res.clearCookie(SESSION_COOKIE, { httpOnly: true, sameSite: "lax", secure: env.NODE_ENV === "production", path: "/" })
+export function clearSessionCookie(req: Request, res: Response): void {
+  const { secure, sameSite } = cookieSecurity(req)
+  res.clearCookie(SESSION_COOKIE, { httpOnly: true, sameSite, secure, path: "/" })
 }
 
-/** Read the raw session token from the request cookies (no cookie-parser needed). */
+/**
+ * Read the session token from the cookie, or from the Authorization header
+ * (fallback for embedded previews where third-party cookies are blocked).
+ */
 export function readSessionToken(req: Request): string | null {
   const header = req.get("cookie")
-  if (!header) return null
-  for (const part of header.split(";")) {
-    const separator = part.indexOf("=")
-    if (separator === -1) continue
-    const name = part.slice(0, separator).trim()
-    if (name !== SESSION_COOKIE) continue
-    const value = part.slice(separator + 1).trim()
-    return value ? decodeURIComponent(value) : null
+  if (header) {
+    for (const part of header.split(";")) {
+      const separator = part.indexOf("=")
+      if (separator === -1) continue
+      const name = part.slice(0, separator).trim()
+      if (name !== SESSION_COOKIE) continue
+      const value = part.slice(separator + 1).trim()
+      if (value) return decodeURIComponent(value)
+    }
   }
-  return null
+  const authorization = req.get("authorization") || ""
+  const match = /^Bearer\s+(.+)$/i.exec(authorization)
+  return match ? match[1].trim() : null
 }
 
 export interface SessionUser {

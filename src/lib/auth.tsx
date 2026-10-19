@@ -5,7 +5,7 @@
  * déconnexion à toute l'application.
  */
 import * as React from "react"
-import { API_BASE_URL, apiErrorMessage } from "@/lib/api"
+import { API_BASE_URL, apiErrorMessage, authHeaders, storeSessionToken } from "@/lib/api"
 
 export interface AuthUser {
   id: string
@@ -60,6 +60,7 @@ interface MePayload {
   }
   organization: { id: string; name: string; onboarding_completed: boolean } | null
   role: string | null
+  session_token?: string
 }
 
 function stateFromPayload(payload: MePayload): AuthState {
@@ -94,7 +95,10 @@ async function postJson(path: string, body: unknown): Promise<MePayload> {
     body: JSON.stringify(body),
   })
   if (!response.ok) throw new Error(await apiErrorMessage(response))
-  return (await response.json()) as MePayload
+  const payload = (await response.json()) as MePayload
+  // Secours pour les contextes où le cookie httpOnly est bloqué (iframe).
+  if (payload.session_token) storeSessionToken(payload.session_token)
+  return payload
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -103,7 +107,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refresh = React.useCallback(async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
-        headers: { Accept: "application/json" },
+        headers: { Accept: "application/json", ...authHeaders() },
         credentials: "include",
       })
       if (!response.ok) {
@@ -121,7 +125,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     ;(async () => {
       try {
         const response = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
-          headers: { Accept: "application/json" },
+          headers: { Accept: "application/json", ...authHeaders() },
           credentials: "include",
         })
         if (cancelled) return
@@ -152,8 +156,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = React.useCallback(async () => {
     try {
-      await fetch(`${API_BASE_URL}/api/v1/auth/logout`, { method: "POST", credentials: "include" })
+      await fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
+        method: "POST",
+        headers: authHeaders(),
+        credentials: "include",
+      })
     } finally {
+      storeSessionToken(null)
       setState(SIGNED_OUT)
     }
   }, [])
