@@ -2,6 +2,7 @@ import * as React from "react"
 import { Navigate, useLocation } from "react-router-dom"
 import { LoadingSpinner } from "@/components/ui/loading-spinner"
 import { useOnboardingStatus } from "@/lib/onboarding-api"
+import { useAuth } from "@/lib/auth"
 
 /**
  * Garde de route authentifiée (§3 du WORKFLOW) :
@@ -14,6 +15,19 @@ import { useOnboardingStatus } from "@/lib/onboarding-api"
 export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { data, loading, error } = useOnboardingStatus()
   const location = useLocation()
+  const { refresh } = useAuth()
+
+  // Si la vérification échoue (ex. session expirée côté serveur), on
+  // resynchronise l'état d'authentification : une session réellement invalide
+  // bascule l'app en "déconnecté" et la garde racine redirige vers la
+  // connexion au lieu de laisser un écran d'erreur.
+  React.useEffect(() => {
+    if (!error) return
+    const timer = window.setTimeout(() => {
+      void refresh()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [error, refresh])
 
   if (loading) {
     return (

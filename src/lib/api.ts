@@ -16,7 +16,12 @@ export { API_BASE_URL }
 // ---------------------------------------------------------------------------
 const SESSION_TOKEN_KEY = "washpilot.session-token"
 
+// Repli ultime : certains contextes intégrés (iframe) bloquent cookies ET
+// localStorage. Le jeton vit alors en mémoire pour la durée de la page.
+let inMemorySessionToken: string | null = null
+
 export function getStoredSessionToken(): string | null {
+  if (inMemorySessionToken) return inMemorySessionToken
   try {
     return window.localStorage.getItem(SESSION_TOKEN_KEY)
   } catch {
@@ -25,11 +30,12 @@ export function getStoredSessionToken(): string | null {
 }
 
 export function storeSessionToken(token: string | null): void {
+  inMemorySessionToken = token
   try {
     if (token) window.localStorage.setItem(SESSION_TOKEN_KEY, token)
     else window.localStorage.removeItem(SESSION_TOKEN_KEY)
   } catch {
-    // Stockage local indisponible : le cookie reste la seule voie.
+    // Stockage local indisponible : le jeton en mémoire prend le relais.
   }
 }
 
