@@ -12,7 +12,7 @@ export class HttpError extends Error {
     this.code = code
   }
 }
-export interface AuthContext { clerkUserId: string; clerkOrgId: string | null; clerkRole: string | null; sessionId: string | null }
+export interface AuthContext { clerkUserId: string; clerkOrgId: string | null; clerkOrgSlug: string | null; clerkRole: string | null; sessionId: string | null }
 // Express request augmentation requires a namespace declaration by design.
 // eslint-disable-next-line @typescript-eslint/no-namespace
 declare global { namespace Express { interface Request { auth?: AuthContext; tenant?: { organizationId: string; userId: string; role: string; siteId?: string } } } }
@@ -33,6 +33,7 @@ export async function requireClerkSession(req: Request, _res: Response, next: Ne
     req.auth = {
       clerkUserId: sub,
       clerkOrgId: typeof claims.org_id === "string" ? claims.org_id : null,
+      clerkOrgSlug: typeof claims.org_slug === "string" ? claims.org_slug : null,
       clerkRole: typeof claims.org_role === "string" ? claims.org_role : null,
       sessionId: typeof claims.sid === "string" ? claims.sid : null,
     }

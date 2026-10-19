@@ -6,6 +6,7 @@ import {
   getClerkOrganizationMembershipRole,
   getClerkOrganizationProfile,
   getClerkUserProfile,
+  type AuthContext,
 } from "./auth.ts"
 import { env } from "./env.ts"
 
@@ -98,6 +99,59 @@ async function provisionTenantFromClerk(clerkOrgId: string, clerkUserId: string)
   }
 }
 
+/**
+ * Last-resort provisioning from the *verified* token claims (org_id, org_slug,
+ * org_role are signed by Clerk). Used when the Clerk REST API is unreachable
+ * (e.g. restricted network): names/emails are placeholders until the webhook
+ * or a reachable API call enriches them.
+ */
+async function provisionTenantFromClaims(auth: AuthContext): Promise<TenantRow | null> {
+  const pool = getPool()
+  if (!pool || !auth.clerkOrgId || !auth.clerkRole) return null
+  const role = roleFromClerkRole(auth.clerkRole)
+  const orgName = auth.clerkOrgSlug ? auth.clerkOrgSlug.replace(/-/g, " ") : "Mon organisation"
+  const placeholderEmail = `${auth.clerkUserId}@clerk.local`
+
+  const client = await pool.connect()
+  try {
+    await client.query("BEGIN")
+    const orgQ = await client.query(
+      `INSERT INTO organizations (clerk_org_id, name, slug) VALUES ($1, $2, $3)
+       ON CONFLICT (clerk_org_id) DO UPDATE SET updated_at = NOW()
+       RETURNING id`,
+      [auth.clerkOrgId, orgName, auth.clerkOrgSlug],
+    )
+    const organizationId = orgQ.rows[0].id as string
+    const userQ = await client.query(
+      `INSERT INTO users (clerk_user_id, organization_id, email, status)
+       VALUES ($1, $2, $3, 'active')
+       ON CONFLICT (clerk_user_id) DO UPDATE SET updated_at = NOW()
+       RETURNING id, status`,
+      [auth.clerkUserId, organizationId, placeholderEmail],
+    )
+    const userId = userQ.rows[0].id as string
+    await client.query(
+      `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, organization_id) DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()`,
+      [organizationId, userId, role],
+    )
+    await client.query(
+      `INSERT INTO onboarding_progress (organization_id, current_stage) VALUES ($1, 'station')
+       ON CONFLICT (organization_id) DO NOTHING`,
+      [organizationId],
+    )
+    await client.query("COMMIT")
+    console.info("[tenant] Provisioned organization from verified token claims (Clerk API unreachable).")
+    return { organization_id: organizationId, user_id: userId, status: userQ.rows[0].status as string, role }
+  } catch (error) {
+    await client.query("ROLLBACK")
+    console.warn("[tenant] Claims-based provisioning failed:", error instanceof Error ? error.message : "unknown")
+    return null
+  } finally {
+    client.release()
+  }
+}
+
 /** Resolve the Neon tenant for the verified Clerk session and attach it to the request. */
 export async function requireTenantContext(req: Request, _res: Response, next: NextFunction) {
   try {
@@ -113,6 +167,10 @@ export async function requireTenantContext(req: Request, _res: Response, next: N
     if (!row) {
       // Webhook sync may lag behind the first authenticated request.
       row = await provisionTenantFromClerk(auth.clerkOrgId, auth.clerkUserId)
+    }
+    if (!row) {
+      // Clerk REST API unreachable: fall back to the signed token claims.
+      row = await provisionTenantFromClaims(auth)
     }
     if (!row || row.status !== "active") {
       throw new HttpError(403, "organization_membership_required", "Votre compte n'est pas membre de cette organisation.")

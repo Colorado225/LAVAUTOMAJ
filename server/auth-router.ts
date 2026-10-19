@@ -17,22 +17,35 @@ export function createAuthRouter() {
       if (!p) throw new HttpError(503, "database_not_configured", "Base de données indisponible.")
 
       // Fetch the verified profile from Clerk (server-side, never trust browser).
-      const profile = await getClerkUserProfile(a.clerkUserId)
-
-      await p.query(
-        `INSERT INTO users (clerk_user_id, email, first_name, last_name, avatar_url, status)
-         VALUES ($1, $2, $3, $4, $5, 'active')
-         ON CONFLICT (clerk_user_id) DO UPDATE SET
-           email = EXCLUDED.email,
-           first_name = EXCLUDED.first_name,
-           last_name = EXCLUDED.last_name,
-           avatar_url = EXCLUDED.avatar_url,
-           status = CASE WHEN users.status = 'inactive' THEN users.status ELSE 'active' END,
-           updated_at = NOW()`,
-        [a.clerkUserId, profile.email, profile.firstName, profile.lastName, profile.avatarUrl],
-      )
-
-      res.json({ ok: true, user_id: a.clerkUserId })
+      try {
+        const profile = await getClerkUserProfile(a.clerkUserId)
+        await p.query(
+          `INSERT INTO users (clerk_user_id, email, first_name, last_name, avatar_url, status)
+           VALUES ($1, $2, $3, $4, $5, 'active')
+           ON CONFLICT (clerk_user_id) DO UPDATE SET
+             email = EXCLUDED.email,
+             first_name = EXCLUDED.first_name,
+             last_name = EXCLUDED.last_name,
+             avatar_url = EXCLUDED.avatar_url,
+             status = CASE WHEN users.status = 'inactive' THEN users.status ELSE 'active' END,
+             updated_at = NOW()`,
+          [a.clerkUserId, profile.email, profile.firstName, profile.lastName, profile.avatarUrl],
+        )
+        res.json({ ok: true, user_id: a.clerkUserId })
+      } catch (error) {
+        // Clerk REST API unreachable (restricted network): record a minimal,
+        // token-verified identity. The webhook or a later sync enriches it.
+        if (error instanceof HttpError && (error.status === 502 || error.status === 503)) {
+          await p.query(
+            `INSERT INTO users (clerk_user_id, email, status) VALUES ($1, $2, 'active')
+             ON CONFLICT (clerk_user_id) DO NOTHING`,
+            [a.clerkUserId, `${a.clerkUserId}@clerk.local`],
+          )
+          res.json({ ok: true, user_id: a.clerkUserId, degraded: true })
+          return
+        }
+        throw error
+      }
     }),
   )
 
