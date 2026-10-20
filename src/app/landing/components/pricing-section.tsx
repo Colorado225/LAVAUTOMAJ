@@ -1,214 +1,176 @@
 "use client"
 
-import { Check } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { useState } from "react"
+import { ArrowRight, Check, ShieldCheck } from "lucide-react"
+import { Link } from "react-router-dom"
+import { motion } from "framer-motion"
+
+import { Reveal, SectionHeading } from "./landing-motion"
+import {
+  PRICING_PLANS,
+  PUBLIC_TRIAL_DAYS,
+  formatXofPrice,
+  type PricingPlan,
+} from "@/config/pricing"
+import { SPRING } from "@/lib/motion"
 import { cn } from "@/lib/utils"
 
-const plans = [
-  {
-    name: "Free",
-    description: "Perfect for getting started with essential components",
-    monthlyPrice: 0,
-    yearlyPrice: 0,
-    features: [
-      "Access to 50+ free components",
-      "Basic dashboard templates",
-      "Community support",
-      "GitHub repository access",
-      "Documentation and guides",
-    ],
-    cta: "Get Started",
-    popular: false,
-  },
-  {
-    name: "Pro",
-    description: "For developers who need premium templates and components",
-    monthlyPrice: 19,
-    yearlyPrice: 15,
-    features: [
-      "Premium template collection",
-      "Advanced dashboard layouts",
-      "Priority support",
-      "Commercial use license",
-      "Early access to new releases",
-      "Figma design files",
-      "Custom component requests",
-      "Direct developer access",
-      "Exclusive design resources",
-    ],
-    cta: "Get Started",
-    popular: true,
-    includesPrevious: "All Free features, plus",
-  },
-  {
-    name: "Lifetime",
-    description: "One-time payment for lifetime access to everything",
-    monthlyPrice: 299,
-    yearlyPrice: 299,
-    features: [
-      "Lifetime updates and support",
-      "Private Discord channel",
-      "No recurring fees ever",
-      "Future template access",
-      "VIP support priority",
-      "Exclusive beta features",
-    ],
-    cta: "Get Started",
-    popular: false,
-    includesPrevious: "All Pro features, plus",
-  },
-]
-
+/**
+ * Section tarifaire de la page vitrine.
+ *
+ * Trois forfaits, pas davantage : au-delà, le visiteur compare au lieu de
+ * choisir. Le forfait du milieu est mis en avant — c'est celui que la plupart
+ * des stations avec plusieurs laveurs devraient prendre, et une grille sans
+ * recommandation laisse le gérant seul devant trois colonnes.
+ *
+ * Pas de bascule mensuel / annuel : il n'existe pas de tarif annuel à ce jour,
+ * et afficher un sélecteur qui ne change rien détruit la confiance.
+ */
 export function PricingSection() {
-  const [isYearly, setIsYearly] = useState(false)
-
   return (
-    <section id="pricing" className="py-24 sm:py-32 bg-muted/40">
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Section Header */}
-        <div className="mx-auto max-w-2xl text-center mb-12">
-          <Badge variant="outline" className="mb-4">
-            Pricing Plans
-          </Badge>
-          <h2 className="text-3xl font-bold tracking-tight sm:text-4xl mb-4">
-            Choose your plan
-          </h2>
-          <p className="text-lg text-muted-foreground mb-8">
-            Start building with our free components or upgrade to Pro for access
-            to premium templates and advanced features.
-          </p>
+    <section
+      id="tarifs"
+      className="scroll-mt-24 bg-gradient-to-b from-white to-slate-50 py-20 sm:py-28"
+    >
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <Reveal>
+          <SectionHeading
+            eyebrow="Tarifs"
+            title="Trois forfaits, un prix clair, aucun engagement caché."
+            description={`Essayez gratuitement pendant ${PUBLIC_TRIAL_DAYS} jours, sans carte bancaire. Vous ne payez que si WashPilot vous fait gagner du temps.`}
+          />
+        </Reveal>
 
-          {/* Billing Toggle */}
-          <div className="flex items-center justify-center mb-2">
-            <ToggleGroup
-              value={[isYearly ? "yearly" : "monthly"]}
-              onValueChange={(value) =>
-                value[0] && setIsYearly(value[0] === "yearly")
-              }
-              className="bg-secondary text-secondary-foreground border-none rounded-full p-1 cursor-pointer shadow-none"
-            >
-              <ToggleGroupItem
-                value="monthly"
-                className="data-pressed:bg-background data-pressed:border-border border-transparent border px-6 rounded-full! data-pressed:text-foreground hover:bg-transparent cursor-pointer transition-colors"
-              >
-                Monthly
-              </ToggleGroupItem>
-              <ToggleGroupItem
-                value="yearly"
-                className="data-pressed:bg-background data-pressed:border-border border-transparent border px-6 rounded-full! data-pressed:text-foreground hover:bg-transparent cursor-pointer transition-colors"
-              >
-                Annually
-              </ToggleGroupItem>
-            </ToggleGroup>
-          </div>
-
-          <p className="text-sm text-muted-foreground">
-            <span className="text-primary font-semibold">Save 20%</span> On
-            Annual Billing
-          </p>
+        {/* Étirement par défaut : les trois cartes se terminent à la même
+            hauteur malgré des listes inégales. Seul le forfait recommandé
+            dépasse, et c'est voulu. */}
+        <div className="mt-12 grid gap-5 sm:mt-16 lg:grid-cols-3">
+          {PRICING_PLANS.map((plan, index) => (
+            <PlanCard key={plan.code} plan={plan} index={index} />
+          ))}
         </div>
 
-        {/* Pricing Cards */}
-        <div className="mx-auto max-w-6xl">
-          <div className="rounded-xl border">
-            <div className="grid lg:grid-cols-3">
-              {plans.map((plan, index) => (
-                <div
-                  key={index}
-                  className={cn(
-                    "p-8 grid grid-rows-subgrid row-span-4 gap-6",
-                    plan.popular
-                      ? "my-2 mx-4 rounded-xl bg-card border-transparent shadow-xl ring-1 ring-foreground/10 backdrop-blur"
-                      : ""
-                  )}
-                >
-                  {/* Plan Header */}
-                  <div>
-                    <div className="text-lg font-medium tracking-tight mb-2">
-                      {plan.name}
-                    </div>
-                    <div className="text-muted-foreground text-balance text-sm">
-                      {plan.description}
-                    </div>
-                  </div>
-
-                  {/* Pricing */}
-                  <div>
-                    <div className="text-4xl font-bold mb-1">
-                      {plan.name === "Lifetime"
-                        ? `$${plan.monthlyPrice}`
-                        : plan.name === "Free"
-                          ? "$0"
-                          : `$${isYearly ? plan.yearlyPrice : plan.monthlyPrice}`}
-                    </div>
-                    <div className="text-muted-foreground text-sm">
-                      {plan.name === "Lifetime"
-                        ? "One-time payment"
-                        : "Per month"}
-                    </div>
-                  </div>
-
-                  {/* CTA Button */}
-                  <div>
-                    <Button
-                      className={cn(
-                        "w-full cursor-pointer my-2",
-                        plan.popular
-                          ? "shadow-md border-[0.5px] border-primary-foreground/25 shadow-black/20 bg-primary ring-1 ring-primary/15 text-primary-foreground hover:bg-primary/90"
-                          : "shadow-sm shadow-black/15 border border-transparent bg-background ring-1 ring-foreground/10 hover:bg-muted/50"
-                      )}
-                      variant={plan.popular ? "default" : "secondary"}
-                    >
-                      {plan.cta}
-                    </Button>
-                  </div>
-
-                  {/* Features */}
-                  <div>
-                    <ul role="list" className="flex flex-col gap-3 text-sm">
-                      {plan.includesPrevious && (
-                        <li className="flex items-center gap-3 font-medium">
-                          {plan.includesPrevious}:
-                        </li>
-                      )}
-                      {plan.features.map((feature, featureIndex) => (
-                        <li
-                          key={featureIndex}
-                          className="flex items-center gap-3"
-                        >
-                          <Check
-                            className="text-muted-foreground size-4 flex-shrink-0"
-                            strokeWidth={2.5}
-                          />
-                          <span>{feature}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Enterprise Note */}
-        <div className="mt-16 text-center">
-          <p className="text-muted-foreground">
-            Need custom components or have questions?{" "}
-            <Button
-              variant="link"
-              className="p-0 h-auto cursor-pointer"
-              nativeButton={false}
-              render={<a href="#contact" />}
-            >
-              Contact our team
-            </Button>
-          </p>
-        </div>
+        <Reveal delay={0.1}>
+          <TrialNote />
+        </Reveal>
       </div>
     </section>
+  )
+}
+
+function PlanCard({ plan, index }: { plan: PricingPlan; index: number }) {
+  const featured = plan.featured === true
+
+  return (
+    <Reveal delay={index * 0.07} className="h-full">
+      <motion.article
+        whileHover={{ y: -4 }}
+        transition={SPRING.soft}
+        className={cn(
+          "surface-3d relative flex h-full flex-col rounded-3xl border bg-white p-6 sm:p-7",
+          featured
+            ? // Le forfait recommandé est plus haut dans la hiérarchie de
+              // profondeur, et garde sa lueur même sans survol.
+              "glow-primary glow-static border-blue-200 lg:-mt-4 lg:pb-9"
+            : "border-slate-200"
+        )}
+      >
+        {featured && (
+          <span className="absolute -top-3 left-6 rounded-full bg-[#123d79] px-3 py-1 text-[10px] font-extrabold uppercase tracking-[0.16em] text-white shadow-md shadow-blue-900/20">
+            Recommandé
+          </span>
+        )}
+
+        <p
+          className={cn(
+            "text-[11px] font-bold uppercase tracking-[0.18em]",
+            featured ? "text-blue-700" : "text-slate-400"
+          )}
+        >
+          {plan.tagline}
+        </p>
+
+        <h3 className="mt-2 text-2xl font-extrabold tracking-[-0.03em] text-[#102342]">
+          {plan.name}
+        </h3>
+
+        {/* Le prix et l'unité sur la même ligne de base : « 20 000 FCFA / mois »
+            se lit d'un bloc, alors qu'un « /mois » décroché se perd. */}
+        <p className="mt-5 flex flex-wrap items-baseline gap-x-2">
+          <span className="text-4xl font-extrabold tracking-[-0.04em] text-[#102342] tabular-nums">
+            {formatXofPrice(plan.priceXof)}
+          </span>
+          <span className="text-sm font-semibold text-slate-500">/ mois</span>
+        </p>
+
+        <p className="mt-3 min-h-[3rem] text-sm leading-6 text-slate-500">
+          {plan.audience}
+        </p>
+
+        <Link
+          to="/auth/sign-up"
+          className={cn(
+            "group mt-6 inline-flex min-h-12 items-center justify-center gap-2 rounded-xl px-5 text-sm font-bold transition duration-200 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/25 motion-reduce:transition-none",
+            featured
+              ? "bg-[#123d79] text-white shadow-md shadow-blue-900/15 hover:-translate-y-0.5 hover:bg-[#0d3268]"
+              : "border border-slate-200 bg-white text-[#102342] hover:-translate-y-0.5 hover:bg-slate-50"
+          )}
+        >
+          Commencer l’essai gratuit
+          <ArrowRight
+            className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none"
+            aria-hidden="true"
+          />
+        </Link>
+
+        <div className="mt-7 border-t border-slate-100 pt-6">
+          {plan.inherits && (
+            <p className="mb-4 text-sm font-bold text-[#102342]">
+              {plan.inherits}, plus :
+            </p>
+          )}
+          <ul className="flex flex-col gap-3 text-sm">
+            {plan.features.map((feature) => (
+              <li key={feature} className="flex items-start gap-3">
+                <span
+                  className={cn(
+                    "mt-0.5 grid size-5 shrink-0 place-items-center rounded-full",
+                    featured
+                      ? "bg-blue-100 text-blue-700"
+                      : "bg-slate-100 text-slate-500"
+                  )}
+                >
+                  <Check className="size-3" strokeWidth={3} aria-hidden="true" />
+                </span>
+                <span className="leading-6 text-slate-600">{feature}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </motion.article>
+    </Reveal>
+  )
+}
+
+/**
+ * Rappel de l'essai. Placé après la grille : le visiteur a vu les prix, c'est
+ * le moment de lever l'objection du paiement, pas avant.
+ */
+function TrialNote() {
+  return (
+    <div className="elev-1 mx-auto mt-10 flex max-w-3xl flex-col items-start gap-4 rounded-2xl border border-blue-100 bg-white p-5 sm:flex-row sm:items-center sm:p-6">
+      <span className="edge-3d grid size-11 shrink-0 place-items-center rounded-2xl bg-blue-50 text-blue-700">
+        <ShieldCheck className="size-5" aria-hidden="true" />
+      </span>
+      <div>
+        <p className="text-sm font-bold text-[#102342]">
+          {PUBLIC_TRIAL_DAYS} jours d’essai accompagné, sans carte bancaire.
+        </p>
+        <p className="mt-1 text-sm leading-6 text-slate-500">
+          Vous gardez l’accès complet pendant l’essai. À l’échéance, votre
+          espace reste consultable : vos données ne sont jamais bloquées ni
+          supprimées. Les prix sont en francs CFA, par station et par mois.
+        </p>
+      </div>
+    </div>
   )
 }

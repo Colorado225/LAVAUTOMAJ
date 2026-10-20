@@ -8,6 +8,7 @@ const navigationItems = [
   { name: "Les enjeux", href: "#enjeux" },
   { name: "La démo", href: "#demo" },
   { name: "Fonctionnalités", href: "#fonctionnalites" },
+  { name: "Tarifs", href: "#tarifs" },
   { name: "Questions", href: "#faq" },
 ]
 
