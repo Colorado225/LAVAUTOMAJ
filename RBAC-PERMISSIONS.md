@@ -284,3 +284,53 @@ souscrite.
 Le détail des fonctions gardées, forfait par forfait, est dans `TARIFS.md`
 section 7. L'interface applique la même priorité via `useAccess(permission,
 capability)` et le composant `PlanGate`.
+
+## Navigation : la permission d'une entrée de menu
+
+Règle : **une entrée de la barre latérale exige la permission de l'action que
+sa page permet**, pas celle qui autorise à la lire.
+
+La nuance n'est pas cosmétique. Le serveur laisse tout porteur de `wash:read`
+lire `GET /sites`, mais créer, modifier ou désactiver une station exige
+`settings:manage`, réservé au propriétaire. L'entrée « Stations » a d'abord
+été déclarée avec `wash:read` : un agent de lavage voyait donc apparaître une
+rubrique « Configuration » ne contenant qu'un écran dont tous les boutons
+étaient grisés. Le même raisonnement qu'en section « Cumul avec le forfait »
+s'applique : on n'annonce pas une porte qu'on ne peut pas ouvrir. L'entrée
+exige désormais `settings:manage`.
+
+L'URL `/sites` reste atteignable en lecture pour qui a `wash:read` — rien
+n'est interdit qui ne l'était, seule l'annonce change.
+
+Ce que chaque rôle voit aujourd'hui :
+
+| Entrée | Permission | Propriétaire | Gérant | Caissier | Agent |
+|---|---|:-:|:-:|:-:|:-:|
+| Tableau de bord | `dashboard:read` | ✓ | ✓ | ✓ | — |
+| Nouveau lavage | `wash:read` | ✓ | ✓ | ✓ | ✓ |
+| Encaissements | `payment:read` | ✓ | ✓ | ✓ | — |
+| Caisse | `cash_session:read` | ✓ | ✓ | ✓ | — |
+| Dépenses | `expense:read` | ✓ | — | ✓ | — |
+| Rapports | `report:operational` | ✓ | ✓ | ✓ | — |
+| Historique | `audit:read` | ✓ | ✓ | — | — |
+| Équipe | `worker:read` | ✓ | ✓ | ✓ | — |
+| Catalogue | `service:read` | ✓ | ✓ | ✓ | ✓ |
+| Stations | `settings:manage` | ✓ | — | — | — |
+| Gestion des accès | `user:manage` | ✓ | — | — | — |
+| Paramètres | libre | ✓ | ✓ | ✓ | ✓ |
+
+`tests/navigation.test.ts` verrouille l'ensemble : toute page du disque est
+déclarée dans une route, toute entrée de menu pointe vers une route existante,
+toute route applicative est atteignable depuis le menu — sauf exceptions
+nommées et motivées — et l'entrée Stations exige bien `settings:manage`.
+
+### Point ouvert : les dépenses échappent au gérant
+
+Le caissier détient `expense:read` et `expense:create` ; le gérant ne détient
+ni l'un ni l'autre. Un caissier peut donc enregistrer une sortie d'argent que
+son responsable direct ne peut pas consulter, alors que la grille tarifaire
+vend au forfait Pro le « suivi des dépenses et marges opérationnelles ».
+
+Ce n'est pas un défaut de câblage mais un arbitrage : élargir le gérant à
+`expense:read` lui ouvre la vue sur les sorties d'argent de la station. La
+matrice n'a pas été modifiée sans décision explicite.

@@ -117,10 +117,16 @@ const data = {
       label: "Configuration",
       items: [
         {
+          // `settings:manage` et non `wash:read` : le serveur laisse tout le
+          // monde *lire* la liste des stations, mais créer, modifier et
+          // désactiver exigent `settings:manage`. Avec `wash:read`, un agent
+          // de lavage voyait une rubrique « Configuration » ne contenant
+          // qu'un écran aux boutons tous grisés. On n'annonce pas une porte
+          // qu'on ne peut pas ouvrir ; l'URL reste accessible en lecture.
           title: "Stations",
           url: "/sites",
           icon: Building2,
-          permission: "wash:read" as Permission,
+          permission: "settings:manage" as Permission,
         },
         {
           title: "Gestion des accès",
