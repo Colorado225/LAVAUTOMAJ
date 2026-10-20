@@ -13,6 +13,18 @@ const schema = z.object({
   /** Transport e-mail (Resend). Sans clé, les liens sont journalisés côté serveur. */
   RESEND_API_KEY: z.string().trim().optional().default(""),
   MAIL_FROM: z.string().trim().optional().default("WashPilot CI <onboarding@resend.dev>"),
+  /** Numéro WhatsApp de l'assistance, au format international (ex. +2250700000000). */
+  SUPPORT_WHATSAPP: z.string().trim().optional().default(""),
+  /** Adresse e-mail de l'assistance, affichée en second recours. */
+  SUPPORT_EMAIL: z.string().trim().optional().default("support@washpilot.ci"),
+  /** Relances automatiques d'échéance d'abonnement (désactivables en test). */
+  REMINDERS_ENABLED: z
+    .enum(["true", "false"])
+    .optional()
+    .default("true")
+    .transform((value) => value === "true"),
+  /** Intervalle entre deux passages du planificateur de relances, en minutes. */
+  REMINDERS_INTERVAL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
 })
 
 const parsed = schema.safeParse(process.env)

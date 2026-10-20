@@ -394,7 +394,7 @@ export function CreateWashModal({
                   return (
                     <label
                       key={service.id}
-                      className="flex items-center gap-2 rounded-lg border p-3 cursor-pointer hover:bg-muted/50 transition-colors"
+                      className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border p-3 transition-colors hover:bg-muted/50 has-[:checked]:border-primary/60 has-[:checked]:bg-primary/5"
                     >
                       <Checkbox
                         checked={quantity > 0}
@@ -413,7 +413,8 @@ export function CreateWashModal({
                           onChange={(e) =>
                             changeQuantity(service.id, e.target.value)
                           }
-                          className="w-12 h-6 rounded border border-input text-xs text-center"
+                          inputMode="numeric"
+                          className="h-9 w-14 rounded-md border border-input text-center text-sm tabular-nums"
                           aria-label={`Quantité pour ${service.name}`}
                         />
                       )}
@@ -502,6 +503,8 @@ export function CreateWashModal({
                   type="number"
                   min={0}
                   step="1"
+                  inputMode="numeric"
+                  className="h-11 text-base tabular-nums"
                   {...register("amount_received_cents", {
                     valueAsNumber: true,
                     validate: (value) =>
@@ -510,7 +513,16 @@ export function CreateWashModal({
                   })}
                   placeholder="0"
                 />
-                <span className="text-xs text-muted-foreground">XOF</span>
+                {/* Cas le plus fréquent en station : le client paie le montant exact. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11 whitespace-nowrap"
+                  disabled={totalCents <= 0}
+                  onClick={() => setValue("amount_received_cents", totalCents, { shouldValidate: true })}
+                >
+                  Appoint exact
+                </Button>
               </div>
               {errors.amount_received_cents && (
                 <span className="text-xs text-destructive">
@@ -553,12 +565,21 @@ export function CreateWashModal({
             </div>
           )}
 
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange?.(false)}>
+          <DialogFooter className="sticky bottom-0 -mx-6 -mb-6 gap-3 border-t bg-background/95 px-6 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:flex-row sm:items-center sm:justify-between">
+            {/* Récapitulatif toujours visible, y compris sur mobile. */}
+            <div className="flex items-baseline justify-between gap-3 sm:justify-start">
+              <span className="text-xs text-muted-foreground">Total à encaisser</span>
+              <span className="text-lg font-bold tabular-nums">
+                {(totalCents / 100).toLocaleString("fr-CI")} XOF
+              </span>
+            </div>
+            <div className="flex gap-2">
+            <Button type="button" variant="outline" className="h-11 flex-1 sm:flex-none" onClick={() => onOpenChange?.(false)}>
               Annuler
             </Button>
             <Button
               type="submit"
+              className="h-11 flex-1 sm:flex-none"
               disabled={
                 isSubmitting ||
                 !siteId ||
@@ -572,6 +593,7 @@ export function CreateWashModal({
               )}
               {isSubmitting ? "Enregistrement…" : "Enregistrer le lavage"}
             </Button>
+            </div>
           </DialogFooter>
         </form>
       </DialogContent>

@@ -3,9 +3,12 @@
 import type * as React from "react"
 import { useState } from "react"
 import { Link, useParams } from "react-router-dom"
-import { ArrowLeft, Ban, Lock, RefreshCw } from "lucide-react"
+import { ArrowLeft, Ban, BadgeCheck, Lock, RefreshCw, Wallet } from "lucide-react"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { apiFetch, useApi } from "@/lib/api"
+import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
+import { createIdempotencyKey } from "@/lib/idempotency"
+import { Input } from "@/components/ui/input"
+import { PAYMENT_METHODS, paymentMethodLabel as methodLabel } from "@/lib/payments-api"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -73,16 +76,21 @@ function formatXof(cents: number): string {
   return `${(cents / 100).toLocaleString("fr-CI", { maximumFractionDigits: 2 })} XOF`
 }
 
-function paymentMethodLabel(method: string): string {
-  const labels: Record<string, string> = {
-    cash: "Espèces",
-    orange_money: "Orange Money",
-    mtn_momo: "MTN MoMo",
-    moov_money: "Moov Money",
-    wave: "Wave",
-    other: "Autre",
-  }
-  return labels[method] ?? method
+const paymentMethodLabel = methodLabel
+
+/** Session de caisse ouverte sur la station du lavage. */
+interface CurrentCashSession {
+  id: string
+  site_id: string
+  status: string
+}
+
+function parseXofAmount(value: string): number | null {
+  const normalized = value.replace(/\s/g, "").replace(",", ".")
+  if (!normalized) return null
+  const amount = Number(normalized)
+  if (!Number.isFinite(amount) || amount <= 0) return null
+  return Math.round(amount * 100)
 }
 
 function paymentStatusLabel(status: string): string {
@@ -107,6 +115,18 @@ export default function WashDetailPage() {
   const [reason, setReason] = useState("")
   const [saving, setSaving] = useState(false)
   const [mutationError, setMutationError] = useState<string | null>(null)
+  const managePayments = useCapability("payments.manage")
+  const [paymentOpen, setPaymentOpen] = useState(false)
+  const [paymentMethod, setPaymentMethod] = useState<string>("cash")
+  const [paymentAmount, setPaymentAmount] = useState("")
+  const [paymentReference, setPaymentReference] = useState("")
+  const [paymentBusy, setPaymentBusy] = useState(false)
+  const [paymentSuccess, setPaymentSuccess] = useState<string | null>(null)
+  const { data: cashSession } = useApi<CurrentCashSession | null>(
+    paymentMethod === "cash" && detail?.wash?.site_id
+      ? `/api/v1/cash-sessions/current?site_id=${encodeURIComponent(detail.wash.site_id)}&refresh=${refreshKey}`
+      : "",
+  )
 
   async function cancelWash() {
     if (!washID || !reason.trim()) {
@@ -131,6 +151,79 @@ export default function WashDetailPage() {
       setMutationError(err instanceof Error ? err.message : "Impossible d’annuler ce lavage.")
     } finally {
       setSaving(false)
+    }
+  }
+
+  const paidCents = (detail?.payments ?? [])
+    .filter((payment) => payment.status !== "refunded")
+    .reduce((sum, payment) => sum + payment.amount_cents, 0)
+  const remainingCents = Math.max(0, (detail?.wash?.total_cents ?? 0) - paidCents)
+
+  /** Encaisse un complément (ou la totalité) du solde restant. */
+  async function recordPayment() {
+    if (!washID) return
+    const amountCents = parseXofAmount(paymentAmount)
+    if (amountCents == null) {
+      setMutationError("Saisissez un montant valide.")
+      return
+    }
+    if (amountCents > remainingCents) {
+      setMutationError("Le montant dépasse le solde restant.")
+      return
+    }
+    if (paymentMethod === "cash" && !cashSession?.id) {
+      setMutationError("Ouvrez une session de caisse pour encaisser des espèces.")
+      return
+    }
+    setPaymentBusy(true)
+    setMutationError(null)
+    setPaymentSuccess(null)
+    try {
+      const response = await apiFetch(`/api/v1/washes/${encodeURIComponent(washID)}/payments`, {
+        method: "POST",
+        headers: { "Idempotency-Key": createIdempotencyKey() },
+        body: JSON.stringify({
+          method: paymentMethod,
+          amount_cents: amountCents,
+          reference: paymentReference.trim() || undefined,
+          cash_session_id: paymentMethod === "cash" ? cashSession?.id : undefined,
+        }),
+      })
+      if (!response.ok) {
+        setMutationError(await apiErrorMessage(response))
+        return
+      }
+      setPaymentOpen(false)
+      setPaymentAmount("")
+      setPaymentReference("")
+      setPaymentSuccess("Encaissement enregistré.")
+      setRefreshKey((key) => key + 1)
+    } catch {
+      setMutationError("Encaissement impossible : serveur injoignable.")
+    } finally {
+      setPaymentBusy(false)
+    }
+  }
+
+  /** Confirme la réception d'un paiement mobile money. */
+  async function confirmPayment(paymentId: string) {
+    setPaymentBusy(true)
+    setMutationError(null)
+    try {
+      const response = await apiFetch(`/api/v1/payments/${paymentId}/verify`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      })
+      if (!response.ok) {
+        setMutationError(await apiErrorMessage(response))
+        return
+      }
+      setPaymentSuccess("Paiement confirmé.")
+      setRefreshKey((key) => key + 1)
+    } catch {
+      setMutationError("Confirmation impossible : serveur injoignable.")
+    } finally {
+      setPaymentBusy(false)
     }
   }
 
@@ -257,7 +350,13 @@ export default function WashDetailPage() {
                 )}
               </div>
               <div className="rounded-lg border bg-card p-4">
-                <h2 className="font-semibold">Paiements</h2>
+                <div className="flex items-start justify-between gap-3">
+                  <h2 className="font-semibold">Paiements</h2>
+                  <span className="text-sm text-muted-foreground">
+                    {formatXof(paidCents)} / {formatXof(wash?.total_cents ?? 0)}
+                  </span>
+                </div>
+
                 {detail.payments.length === 0 ? (
                   <p className="mt-2 text-sm text-muted-foreground">Aucun paiement enregistré.</p>
                 ) : (
@@ -268,13 +367,125 @@ export default function WashDetailPage() {
                           <span className="font-medium">{paymentMethodLabel(payment.method)}</span>
                           <span>{formatXof(payment.amount_cents)}</span>
                         </div>
-                        <div className="mt-1 flex justify-between gap-3 text-xs text-muted-foreground">
+                        <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
                           <span>{paymentStatusLabel(payment.status)}</span>
                           <time>{new Date(payment.received_at).toLocaleString("fr-CI")}</time>
                         </div>
+                        {payment.status === "pending" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="mt-2 h-8"
+                            disabled={paymentBusy || !managePayments.allowed}
+                            title={managePayments.reason ?? undefined}
+                            onClick={() => void confirmPayment(payment.id)}
+                          >
+                            <BadgeCheck className="mr-1.5 size-3.5" /> Confirmer la réception
+                          </Button>
+                        )}
                       </li>
                     ))}
                   </ul>
+                )}
+
+                {/* Solde restant : encaissement en plusieurs fois ------------- */}
+                {wash?.status !== "cancelled" && remainingCents > 0 && (
+                  <div className="mt-4 border-t pt-3">
+                    <p className="text-sm">
+                      Solde restant : <strong>{formatXof(remainingCents)}</strong>
+                    </p>
+                    {paymentOpen ? (
+                      <div className="mt-3 space-y-3">
+                        <label className="flex flex-col gap-1 text-sm font-medium">
+                          Moyen de paiement
+                          <select
+                            className="h-11 rounded-md border border-input bg-background px-3 text-sm"
+                            value={paymentMethod}
+                            onChange={(event) => setPaymentMethod(event.target.value)}
+                          >
+                            {PAYMENT_METHODS.map((method) => (
+                              <option key={method} value={method}>
+                                {paymentMethodLabel(method)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="flex flex-col gap-1 text-sm font-medium">
+                          Montant reçu (XOF)
+                          <div className="flex gap-2">
+                            <Input
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              step="any"
+                              className="h-11"
+                              value={paymentAmount}
+                              onChange={(event) => setPaymentAmount(event.target.value)}
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="h-11 whitespace-nowrap"
+                              onClick={() => setPaymentAmount(String(remainingCents / 100))}
+                            >
+                              Solde entier
+                            </Button>
+                          </div>
+                        </label>
+                        {paymentMethod !== "cash" && (
+                          <label className="flex flex-col gap-1 text-sm font-medium">
+                            Référence de la transaction <span className="font-normal text-muted-foreground">(facultatif)</span>
+                            <Input
+                              className="h-11"
+                              value={paymentReference}
+                              onChange={(event) => setPaymentReference(event.target.value)}
+                              placeholder="Ex. OM-2026-10-20-00123"
+                            />
+                          </label>
+                        )}
+                        {paymentMethod === "cash" && !cashSession?.id && (
+                          <p role="alert" className="text-sm text-destructive">
+                            Aucune session de caisse ouverte sur cette station : ouvrez la caisse pour encaisser des espèces.
+                          </p>
+                        )}
+                        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                          <Button type="button" variant="ghost" onClick={() => setPaymentOpen(false)}>
+                            Annuler
+                          </Button>
+                          <Button type="button" disabled={paymentBusy} onClick={() => void recordPayment()}>
+                            {paymentBusy ? <RefreshCw className="mr-2 size-4 animate-spin" /> : <Wallet className="mr-2 size-4" />}
+                            Enregistrer l’encaissement
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <Button
+                        className="mt-2 h-11"
+                        disabled={!managePayments.allowed}
+                        title={managePayments.reason ?? undefined}
+                        onClick={() => {
+                          setMutationError(null)
+                          setPaymentSuccess(null)
+                          setPaymentAmount(String(remainingCents / 100))
+                          setPaymentOpen(true)
+                        }}
+                      >
+                        {managePayments.allowed ? <Wallet className="mr-2 size-4" /> : <Lock className="mr-2 size-4" />}
+                        Encaisser le solde
+                      </Button>
+                    )}
+                  </div>
+                )}
+
+                {paymentSuccess && (
+                  <p role="status" className="mt-3 rounded-md border border-emerald-600/30 bg-emerald-600/5 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400">
+                    {paymentSuccess}
+                  </p>
+                )}
+                {mutationError && !cancelOpen && (
+                  <p role="alert" className="mt-3 text-sm text-destructive">
+                    {mutationError}
+                  </p>
                 )}
               </div>
             </section>

@@ -49,11 +49,14 @@ type ReportsSummary = {
     total_washes: number
     completed_washes: number
     paid_washes: number
+    unpaid_washes: number
     revenue_cents: number
+    /** Encaissements mobile money encore à confirmer. */
+    pending_cents: number
     expenses_cents: number
     net_cents: number
   }
-  daily: Array<{
+  series: Array<{
     date: string
     wash_count: number
     revenue_cents: number
@@ -252,7 +255,7 @@ export default function DashboardPage() {
   // Série quotidienne du graphique : montants convertis en FCFA.
   const revenueSeries = useMemo(
     () =>
-      (report?.daily ?? []).map((day) => ({
+      (report?.series ?? []).map((day) => ({
         date: day.date,
         label: formatDayLabel(day.date),
         revenue: Math.round(day.revenue_cents / 100),

@@ -10,6 +10,7 @@ import {
   Users,
   Plus,
   List,
+  BadgeCheck,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { Logo } from "@/components/logo"
@@ -47,6 +48,11 @@ const data = {
           title: "Nouveau lavage",
           url: "/washes",
           icon: Plus,
+        },
+        {
+          title: "Encaissements",
+          url: "/payments",
+          icon: BadgeCheck,
         },
         {
           title: "Caisse",
@@ -104,6 +110,10 @@ const data = {
             {
               title: "Facturation",
               url: "/settings/billing",
+            },
+            {
+              title: "Données et sauvegarde",
+              url: "/settings/data",
             },
           ],
         },

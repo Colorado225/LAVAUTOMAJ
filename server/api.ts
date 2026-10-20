@@ -4,6 +4,7 @@ import type { Pool } from "pg"
 import { getPool } from "./db.ts"
 import { asyncRoute, body, tenant, parseId, requireRole, HttpError } from "./http.ts"
 import { fingerprint, withIdempotency } from "./idempotency.ts"
+import { initialPaymentStatus, resolvePaymentStatus, PAYMENT_METHODS } from "./payments.ts"
 
 export const catalogValidators = {
   category: z
@@ -50,7 +51,7 @@ export const washValidators = {
         )
         .min(1, "Sélectionnez au moins une prestation."),
       worker_ids: z.array(z.string().uuid()).max(50).default([]),
-      payment_method: z.enum(["cash", "orange_money", "mtn_momo", "moov_money", "wave", "other"]),
+      payment_method: z.enum(PAYMENT_METHODS),
       amount_received_cents: z.number().int().min(0).max(100000000),
       cash_session_id: z.string().uuid().optional(),
     })
@@ -506,8 +507,7 @@ export function createApiRouter() {
             cashSessionId = sessionQ.rows[0].id
           }
 
-          const paymentStatus =
-            input.amount_received_cents === 0 ? "unpaid" : input.amount_received_cents < totalCents ? "partial" : "paid"
+          const paymentStatus = resolvePaymentStatus(totalCents, input.amount_received_cents)
 
           const washQ = await client.query(
             `INSERT INTO washes(organization_id, site_id, vehicle_category_id, status, payment_status, total_cents, payment_method, created_by, reference)
@@ -533,7 +533,7 @@ export function createApiRouter() {
           if (input.amount_received_cents > 0) {
             await client.query(
               "INSERT INTO payments(organization_id, wash_id, method, amount_cents, status) VALUES($1,$2,$3,$4,$5)",
-              [t.organizationId, wash.id, input.payment_method, input.amount_received_cents, input.payment_method === "cash" ? "verified" : "pending"],
+              [t.organizationId, wash.id, input.payment_method, input.amount_received_cents, initialPaymentStatus(input.payment_method)],
             )
           }
           if (isCash && cashSessionId) {

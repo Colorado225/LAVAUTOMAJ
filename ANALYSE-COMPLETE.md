@@ -490,4 +490,33 @@ Le forfait Gratuit ouvre désormais un **essai de 14 jours** matérialisé par u
 
 ---
 
-*Généré automatiquement par analyse statique du dépôt `Colorado225/LAVAUTO` — `server.ts`, `server/*.ts`, `src/**/*`, `tests/*`, `package.json`, `vite.config.ts`, `tsconfig.json`. Section 11 ajoutée après application des correctifs.*
+## 13. Audit des 11 fonctions cœur (20 octobre 2026)
+
+Audit complet des fonctions métier essentielles d'une station de lavage, suivi
+de la mise à niveau des quatre fonctions défaillantes et des trois fonctions
+absentes.
+
+| Fonction | Diagnostic | Suite donnée |
+|----------|-----------|--------------|
+| Encaissements | Mobile money bloqué en attente, sans route ni écran de confirmation ; paiement partiel impossible | Module `server/payments.ts` (journal, encaissement, confirmation), page `/payments`, encaissement du solde depuis la fiche de lavage |
+| Suivi des laveurs | Affectations enregistrées mais jamais exploitées | Classement `top_workers` dans les rapports (écran + CSV) |
+| Rapports | Granularité jour uniquement, chiffre d'affaires incohérent avec le tableau de bord | Granularité jour/semaine/mois, définition unifiée du CA, séparation confirmé / à confirmer |
+| Lavage sur mobile | Cibles tactiles de 16 px, total invisible en cours de saisie | Cibles 44 px, clavier numérique, barre de total collante, « Appoint exact » |
+| Sauvegarde | Absente | Export JSON par station (`/backup/export`), `scripts/db-backup.sh` et `db-restore.sh`, écran Paramètres → Données et sauvegarde |
+| Relances d'abonnement | Absentes | J-3, J-1 et échéance, anti-doublon en base, planificateur horaire interne, demande d'activation de forfait |
+| Assistance | Absente | Bouton WhatsApp flottant, message pré-rempli (station, forfait, écran) |
+| Isolation multi-station | Correcte mais non testée | Suite `tests/tenant-isolation.test.ts` (5 tests sur deux stations réelles) |
+
+Fonctions auditées sans défaut et laissées intactes : catalogue des
+prestations, dépenses, contrôle d'accès par rôle. La caisse a reçu une
+amélioration indirecte : tout encaissement en espèces y crée désormais son
+mouvement.
+
+Couverture de tests portée de **50 à 80 tests**.
+
+→ Détail fonction par fonction, limites assumées et procédure de
+vérification : **`AUDIT-FONCTIONNEL.md`**.
+
+---
+
+*Généré automatiquement par analyse statique du dépôt `Colorado225/LAVAUTO` — `server.ts`, `server/*.ts`, `src/**/*`, `tests/*`, `package.json`, `vite.config.ts`, `tsconfig.json`. Sections 11 à 13 ajoutées au fil des itérations.*

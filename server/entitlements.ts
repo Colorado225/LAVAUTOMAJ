@@ -37,6 +37,7 @@ export type SubscriptionStatus =
 export const CAPABILITIES = [
   "washes.create",
   "washes.cancel",
+  "payments.manage",
   "expenses.manage",
   "cash.manage",
   "catalog.manage",
@@ -52,6 +53,7 @@ export type Capability = (typeof CAPABILITIES)[number]
 export const CAPABILITY_LABELS: Record<Capability, string> = {
   "washes.create": "Enregistrer un lavage",
   "washes.cancel": "Annuler un lavage",
+  "payments.manage": "Encaisser et confirmer un paiement",
   "expenses.manage": "Gérer les dépenses",
   "cash.manage": "Gérer la caisse",
   "catalog.manage": "Modifier le catalogue (prestations, catégories, sites)",
@@ -65,6 +67,7 @@ export const CAPABILITY_LABELS: Record<Capability, string> = {
 const WRITE_CAPABILITIES: Capability[] = [
   "washes.create",
   "washes.cancel",
+  "payments.manage",
   "expenses.manage",
   "cash.manage",
   "catalog.manage",

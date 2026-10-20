@@ -6,7 +6,7 @@ import path from "node:path"
 import fs from "node:fs"
 import { fileURLToPath } from "node:url"
 import { env } from "./server/env.ts"
-import { initDatabaseSchema, isDatabaseReady, closeDatabase } from "./server/db.ts"
+import { initDatabaseSchema, isDatabaseReady, closeDatabase, getPool } from "./server/db.ts"
 import { HttpError, requireSession } from "./server/auth.ts"
 import { requireTenantContext } from "./server/tenant.ts"
 import { createAuthRouter } from "./server/auth-router.ts"
@@ -16,6 +16,10 @@ import { createOperationsRouter } from "./server/operations.ts"
 import { createTeamRouter } from "./server/team.ts"
 import { createReportsRouter } from "./server/reports.ts"
 import { createSubscriptionRouter } from "./server/subscription.ts"
+import { createPaymentsRouter } from "./server/payments.ts"
+import { createBackupRouter } from "./server/backup.ts"
+import { createSupportRouter } from "./server/support.ts"
+import { startReminderScheduler } from "./server/reminders.ts"
 import { attachSubscription, blockWritesWhenReadOnly } from "./server/entitlements.ts"
 
 const __filename = fileURLToPath(import.meta.url)
@@ -82,6 +86,9 @@ app.use("/api/v1", blockWritesWhenReadOnly)
 app.use("/api/v1", createSubscriptionRouter())
 app.use("/api/v1", createOnboardingRouter())
 app.use("/api/v1", createApiRouter())
+app.use("/api/v1", createPaymentsRouter())
+app.use("/api/v1", createBackupRouter())
+app.use("/api/v1", createSupportRouter())
 app.use("/api/v1", createTeamRouter())
 app.use("/api/v1", createReportsRouter())
 app.use("/api/v1", createOperationsRouter())
@@ -162,6 +169,10 @@ async function startServer() {
   if (isProd && !databaseReady) {
     throw new Error("DATABASE_URL is required in production; refusing to start without Neon.")
   }
+
+  // Relances d'échéance d'abonnement (J-3, J-1, essai terminé).
+  const pool = getPool()
+  if (databaseReady && pool) startReminderScheduler(pool)
 
   if (!isProd && process.env.ENABLE_LEGACY_DEMO_API === "true") {
     console.warn("[demo] Static mock data endpoints have been removed. ENABLE_LEGACY_DEMO_API is ignored.")

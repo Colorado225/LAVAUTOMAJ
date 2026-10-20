@@ -2,13 +2,20 @@ export interface ReportSummary {
   total_washes: number
   completed_washes: number
   revenue_cents: number
+  /** Encaissements mobile money encore à confirmer sur la période. */
+  pending_cents: number
   expenses_cents: number
   net_cents: number
   paid_washes: number
+  /** Lavages non réglés ou partiellement réglés. */
+  unpaid_washes: number
 }
 
-export interface DailyReportRow {
+export interface SeriesReportRow {
+  /** Début de la période (jour, lundi de la semaine ou 1er du mois). */
   date: string
+  /** Fin de la période couverte par le point. */
+  period_end: string
   wash_count: number
   revenue_cents: number
   expenses_cents: number
@@ -25,7 +32,22 @@ export interface PaymentMethodReportRow {
   method: string
   payment_count: number
   amount_cents: number
+  /** Part confirmée (espèces encaissées, mobile money vérifié). */
+  verified_cents: number
+  /** Part encore à confirmer auprès de l'opérateur. */
+  pending_cents: number
 }
+
+export interface WorkerReportRow {
+  worker_id: string
+  name: string
+  role: string
+  wash_count: number
+  /** Chiffre d'affaires attribué, réparti à parts égales en cas d'équipe. */
+  amount_cents: number
+}
+
+export type ReportGranularity = "day" | "week" | "month"
 
 export interface ExpenseCategoryReportRow {
   category: string
@@ -42,11 +64,13 @@ export interface ReportRestriction {
 }
 
 export interface ReportResponse {
-  period: { from: string; to: string }
+  period: { from: string; to: string; granularity: ReportGranularity }
+  granularity: ReportGranularity
   restriction?: ReportRestriction | null
   summary: ReportSummary
-  daily: DailyReportRow[]
+  series: SeriesReportRow[]
   top_services: ServiceReportRow[]
+  top_workers: WorkerReportRow[]
   payment_methods: PaymentMethodReportRow[]
   expense_categories: ExpenseCategoryReportRow[]
 }

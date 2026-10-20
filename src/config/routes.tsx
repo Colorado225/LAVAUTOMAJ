@@ -19,6 +19,7 @@ export const routes: RouteObject[] = [
   { path: "/onboarding", lazy: page(() => import("@/app/onboarding/page")) },
   { path: "/washes", lazy: page(() => import("@/app/washes/page")) },
   { path: "/washes/:washID", lazy: page(() => import("@/app/washes/[washID]/page")) },
+  { path: "/payments", lazy: page(() => import("@/app/payments/page")) },
   { path: "/cash-drawer", lazy: page(() => import("@/app/cash-drawer/page")) },
   { path: "/expenses", lazy: page(() => import("@/app/expenses/page")) },
   { path: "/reports", lazy: page(() => import("@/app/reports/page")) },
@@ -72,6 +73,10 @@ export const routes: RouteObject[] = [
   {
     path: "/settings/billing",
     lazy: page(() => import("@/app/settings/billing/page")),
+  },
+  {
+    path: "/settings/data",
+    lazy: page(() => import("@/app/settings/data/page")),
   },
   // Catch-all route for 404
   { path: "*", lazy: page(() => import("@/app/errors/not-found/page")) },

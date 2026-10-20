@@ -85,7 +85,8 @@ test("en lecture seule, les écritures et les options payantes sont coupées", (
   ] as const) {
     assert.equal(state.capabilities[capability], false, `${capability} devrait être bloquée`)
   }
-  assert.equal(state.restricted.length, 9)
+  // 7 capacités d'écriture (dont la gestion des encaissements) + export + rapports avancés.
+  assert.equal(state.restricted.length, 10)
 })
 
 test("l'échéance exacte compte comme expirée", () => {

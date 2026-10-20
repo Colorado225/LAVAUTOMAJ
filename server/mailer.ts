@@ -108,3 +108,112 @@ export function passwordResetMessage(to: string, resetUrl: string, ttlMinutes: n
     html,
   }
 }
+
+// ---------------------------------------------------------------------------
+// Relances d'échéance d'abonnement
+// ---------------------------------------------------------------------------
+
+export interface TrialReminderContext {
+  to: string
+  firstName?: string | null
+  organizationName: string
+  daysRemaining: number
+  trialEndsAt: string | null
+  billingUrl: string
+}
+
+function formatDay(iso: string | null): string {
+  if (!iso) return "prochainement"
+  return new Date(iso).toLocaleDateString("fr-CI", { day: "2-digit", month: "long", year: "numeric" })
+}
+
+/** Gabarit d'une relance d'essai (J-3, J-1 ou essai terminé). */
+export function trialReminderMessage(
+  kind: "trial_j3" | "trial_j1" | "trial_expired",
+  context: TrialReminderContext,
+): MailMessage {
+  const greeting = context.firstName ? `Bonjour ${context.firstName},` : "Bonjour,"
+  const endDay = formatDay(context.trialEndsAt)
+
+  const copy = {
+    trial_j3: {
+      subject: `Il vous reste ${context.daysRemaining} jours d'essai WashPilot CI`,
+      headline: `Votre essai gratuit se termine le ${endDay}.`,
+      body: `Votre station ${context.organizationName} utilise WashPilot CI en essai gratuit. Passé cette date, votre espace restera consultable, mais vous ne pourrez plus enregistrer de lavages, de dépenses ni d'opérations de caisse.`,
+      cta: "Choisir un forfait",
+    },
+    trial_j1: {
+      subject: "Dernier jour d'essai WashPilot CI",
+      headline: `Votre essai gratuit se termine demain (${endDay}).`,
+      body: `Pour que votre équipe continue d'enregistrer les lavages de ${context.organizationName} sans interruption, activez un forfait dès aujourd'hui.`,
+      cta: "Activer un forfait",
+    },
+    trial_expired: {
+      subject: "Votre essai WashPilot CI est terminé",
+      headline: "Votre espace est passé en lecture seule.",
+      body: `L'essai gratuit de ${context.organizationName} est arrivé à échéance. Toutes vos données restent disponibles et consultables : activez un forfait pour reprendre les enregistrements.`,
+      cta: "Réactiver mon espace",
+    },
+  }[kind]
+
+  const text = [
+    greeting,
+    "",
+    copy.headline,
+    "",
+    copy.body,
+    "",
+    `${copy.cta} : ${context.billingUrl}`,
+    "",
+    "— L'équipe WashPilot CI",
+  ].join("\n")
+
+  const html = `<!doctype html>
+<html lang="fr"><body style="margin:0;background:#f1f5f9;padding:24px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a">
+  <table role="presentation" style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:16px;padding:32px">
+    <tr><td>
+      <p style="margin:0 0 16px;font-size:14px">${greeting}</p>
+      <p style="margin:0 0 12px;font-size:18px;font-weight:700">${copy.headline}</p>
+      <p style="margin:0 0 16px;font-size:14px;line-height:22px">${copy.body}</p>
+      <p style="margin:24px 0">
+        <a href="${context.billingUrl}" style="display:inline-block;background:#123d79;color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:14px 22px;border-radius:12px">${copy.cta}</a>
+      </p>
+      <p style="margin:0;font-size:12px;color:#64748b;line-height:20px">
+        Vos données restent conservées et exportables à tout moment depuis Paramètres &gt; Données et sauvegarde.
+      </p>
+    </td></tr>
+  </table>
+</body></html>`
+
+  return { to: context.to, subject: copy.subject, text, html }
+}
+
+/** Gabarit envoyé à l'assistance quand une station demande un forfait payant. */
+export function upgradeRequestMessage(context: {
+  to: string
+  organizationName: string
+  planName: string
+  requesterEmail: string
+  requesterName: string
+  phone?: string | null
+  note?: string | null
+}): MailMessage {
+  const text = [
+    `Nouvelle demande de forfait : ${context.planName}`,
+    "",
+    `Station : ${context.organizationName}`,
+    `Demandeur : ${context.requesterName} (${context.requesterEmail})`,
+    `Téléphone : ${context.phone || "non renseigné"}`,
+    context.note ? `Message : ${context.note}` : "",
+    "",
+    "— WashPilot CI",
+  ]
+    .filter(Boolean)
+    .join("\n")
+
+  return {
+    to: context.to,
+    subject: `Demande de forfait ${context.planName} — ${context.organizationName}`,
+    text,
+  }
+}

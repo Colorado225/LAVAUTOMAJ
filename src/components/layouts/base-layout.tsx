@@ -6,6 +6,7 @@ import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { SubscriptionProvider } from "@/lib/subscription"
 import { TrialBanner } from "@/components/trial/trial-banner"
+import { SupportButton } from "@/components/support/support-button"
 
 interface BaseLayoutProps {
   children: React.ReactNode
@@ -46,6 +47,7 @@ export function BaseLayout({ children, title, description }: BaseLayoutProps) {
             </div>
           </div>
         </div>
+        <SupportButton />
       </SidebarInset>
     </SidebarProvider>
     </SubscriptionProvider>

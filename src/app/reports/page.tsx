@@ -27,7 +27,7 @@ import {
 import { useApi } from "@/lib/api"
 import { useCapability } from "@/lib/subscription"
 import type { ChartConfig } from "@/components/ui/chart"
-import type { ReportResponse } from "@/lib/reporting-api"
+import type { ReportGranularity, ReportResponse } from "@/lib/reporting-api"
 import {
   Area,
   AreaChart,
@@ -37,7 +37,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import { BarChart3, Download, Lock, Wallet, CarFront, Receipt, TrendingUp, History } from "lucide-react"
+import { BarChart3, Download, Lock, Wallet, CarFront, Receipt, TrendingUp, History, Users, Clock } from "lucide-react"
 
 const chartConfig = {
   revenue: { label: "Encaissements", color: "#2563eb" },
@@ -94,6 +94,32 @@ function formatDate(date: string) {
   })
 }
 
+const GRANULARITY_OPTIONS: { value: ReportGranularity; label: string; description: string }[] = [
+  { value: "day", label: "Jour", description: "Rapport quotidien" },
+  { value: "week", label: "Semaine", description: "Rapport hebdomadaire (lundi au dimanche)" },
+  { value: "month", label: "Mois", description: "Rapport mensuel" },
+]
+
+/** Libellé d'un point de la série, adapté au pas choisi. */
+function formatBucket(date: string, granularity: ReportGranularity) {
+  const value = new Date(`${date}T00:00:00Z`)
+  if (granularity === "month") {
+    return value.toLocaleDateString("fr-CI", { timeZone: "UTC", month: "short", year: "2-digit" })
+  }
+  if (granularity === "week") {
+    return `sem. ${formatDate(date)}`
+  }
+  return formatDate(date)
+}
+
+const ROLE_LABELS: Record<string, string> = {
+  car_washer: "Laveur",
+  versatile_washer: "Laveur polyvalent",
+  team_lead: "Chef d’équipe",
+  cashier: "Caissier",
+  manager: "Responsable",
+}
+
 function formatChartXof(value: number) {
   return new Intl.NumberFormat("fr-CI", { notation: "compact", maximumFractionDigits: 1 }).format(value)
 }
@@ -110,22 +136,40 @@ function downloadReport(report: ReportResponse) {
   const rows: Array<Array<string | number>> = [
     ["WashPilot CI — Rapport d’activité"],
     ["Période", report.period.from, report.period.to],
+    ["Granularité", GRANULARITY_OPTIONS.find((o) => o.value === report.granularity)?.label ?? report.granularity],
     [],
     ["Synthèse", "Valeur", "Montant (XOF)"],
     ["Lavages enregistrés", report.summary.total_washes, ""],
     ["Lavages terminés", report.summary.completed_washes, ""],
-    ["Encaissements vérifiés", "", csvAmount(report.summary.revenue_cents)],
+    ["Encaissements", "", csvAmount(report.summary.revenue_cents)],
+    ["Dont à confirmer (mobile money)", "", csvAmount(report.summary.pending_cents)],
     ["Dépenses enregistrées", "", csvAmount(report.summary.expenses_cents)],
     ["Solde opérationnel", "", csvAmount(report.summary.net_cents)],
     [],
-    ["Évolution journalière", "Date", "Lavages", "Encaissements (XOF)", "Dépenses (XOF)"],
-    ...report.daily.map((row) => ["Jour", row.date, row.wash_count, csvAmount(row.revenue_cents), csvAmount(row.expenses_cents)]),
+    ["Évolution", "Début", "Fin", "Lavages", "Encaissements (XOF)", "Dépenses (XOF)"],
+    ...report.series.map((row) => [
+      GRANULARITY_OPTIONS.find((o) => o.value === report.granularity)?.label ?? report.granularity,
+      row.date,
+      row.period_end,
+      row.wash_count,
+      csvAmount(row.revenue_cents),
+      csvAmount(row.expenses_cents),
+    ]),
     [],
     ["Prestations", "Lavages", "Quantités", "Montant des prestations (XOF)"],
     ...report.top_services.map((row) => [row.name, row.wash_count, row.quantity, csvAmount(row.amount_cents)]),
     [],
-    ["Moyens de paiement", "Nombre", "Montant (XOF)"],
-    ...report.payment_methods.map((row) => [paymentLabels[row.method] ?? row.method, row.payment_count, csvAmount(row.amount_cents)]),
+    ["Moyens de paiement", "Nombre", "Montant (XOF)", "Confirmé (XOF)", "À confirmer (XOF)"],
+    ...report.payment_methods.map((row) => [
+      paymentLabels[row.method] ?? row.method,
+      row.payment_count,
+      csvAmount(row.amount_cents),
+      csvAmount(row.verified_cents),
+      csvAmount(row.pending_cents),
+    ]),
+    [],
+    ["Activité par laveur", "Rôle", "Lavages", "Chiffre d’affaires attribué (XOF)"],
+    ...report.top_workers.map((row) => [row.name, ROLE_LABELS[row.role] ?? row.role, row.wash_count, csvAmount(row.amount_cents)]),
     [],
     ["Dépenses par catégorie", "Nombre", "Montant (XOF)"],
     ...report.expense_categories.map((row) => [expenseLabels[row.category] ?? row.category, row.expense_count, csvAmount(row.amount_cents)]),
@@ -134,7 +178,7 @@ function downloadReport(report: ReportResponse) {
   const url = URL.createObjectURL(new Blob([content], { type: "text/csv;charset=utf-8" }))
   const link = document.createElement("a")
   link.href = url
-  link.download = `washpilot-rapport-${report.period.from}-${report.period.to}.csv`
+  link.download = `washpilot-rapport-${report.granularity}-${report.period.from}-${report.period.to}.csv`
   link.click()
   URL.revokeObjectURL(url)
 }
@@ -144,14 +188,15 @@ export default function ReportsPage() {
   const today = useMemo(() => dateInAbidjan(), [])
   const [from, setFrom] = useState(() => shiftDate(dateInAbidjan(), -29))
   const [to, setTo] = useState(today)
+  const [granularity, setGranularity] = useState<ReportGranularity>("day")
   const hasValidRange = Boolean(from && to && from <= to)
   const reportPath = hasValidRange
-    ? `/api/v1/reports/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+    ? `/api/v1/reports/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&granularity=${granularity}`
     : ""
   const { data, loading, error } = useApi<ReportResponse>(reportPath)
 
   const chartData = useMemo(
-    () => (data?.daily ?? []).map((row) => ({
+    () => (data?.series ?? []).map((row) => ({
       date: row.date,
       wash_count: row.wash_count,
       revenue: row.revenue_cents / 100,
@@ -159,11 +204,35 @@ export default function ReportsPage() {
     })),
     [data],
   )
+  const activeGranularity = data?.granularity ?? granularity
 
   function choosePeriod(days: number) {
     const end = dateInAbidjan()
     setTo(end)
     setFrom(shiftDate(end, -(days - 1)))
+  }
+
+  /** Raccourcis métier : la semaine en cours, le mois en cours. */
+  function chooseCurrentWeek() {
+    const end = dateInAbidjan()
+    const weekday = (new Date(`${end}T00:00:00Z`).getUTCDay() + 6) % 7 // lundi = 0
+    setTo(end)
+    setFrom(shiftDate(end, -weekday))
+    setGranularity("day")
+  }
+
+  function chooseCurrentMonth() {
+    const end = dateInAbidjan()
+    setTo(end)
+    setFrom(`${end.slice(0, 7)}-01`)
+    setGranularity("day")
+  }
+
+  function chooseYearByMonth() {
+    const end = dateInAbidjan()
+    setTo(end)
+    setFrom(shiftDate(end, -364))
+    setGranularity("month")
   }
 
   return (
@@ -175,10 +244,37 @@ export default function ReportsPage() {
             <p className="text-sm text-muted-foreground">Les journées sont calculées selon le fuseau Africa/Abidjan.</p>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-            <div className="flex gap-2">
-              <Button type="button" size="sm" variant="outline" onClick={() => choosePeriod(7)}>7 jours</Button>
-              <Button type="button" size="sm" variant="outline" onClick={() => choosePeriod(30)}>30 jours</Button>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant="outline" onClick={() => choosePeriod(1)}>Aujourd’hui</Button>
+              <Button type="button" size="sm" variant="outline" onClick={chooseCurrentWeek}>Cette semaine</Button>
+              <Button type="button" size="sm" variant="outline" onClick={chooseCurrentMonth}>Ce mois</Button>
               <Button type="button" size="sm" variant="outline" onClick={() => choosePeriod(90)}>90 jours</Button>
+              <Button type="button" size="sm" variant="outline" onClick={chooseYearByMonth}>12 mois</Button>
+            </div>
+            <div
+              className="flex flex-col gap-1 text-xs font-medium text-muted-foreground"
+              role="group"
+              aria-label="Granularité du rapport"
+            >
+              Regroupement
+              <div className="flex overflow-hidden rounded-md border">
+                {GRANULARITY_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    title={option.description}
+                    aria-pressed={granularity === option.value}
+                    onClick={() => setGranularity(option.value)}
+                    className={`h-9 min-w-16 px-3 text-sm transition-colors duration-150 ${
+                      granularity === option.value
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background text-foreground hover:bg-accent"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
             <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
               Du
@@ -223,7 +319,7 @@ export default function ReportsPage() {
 
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard index={0} title="Lavages enregistrés" icon={<CarFront className="size-4 text-muted-foreground" />} value={data?.summary.total_washes} loading={loading} detail={data ? `${data.summary.completed_washes} terminé${data.summary.completed_washes === 1 ? "" : "s"}` : undefined} />
-          <MetricCard index={1} title="Encaissements vérifiés" icon={<Wallet className="size-4 text-muted-foreground" />} value={data?.summary.revenue_cents} loading={loading} money detail={data ? `${data.summary.paid_washes} lavage${data.summary.paid_washes === 1 ? "" : "s"} réglé${data.summary.paid_washes === 1 ? "" : "s"}` : undefined} />
+          <MetricCard index={1} title="Encaissements" icon={<Wallet className="size-4 text-muted-foreground" />} value={data?.summary.revenue_cents} loading={loading} money detail={data ? `${data.summary.paid_washes} lavage${data.summary.paid_washes === 1 ? "" : "s"} réglé${data.summary.paid_washes === 1 ? "" : "s"}${data.summary.pending_cents > 0 ? ` · ${formatXof(data.summary.pending_cents)} à confirmer` : ""}` : undefined} />
           <MetricCard index={2} title="Dépenses enregistrées" icon={<Receipt className="size-4 text-muted-foreground" />} value={data?.summary.expenses_cents} loading={loading} money />
           <MetricCard index={3} title="Solde opérationnel" icon={<TrendingUp className="size-4 text-muted-foreground" />} value={data?.summary.net_cents} loading={loading} money />
         </div>
@@ -232,16 +328,18 @@ export default function ReportsPage() {
           <Card>
             <CardHeader>
               <CardTitle>Encaissements et dépenses</CardTitle>
-              <CardDescription>Montants enregistrés chaque jour, en XOF.</CardDescription>
+              <CardDescription>
+                Montants enregistrés par {activeGranularity === "month" ? "mois" : activeGranularity === "week" ? "semaine" : "jour"}, en XOF.
+              </CardDescription>
             </CardHeader>
             <CardContent>
               {loading ? <Skeleton className="h-[280px] w-full" /> : data ? (
                 <ChartContainer config={chartConfig} className="h-[280px] w-full">
                   <AreaChart data={chartData} margin={{ left: 8, right: 12, top: 8 }}>
                     <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                    <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} tickFormatter={formatDate} />
+                    <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} tickFormatter={(value) => formatBucket(String(value), activeGranularity)} />
                     <YAxis tickLine={false} axisLine={false} width={64} tickFormatter={formatChartXof} />
-                    <ChartTooltip cursor={false} content={<ChartTooltipContent labelFormatter={(_, payload) => payload?.[0]?.payload?.date ? formatDate(String(payload[0].payload.date)) : ""} formatter={(value, name) => [formatXof(Number(value) * 100), name === "revenue" ? "Encaissements" : name === "expenses" ? "Dépenses" : String(name)]} />} />
+                    <ChartTooltip cursor={false} content={<ChartTooltipContent labelFormatter={(_, payload) => payload?.[0]?.payload?.date ? formatBucket(String(payload[0].payload.date), activeGranularity) : ""} formatter={(value, name) => [formatXof(Number(value) * 100), name === "revenue" ? "Encaissements" : name === "expenses" ? "Dépenses" : String(name)]} />} />
                     <Area dataKey="revenue" type="monotone" stroke="var(--color-revenue)" fill="var(--color-revenue)" fillOpacity={0.13} strokeWidth={2} animationDuration={600} animationEasing="ease-out" />
                     <Area dataKey="expenses" type="monotone" stroke="var(--color-expenses)" fill="var(--color-expenses)" fillOpacity={0.08} strokeWidth={2} animationDuration={600} animationEasing="ease-out" />
                     <ChartLegend content={<ChartLegendContent />} />
@@ -253,7 +351,9 @@ export default function ReportsPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Lavages par jour</CardTitle>
+              <CardTitle>
+                Lavages par {activeGranularity === "month" ? "mois" : activeGranularity === "week" ? "semaine" : "jour"}
+              </CardTitle>
               <CardDescription>Nombre d’opérations non annulées enregistrées.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -261,9 +361,9 @@ export default function ReportsPage() {
                 <ChartContainer config={chartConfig} className="h-[280px] w-full">
                   <BarChart data={chartData} margin={{ left: 0, right: 12, top: 8 }}>
                     <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                    <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} tickFormatter={formatDate} />
+                    <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} tickFormatter={(value) => formatBucket(String(value), activeGranularity)} />
                     <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={36} />
-                    <ChartTooltip cursor={false} content={<ChartTooltipContent labelFormatter={(_, payload) => payload?.[0]?.payload?.date ? formatDate(String(payload[0].payload.date)) : ""} />} />
+                    <ChartTooltip cursor={false} content={<ChartTooltipContent labelFormatter={(_, payload) => payload?.[0]?.payload?.date ? formatBucket(String(payload[0].payload.date), activeGranularity) : ""} />} />
                     <Bar dataKey="wash_count" name="Lavages" fill="var(--color-washes)" radius={[4, 4, 0, 0]} animationDuration={600} animationEasing="ease-out" />
                   </BarChart>
                 </ChartContainer>
@@ -293,12 +393,44 @@ export default function ReportsPage() {
 
         <BreakdownTable
           title="Encaissements par moyen de paiement"
-          description="Seuls les paiements avec le statut vérifié sont comptabilisés."
+          description="Espèces, Orange Money, MTN MoMo, Moov Money et Wave suivis séparément. La colonne « À confirmer » correspond aux paiements mobile money pas encore vérifiés."
           loading={loading}
-          columns={["Moyen de paiement", "Paiements", "Montant"]}
-          empty="Aucun paiement vérifié sur cette période."
-          rows={(data?.payment_methods ?? []).map((row) => [paymentLabels[row.method] ?? row.method, row.payment_count, formatXof(row.amount_cents)])}
+          columns={["Moyen de paiement", "Paiements", "Montant", "Confirmé", "À confirmer"]}
+          empty="Aucun encaissement sur cette période."
+          icon={<Wallet className="size-4 text-muted-foreground" />}
+          rows={(data?.payment_methods ?? []).map((row) => [
+            paymentLabels[row.method] ?? row.method,
+            row.payment_count,
+            formatXof(row.amount_cents),
+            formatXof(row.verified_cents),
+            row.pending_cents > 0 ? formatXof(row.pending_cents) : "—",
+          ])}
         />
+
+        <BreakdownTable
+          title="Activité par laveur"
+          description="Lavages réalisés et chiffre d’affaires attribué. Lorsqu’une équipe intervient sur un lavage, le montant est réparti à parts égales."
+          loading={loading}
+          columns={["Laveur", "Rôle", "Lavages", "Chiffre d’affaires"]}
+          empty="Aucun laveur affecté à un lavage sur cette période."
+          icon={<Users className="size-4 text-muted-foreground" />}
+          rows={(data?.top_workers ?? []).map((row) => [
+            row.name,
+            ROLE_LABELS[row.role] ?? row.role,
+            row.wash_count,
+            formatXof(row.amount_cents),
+          ])}
+        />
+
+        {data && data.summary.pending_cents > 0 && (
+          <p className="row-in flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+            <Clock className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+            <span>
+              {formatXof(data.summary.pending_cents)} d’encaissements mobile money restent à confirmer sur cette
+              période. Vérifiez-les depuis la page Encaissements pour fiabiliser vos chiffres.
+            </span>
+          </p>
+        )}
 
         {data && data.summary.total_washes === 0 && data.summary.revenue_cents === 0 && data.summary.expenses_cents === 0 && (
           <p className="rounded-md border border-dashed px-4 py-5 text-center text-sm text-muted-foreground">
@@ -372,6 +504,7 @@ function BreakdownTable({
   rows,
   empty,
   loading,
+  icon,
 }: {
   title: string
   description: string
@@ -379,11 +512,12 @@ function BreakdownTable({
   rows: Array<Array<string | number>>
   empty: string
   loading: boolean
+  icon?: React.ReactNode
 }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><BarChart3 className="size-4" />{title}</CardTitle>
+        <CardTitle className="flex items-center gap-2">{icon ?? <BarChart3 className="size-4" />}{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent>

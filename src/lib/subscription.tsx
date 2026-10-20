@@ -14,6 +14,7 @@ import { apiFetch } from "@/lib/api"
 export type Capability =
   | "washes.create"
   | "washes.cancel"
+  | "payments.manage"
   | "expenses.manage"
   | "cash.manage"
   | "catalog.manage"

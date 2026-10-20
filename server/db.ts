@@ -203,6 +203,14 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
  key text NOT NULL, fingerprint text NOT NULL, response_status integer, response_body jsonb,
  created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(organization_id,key)
 );
+-- Relances d'échéance d'abonnement : une ligne par relance réellement envoyée,
+-- ce qui garantit qu'une même station n'est jamais relancée deux fois.
+CREATE TABLE IF NOT EXISTS subscription_reminders (
+ organization_id uuid NOT NULL REFERENCES organizations(id),
+ kind text NOT NULL,
+ sent_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY (organization_id, kind)
+);
 CREATE TABLE IF NOT EXISTS clerk_webhook_events (
  id text PRIMARY KEY, event_type text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -217,6 +225,10 @@ CREATE INDEX IF NOT EXISTS idx_washes_org_created ON washes(organization_id,crea
 CREATE INDEX IF NOT EXISTS idx_expenses_org_created ON expenses(organization_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workers_org_status ON workers(organization_id,status);
 CREATE INDEX IF NOT EXISTS idx_payments_org_created ON payments(organization_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payments_org_status ON payments(organization_id,status);
+CREATE INDEX IF NOT EXISTS idx_payments_wash ON payments(wash_id);
+CREATE INDEX IF NOT EXISTS idx_wash_assignments_worker ON wash_assignments(worker_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_org_created ON audit_logs(organization_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cash_movements_session ON cash_movements(cash_session_id);
 CREATE INDEX IF NOT EXISTS idx_cash_sessions_org_site ON cash_sessions(organization_id,site_id,status);
 CREATE INDEX IF NOT EXISTS idx_wash_items_wash ON wash_items(wash_id);

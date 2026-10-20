@@ -14,6 +14,7 @@ import {
 import { useApi } from "@/lib/api"
 import type { OnboardingSummary } from "@/lib/onboarding-api"
 import { TrialStatusCard } from "@/components/trial/trial-status-card"
+import { UpgradeRequestCard } from "@/components/trial/upgrade-request-card"
 import { TrialSimulator } from "@/components/trial/trial-simulator"
 
 const statusLabels: Record<string, string> = {
@@ -63,6 +64,7 @@ export default function BillingSettings() {
         </div>
 
         <TrialStatusCard />
+        <UpgradeRequestCard currentPlanCode={plan?.code ?? null} />
 
         {loading ? (
           <Card role="status" aria-busy="true" aria-label="Chargement du forfait">

@@ -28,6 +28,34 @@ export function parseReportRange(query: { from?: unknown; to?: unknown }) {
   return result.data
 }
 
+/**
+ * Granularité des rapports : jour, semaine (lundi → dimanche) ou mois.
+ *
+ * Les valeurs sont contrôlées ici puis injectées telles quelles dans le SQL :
+ * elles ne peuvent provenir que de cette liste blanche.
+ */
+export const REPORT_GRANULARITIES = ["day", "week", "month"] as const
+export type ReportGranularity = (typeof REPORT_GRANULARITIES)[number]
+
+export function parseGranularity(value: unknown): ReportGranularity {
+  if (value == null || value === "") return "day"
+  const parsed = z.enum(REPORT_GRANULARITIES).safeParse(value)
+  if (!parsed.success) {
+    throw new HttpError(400, "invalid_granularity", "Granularité invalide : utilisez day, week ou month.")
+  }
+  return parsed.data
+}
+
+/** Pas de la série temporelle pour `generate_series`. */
+export function granularityStep(granularity: ReportGranularity): string {
+  return { day: "1 day", week: "1 week", month: "1 month" }[granularity]
+}
+
+/** Libellé lisible, utilisé dans les messages et les exports. */
+export function granularityLabel(granularity: ReportGranularity): string {
+  return { day: "Jour", week: "Semaine", month: "Mois" }[granularity]
+}
+
 function db(): Pool {
   const pool = getPool()
   if (!pool) throw new HttpError(503, "database_not_configured", "Base de données indisponible.")
@@ -48,7 +76,7 @@ export function createReportsRouter() {
         completedWashes,
         inProgressWashes,
         cancelledWashes,
-        totalRevenue,
+        revenue,
         monthlyRevenue,
         recentWashes,
       ] = await Promise.all([
@@ -68,14 +96,20 @@ export function createReportsRouter() {
           "SELECT COUNT(*)::int AS count FROM washes WHERE organization_id=$1::uuid AND status = 'cancelled'",
           [t.organizationId],
         ),
+        // Même règle que les rapports : tout encaissement non remboursé compte,
+        // avec le détail de ce qui reste à confirmer (mobile money).
         db().query(
-          "SELECT COALESCE(SUM(amount_cents),0)::int AS sum FROM payments WHERE organization_id=$1::uuid AND status = 'verified'",
+          `SELECT COALESCE(SUM(amount_cents),0)::int AS total_cents,
+             COALESCE(SUM(amount_cents) FILTER (WHERE status='verified'),0)::int AS verified_cents,
+             COALESCE(SUM(amount_cents) FILTER (WHERE status='pending'),0)::int AS pending_cents,
+             COUNT(*) FILTER (WHERE status='pending')::int AS pending_count
+           FROM payments WHERE organization_id=$1::uuid AND status <> 'refunded'`,
           [t.organizationId],
         ),
         db().query(
           `SELECT TO_CHAR(created_at, 'Mon YYYY') AS month, SUM(amount_cents)::int AS revenue
            FROM payments
-           WHERE organization_id=$1::uuid AND status = 'verified'
+           WHERE organization_id=$1::uuid AND status <> 'refunded'
            GROUP BY TO_CHAR(created_at, 'Mon YYYY')
            ORDER BY MIN(created_at)`,
           [t.organizationId],
@@ -97,20 +131,24 @@ export function createReportsRouter() {
         completed_washes: completedWashes.rows[0].count,
         in_progress_washes: inProgressWashes.rows[0].count,
         cancelled_washes: cancelledWashes.rows[0].count,
-        total_revenue_cents: totalRevenue.rows[0].sum,
+        total_revenue_cents: revenue.rows[0].total_cents,
+        verified_revenue_cents: revenue.rows[0].verified_cents,
+        pending_payments_cents: revenue.rows[0].pending_cents,
+        pending_payments_count: revenue.rows[0].pending_count,
         monthly_revenue: monthlyRevenue.rows,
         recent_washes: recentWashes.rows,
       })
     }),
   )
 
-  // GET /api/v1/reports/summary?from=&to= — full activity report.
+  // GET /api/v1/reports/summary?from=&to=&granularity=day|week|month
   r.get(
     "/reports/summary",
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const today = new Date().toISOString().slice(0, 10)
       const requested = parseReportRange({ from: req.query.from || today, to: req.query.to || today })
+      const granularity = parseGranularity(req.query.granularity)
       // Essai terminé : l'historique consultable est ramené à 7 jours. On
       // tronque la période au lieu de refuser la requête, pour que l'écran
       // reste utilisable et que la limite soit visible plutôt que bloquante.
@@ -118,79 +156,114 @@ export function createReportsRouter() {
       const { clamped, ...range } = clampReportRange(requested, windowDays)
       const pool = db()
       const args = [t.organizationId, range.from, range.to]
+      const step = granularityStep(granularity)
 
-      const [summaryQ, expensesQ, dailyQ, servicesQ, paymentsQ, expenseCategoriesQ] = await Promise.all([
-        pool.query(
-          `SELECT COUNT(*)::int AS total_washes,
-             COUNT(*) FILTER (WHERE status='completed')::int AS completed_washes,
-             COUNT(*) FILTER (WHERE payment_status='paid')::int AS paid_washes,
-             (SELECT COALESCE(SUM(p.amount_cents),0)::int FROM payments p
-               WHERE p.organization_id=$1::uuid AND p.status <> 'refunded'
-                 AND p.created_at >= $2::date AND p.created_at < ($3::date + interval '1 day')) AS revenue_cents
-           FROM washes
-           WHERE organization_id=$1::uuid AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')`,
-          args,
-        ),
-        pool.query(
-          `SELECT COALESCE(SUM(amount_cents),0)::int AS expenses_cents FROM expenses
-           WHERE organization_id=$1::uuid AND status='completed' AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')`,
-          args,
-        ),
-        pool.query(
-          `SELECT d.day::date::text AS date,
-             COALESCE(w.wash_count,0)::int AS wash_count,
-             COALESCE(p.revenue_cents,0)::int AS revenue_cents,
-             COALESCE(e.expenses_cents,0)::int AS expenses_cents
-           FROM generate_series($2::date, $3::date, interval '1 day') AS d(day)
-           LEFT JOIN (
-             SELECT created_at::date AS day, COUNT(*)::int AS wash_count FROM washes
-             WHERE organization_id=$1::uuid AND status <> 'cancelled' GROUP BY 1
-           ) w ON w.day = d.day::date
-           LEFT JOIN (
-             SELECT created_at::date AS day, SUM(amount_cents)::int AS revenue_cents FROM payments
-             WHERE organization_id=$1::uuid AND status <> 'refunded' GROUP BY 1
-           ) p ON p.day = d.day::date
-           LEFT JOIN (
-             SELECT created_at::date AS day, SUM(amount_cents)::int AS expenses_cents FROM expenses
-             WHERE organization_id=$1::uuid AND status='completed' GROUP BY 1
-           ) e ON e.day = d.day::date
-           ORDER BY d.day`,
-          args,
-        ),
-        pool.query(
-          `SELECT i.service_name AS name,
-             COUNT(DISTINCT i.wash_id)::int AS wash_count,
-             SUM(i.quantity)::int AS quantity,
-             SUM(i.line_total_cents)::int AS amount_cents
-           FROM wash_items i JOIN washes w ON w.id = i.wash_id
-           WHERE w.organization_id=$1::uuid AND w.status <> 'cancelled'
-             AND w.created_at >= $2::date AND w.created_at < ($3::date + interval '1 day')
-           GROUP BY i.service_name ORDER BY amount_cents DESC LIMIT 10`,
-          args,
-        ),
-        pool.query(
-          `SELECT method, COUNT(*)::int AS payment_count, SUM(amount_cents)::int AS amount_cents
-           FROM payments
-           WHERE organization_id=$1::uuid AND status <> 'refunded'
-             AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')
-           GROUP BY method ORDER BY amount_cents DESC`,
-          args,
-        ),
-        pool.query(
-          `SELECT category, COUNT(*)::int AS expense_count, SUM(amount_cents)::int AS amount_cents
-           FROM expenses
-           WHERE organization_id=$1::uuid AND status='completed'
-             AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')
-           GROUP BY category ORDER BY amount_cents DESC`,
-          args,
-        ),
-      ])
+      const [summaryQ, expensesQ, seriesQ, servicesQ, paymentsQ, expenseCategoriesQ, workersQ] =
+        await Promise.all([
+          pool.query(
+            `SELECT COUNT(*)::int AS total_washes,
+               COUNT(*) FILTER (WHERE status='completed')::int AS completed_washes,
+               COUNT(*) FILTER (WHERE payment_status='paid')::int AS paid_washes,
+               COUNT(*) FILTER (WHERE payment_status IN ('unpaid','partial') AND status <> 'cancelled')::int AS unpaid_washes,
+               (SELECT COALESCE(SUM(p.amount_cents),0)::int FROM payments p
+                 WHERE p.organization_id=$1::uuid AND p.status <> 'refunded'
+                   AND p.created_at >= $2::date AND p.created_at < ($3::date + interval '1 day')) AS revenue_cents,
+               (SELECT COALESCE(SUM(p.amount_cents),0)::int FROM payments p
+                 WHERE p.organization_id=$1::uuid AND p.status = 'pending'
+                   AND p.created_at >= $2::date AND p.created_at < ($3::date + interval '1 day')) AS pending_cents
+             FROM washes
+             WHERE organization_id=$1::uuid AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')`,
+            args,
+          ),
+          pool.query(
+            `SELECT COALESCE(SUM(amount_cents),0)::int AS expenses_cents FROM expenses
+             WHERE organization_id=$1::uuid AND status='completed' AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')`,
+            args,
+          ),
+          // Série temporelle : un point par jour, par semaine ou par mois.
+          pool.query(
+            `SELECT d.bucket::date::text AS date,
+               (d.bucket + interval '${step}' - interval '1 day')::date::text AS period_end,
+               COALESCE(w.wash_count,0)::int AS wash_count,
+               COALESCE(p.revenue_cents,0)::int AS revenue_cents,
+               COALESCE(e.expenses_cents,0)::int AS expenses_cents
+             FROM generate_series(
+                    date_trunc('${granularity}', $2::timestamp),
+                    $3::timestamp,
+                    interval '${step}') AS d(bucket)
+             LEFT JOIN (
+               SELECT date_trunc('${granularity}', created_at) AS bucket, COUNT(*)::int AS wash_count FROM washes
+               WHERE organization_id=$1::uuid AND status <> 'cancelled' GROUP BY 1
+             ) w ON w.bucket = d.bucket
+             LEFT JOIN (
+               SELECT date_trunc('${granularity}', created_at) AS bucket, SUM(amount_cents)::int AS revenue_cents FROM payments
+               WHERE organization_id=$1::uuid AND status <> 'refunded' GROUP BY 1
+             ) p ON p.bucket = d.bucket
+             LEFT JOIN (
+               SELECT date_trunc('${granularity}', created_at) AS bucket, SUM(amount_cents)::int AS expenses_cents FROM expenses
+               WHERE organization_id=$1::uuid AND status='completed' GROUP BY 1
+             ) e ON e.bucket = d.bucket
+             ORDER BY d.bucket`,
+            args,
+          ),
+          pool.query(
+            `SELECT i.service_name AS name,
+               COUNT(DISTINCT i.wash_id)::int AS wash_count,
+               SUM(i.quantity)::int AS quantity,
+               SUM(i.line_total_cents)::int AS amount_cents
+             FROM wash_items i JOIN washes w ON w.id = i.wash_id
+             WHERE w.organization_id=$1::uuid AND w.status <> 'cancelled'
+               AND w.created_at >= $2::date AND w.created_at < ($3::date + interval '1 day')
+             GROUP BY i.service_name ORDER BY amount_cents DESC LIMIT 10`,
+            args,
+          ),
+          // Suivi par canal, avec la part encore à confirmer.
+          pool.query(
+            `SELECT method, COUNT(*)::int AS payment_count,
+               SUM(amount_cents)::int AS amount_cents,
+               COALESCE(SUM(amount_cents) FILTER (WHERE status='verified'),0)::int AS verified_cents,
+               COALESCE(SUM(amount_cents) FILTER (WHERE status='pending'),0)::int AS pending_cents
+             FROM payments
+             WHERE organization_id=$1::uuid AND status <> 'refunded'
+               AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')
+             GROUP BY method ORDER BY amount_cents DESC`,
+            args,
+          ),
+          pool.query(
+            `SELECT category, COUNT(*)::int AS expense_count, SUM(amount_cents)::int AS amount_cents
+             FROM expenses
+             WHERE organization_id=$1::uuid AND status='completed'
+               AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')
+             GROUP BY category ORDER BY amount_cents DESC`,
+            args,
+          ),
+          // Activité par laveur : nombre de lavages et chiffre d'affaires
+          // associé. Un lavage à plusieurs laveurs est réparti à parts égales.
+          pool.query(
+            `SELECT wk.id AS worker_id,
+               (wk.first_name || ' ' || wk.last_name) AS name,
+               wk.role,
+               COUNT(DISTINCT w.id)::int AS wash_count,
+               COALESCE(SUM(w.total_cents::numeric / NULLIF(a.team_size,0)),0)::int AS amount_cents
+             FROM wash_assignments wa
+             JOIN washes w ON w.id = wa.wash_id
+             JOIN workers wk ON wk.id = wa.worker_id
+             JOIN (SELECT wash_id, COUNT(*)::int AS team_size FROM wash_assignments GROUP BY wash_id) a
+               ON a.wash_id = wa.wash_id
+             WHERE w.organization_id=$1::uuid AND w.status <> 'cancelled'
+               AND w.created_at >= $2::date AND w.created_at < ($3::date + interval '1 day')
+             GROUP BY wk.id, wk.first_name, wk.last_name, wk.role
+             ORDER BY amount_cents DESC LIMIT 20`,
+            args,
+          ),
+        ])
 
       const summary = summaryQ.rows[0]
       const expensesCents = expensesQ.rows[0].expenses_cents
 
       res.json({
-        period: { from: range.from, to: range.to },
+        period: { from: range.from, to: range.to, granularity },
+        granularity,
         // Informe l'interface que la période affichée a été réduite.
         restriction: clamped
           ? {
@@ -204,12 +277,15 @@ export function createReportsRouter() {
           total_washes: summary.total_washes,
           completed_washes: summary.completed_washes,
           paid_washes: summary.paid_washes,
+          unpaid_washes: summary.unpaid_washes,
           revenue_cents: summary.revenue_cents,
+          pending_cents: summary.pending_cents,
           expenses_cents: expensesCents,
           net_cents: summary.revenue_cents - expensesCents,
         },
-        daily: dailyQ.rows,
+        series: seriesQ.rows,
         top_services: servicesQ.rows,
+        top_workers: workersQ.rows,
         payment_methods: paymentsQ.rows,
         expense_categories: expenseCategoriesQ.rows,
       })
