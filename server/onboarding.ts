@@ -301,7 +301,7 @@ export function createOnboardingRouter() {
       }
       const services = onboardingValidators.services.safeParse(progress.services_data ?? { selected: [], custom: [] })
       const workers = onboardingValidators.workers.safeParse(progress.workers_data ?? { workers: [] })
-      const planCode = progress.plan_code ?? "free"
+      const planCode = progress.plan_code ?? "starter"
 
       const client = await pool.connect()
       try {
@@ -371,16 +371,21 @@ export function createOnboardingRouter() {
           }
         }
 
-        // 4. Abonnement — le forfait Gratuit ouvre un essai de TRIAL_DAYS jours
-        // à compter de la validation de l'onboarding. Passé ce délai, l'espace
-        // passe en lecture seule (voir server/entitlements.ts).
-        const isFree = Number(plan.price_cents) === 0
-        const subscriptionStatus = isFree ? "trialing" : "pending"
+        // 4. Abonnement — tout forfait choisi ouvre un essai de TRIAL_DAYS
+        // jours à compter de la validation de l'onboarding, sans carte
+        // bancaire. Passé ce délai, l'espace passe en lecture seule tant
+        // qu'un paiement n'a pas été validé (voir server/entitlements.ts).
+        //
+        // Le déclenchement ne dépend **pas** du prix. Il en dépendait quand un
+        // forfait à 0 F existait ; depuis que les trois sont payants, un test
+        // sur `price_cents === 0` aurait supprimé l'essai pour tout le monde,
+        // sans erreur ni trace — exactement le genre de régression muette qui
+        // ne se voit qu'au premier client perdu.
         await client.query(
-          `INSERT INTO subscriptions(organization_id, plan_id, status, current_period_end)
-           VALUES($1,$2,$3, CASE WHEN $4 THEN now() + ($5 || ' days')::interval ELSE NULL END)
-           ON CONFLICT (organization_id) DO UPDATE SET plan_id=EXCLUDED.plan_id, status=EXCLUDED.status, current_period_end=EXCLUDED.current_period_end, updated_at=now()`,
-          [t.organizationId, plan.id, subscriptionStatus, isFree, String(TRIAL_DAYS)],
+          `INSERT INTO subscriptions(organization_id, plan_id, status, current_period_end, plan_changed_at)
+           VALUES($1,$2,'trialing', now() + ($3 || ' days')::interval, now())
+           ON CONFLICT (organization_id) DO UPDATE SET plan_id=EXCLUDED.plan_id, status=EXCLUDED.status, current_period_end=EXCLUDED.current_period_end, plan_changed_at=now(), updated_at=now()`,
+          [t.organizationId, plan.id, String(TRIAL_DAYS)],
         )
         invalidateSubscriptionCache(t.organizationId)
 

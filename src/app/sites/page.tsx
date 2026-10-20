@@ -32,7 +32,8 @@ import {
 import { TableSkeleton } from "@/components/ui/table-skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
-import type { OnboardingSummary } from "@/lib/onboarding-api"
+import { DowngradeNotice } from "@/components/subscription/plan-gate"
+import { useSubscription } from "@/lib/subscription"
 import {
   emptySiteInput,
   siteInputFrom,
@@ -54,13 +55,13 @@ export default function SitesPage() {
   const canManage = useAccess("settings:manage")
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<SiteRecord[]>(`/api/v1/sites?refresh=${refreshKey}`)
-  const { data: summary } = useApi<OnboardingSummary>("/api/v1/onboarding/summary")
+  const { state: subscription } = useSubscription()
 
   const sites = useMemo(() => data ?? [], [data])
   const activeSites = useMemo(() => sites.filter((site) => site.is_active), [sites])
-  const siteLimit = summary?.plan?.max_sites
-  const limitReached =
-    siteLimit !== null && siteLimit !== undefined && activeSites.length >= siteLimit
+  const siteLimit = subscription?.limits?.sites.limit
+  const limitState = subscription?.limits?.sites
+  const limitReached = limitState?.creation_blocked ?? false
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingSite, setEditingSite] = useState<SiteRecord | null>(null)
@@ -243,6 +244,16 @@ export default function SitesPage() {
           </p>
         )}
 
+        {limitState?.over_limit && (
+          <DowngradeNotice
+            limit={limitState.limit ?? 0}
+            activeCount={limitState.active_count}
+            excess={limitState.excess}
+            graceDaysRemaining={limitState.grace_days_remaining}
+            enforced={limitState.enforced}
+          />
+        )}
+
         <div className="grid gap-4 sm:grid-cols-3">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -260,11 +271,7 @@ export default function SitesPage() {
             </CardHeader>
             <CardContent>
               <p className="text-2xl font-bold">
-                {summary?.plan
-                  ? siteLimit === null || siteLimit === undefined
-                    ? "Illimité"
-                    : siteLimit
-                  : "—"}
+                {subscription ? (siteLimit == null ? "Illimité" : siteLimit) : "—"}
               </p>
             </CardContent>
           </Card>
@@ -281,7 +288,7 @@ export default function SitesPage() {
           </Card>
         </div>
 
-        {limitReached && canManage.allowed && (
+        {limitReached && !limitState?.over_limit && canManage.allowed && (
           <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
             La limite de {siteLimit} station{(siteLimit ?? 0) > 1 ? "s" : ""} active
             {(siteLimit ?? 0) > 1 ? "s" : ""} de votre forfait est atteinte. Désactivez une
@@ -356,9 +363,21 @@ export default function SitesPage() {
                           {site.phone || site.email || "—"}
                         </TableCell>
                         <TableCell>
-                          <Badge variant={site.is_active ? "outline" : "secondary"}>
-                            {site.is_active ? "Active" : "Inactive"}
-                          </Badge>
+                          {!site.is_active ? (
+                            <Badge variant="secondary">Inactive</Badge>
+                          ) : site.writable === false ? (
+                            // Au-delà du forfait : l'historique reste lisible,
+                            // mais plus aucune opération ne peut s'y ajouter.
+                            <Badge
+                              variant="outline"
+                              className="border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100"
+                              title="Au-delà de votre forfait : consultable et exportable, mais fermée aux nouvelles opérations."
+                            >
+                              Lecture seule
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline">Active</Badge>
+                          )}
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">

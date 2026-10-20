@@ -255,3 +255,32 @@ l'API changent ensemble.
 - **Permissions par station, pas par site.** Un gérant autorisé l'est sur
   toute l'organisation, pas sur un site précis. À revoir le jour où une
   station exploitera plusieurs sites avec des équipes distinctes.
+
+---
+
+## Cumul avec le forfait
+
+Les permissions de ce document répondent à une seule question : **cette
+personne a-t-elle le droit ?** Elles ne disent rien de ce que l'organisation a
+souscrit. Un second verrou, indépendant, répond à l'autre question :
+**l'organisation a-t-elle acheté cette fonction ?**
+
+| Verrou | Portée | Refus | Code |
+|--------|--------|-------|------|
+| `requirePermission` | la personne | définitif | 403 `forbidden` |
+| `requireCapability` | l'organisation | levable par un achat | 402 `plan_upgrade_required` |
+
+**Le rôle se vérifie avant le forfait.** L'ordre n'est pas une question de
+style : proposer un forfait supérieur à quelqu'un qui n'aurait de toute façon
+pas le droit d'agir l'envoie réclamer une dépense inutile. Un caissier à qui
+l'historique est refusé voit un refus de rôle, jamais une proposition d'achat
+— et ce, même sur un forfait Business où la fonction est bien incluse.
+
+Corollaire : **le forfait ne connaît pas les rôles.** Sur un forfait Starter,
+le gérant et le propriétaire reçoivent le même écran d'argumentaire pour
+l'historique. La hiérarchie des rôles ne réapparaît qu'une fois la fonction
+souscrite.
+
+Le détail des fonctions gardées, forfait par forfait, est dans `TARIFS.md`
+section 7. L'interface applique la même priorité via `useAccess(permission,
+capability)` et le composant `PlanGate`.

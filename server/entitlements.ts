@@ -7,9 +7,13 @@ import { HttpError } from "./auth.ts"
 // Essai gratuit de 14 jours
 //
 // Règle produit :
-//   • Forfait Gratuit → 14 jours d'essai à partir de la validation de
-//     l'onboarding. Pendant l'essai, la station a accès à tout, y compris aux
-//     fonctionnalités avancées (rapports détaillés et export).
+//   • Les trois forfaits sont payants et ouvrent chacun 14 jours d'essai à
+//     partir de la validation de l'onboarding, sans carte bancaire.
+//   • L'essai donne **exactement les fonctionnalités du forfait choisi**, pas
+//     davantage. Débloquer tout pendant l'essai rendrait les trois forfaits
+//     indiscernables au moment précis où le client choisit, et transformerait
+//     le quinzième jour en perte de fonctionnalités. Pour essayer autre chose,
+//     on change de forfait pendant l'essai — le décompte, lui, ne repart pas.
 //   • À l'échéance → l'organisation bascule en **lecture seule** : les données
 //     restent consultables, mais plus aucune écriture n'est acceptée et les
 //     rapports sont limités aux 7 derniers jours.
@@ -44,6 +48,8 @@ export const CAPABILITIES = [
   "team.manage",
   "reports.export",
   "reports.advanced",
+  "reports.consolidated",
+  "audit.read",
   "sites.multiple",
 ] as const
 
@@ -60,6 +66,8 @@ export const CAPABILITY_LABELS: Record<Capability, string> = {
   "team.manage": "Gérer l’équipe",
   "reports.export": "Exporter les rapports",
   "reports.advanced": "Rapports avancés",
+  "reports.consolidated": "Rapports consolidés et vue multi-stations",
+  "audit.read": "Historique des opérations et traçabilité",
   "sites.multiple": "Gestion multi-stations",
 }
 
@@ -73,9 +81,6 @@ const WRITE_CAPABILITIES: Capability[] = [
   "catalog.manage",
   "team.manage",
 ]
-
-/** Fonctionnalités débloquées pendant l'essai, quel que soit le forfait. */
-const TRIAL_UNLOCKED_FEATURES: Capability[] = ["reports.advanced", "reports.export"]
 
 export interface SubscriptionState {
   /** Statut effectif : un essai échu vaut « expired », même si la base dit « trialing ». */
@@ -175,11 +180,10 @@ export function computeSubscriptionState(input: SubscriptionInput): Subscription
       capabilities[capability] = !readOnly
       continue
     }
-    // Fonctionnalités de forfait : l'essai donne un aperçu complet, puis on
-    // retombe sur ce que le forfait autorise réellement.
-    const unlockedByTrial = isTrial && TRIAL_UNLOCKED_FEATURES.includes(capability)
-    capabilities[capability] =
-      !readOnly && (unlockedByTrial || featureEnabled(input.plan_features, capability))
+    // Fonctionnalités de forfait : l'essai ne change rien, il donne à voir le
+    // forfait choisi tel qu'il sera facturé. Ce que l'on essaie est ce que
+    // l'on achète.
+    capabilities[capability] = !readOnly && featureEnabled(input.plan_features, capability)
   }
 
   return {

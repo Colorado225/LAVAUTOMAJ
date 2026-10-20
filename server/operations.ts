@@ -5,6 +5,7 @@ import { getPool } from "./db.ts"
 import { asyncRoute, body, tenant, parseId, requirePermission } from "./http.ts"
 import { HttpError } from "./auth.ts"
 import { fingerprint, withIdempotency } from "./idempotency.ts"
+import { assertSiteWritable } from "./plan-limits.ts"
 
 export const operationValidators = {
   openSession: z
@@ -138,6 +139,7 @@ export function createOperationsRouter() {
             throw new HttpError(409, "cash_session_already_open", "Une session de caisse est déjà ouverte pour cette station.")
           }
 
+          await assertSiteWritable(client, t.organizationId, input.site_id)
           const insertQ = await client.query(
             "INSERT INTO cash_sessions(organization_id, site_id, opened_by, opening_amount_cents) VALUES($1,$2,$3,$4) RETURNING id",
             [t.organizationId, input.site_id, t.userId, input.opening_amount_cents],
@@ -321,6 +323,7 @@ export function createOperationsRouter() {
             if (!siteId) siteId = sessionQ.rows[0].site_id
           }
 
+          await assertSiteWritable(client, t.organizationId, siteId)
           const q = await client.query(
             `INSERT INTO expenses(organization_id, site_id, category, amount_cents, payment_method, cash_session_id, description, beneficiary, reference, created_by)
              VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING ${EXPENSE_FIELDS}`,

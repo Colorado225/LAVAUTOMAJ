@@ -86,51 +86,39 @@ près, traitée ci-dessous.
 
 ---
 
-## 4. ⚠️ Écart entre la vitrine et le produit
+## 4. ✅ Vitrine et produit alignés (20 octobre 2026)
 
-La page vitrine annonce désormais la grille ci-dessus. **Le catalogue
-réellement servi par l'application est différent.**
+L'écart documenté ici pendant un mois est résolu. La page publique et le
+catalogue applicatif annoncent désormais les mêmes forfaits aux mêmes prix :
 
-| Rang | Vitrine (`src/config/pricing.ts`) | Catalogue applicatif (`server/db.ts`) |
-|---|---|---|
-| 1 | Starter — **10 000 F** | `free` « Gratuit » — **0 F** |
-| 2 | Pro — **20 000 F** | `pro` — **10 000 F** |
-| 3 | Business — **35 000 F** | `business` — **25 000 F** |
+| Forfait | Code en base | Prix | Utilisateurs | Laveurs | Stations |
+|---------|--------------|------|--------------|---------|----------|
+| Starter | `starter` | 10 000 F | 2 | 3 | 1 |
+| Pro | `pro` | 20 000 F | 10 | 20 | 1 |
+| Business | `business` | 35 000 F | illimité | illimité | illimité |
 
-Conséquences actuelles :
+**Ce que la migration a fait.** `UPDATE plans SET code='starter' WHERE
+code='free'`, exécuté **avant** le seed. L'ordre compte : le seed utilise
+`ON CONFLICT(code)`, donc insérer « starter » sans renommer d'abord aurait créé
+une quatrième ligne en laissant « free » orpheline — avec tous les abonnements
+en cours pointant dessus. En renommant, les abonnements suivent sans une seule
+réécriture, puisqu'ils référencent `plans.id`, pas le code.
 
-- un visiteur lit « Pro 20 000 F », s'inscrit, et voit « Pro 10 000 F » dans
-  l'onboarding ;
-- le forfait `free` est **gratuit en permanence**, ce qui contredit
-  directement la consigne de ne pas tout laisser gratuit indéfiniment. Seul le
-  forfait gratuit déclenche aujourd'hui l'essai de 14 jours, après quoi
-  l'espace passe en lecture seule — mais le forfait lui-même reste à 0 F.
+**Le piège désamorcé.** `server/onboarding.ts` décidait d'ouvrir un essai avec
+`price_cents === 0`. Aucun forfait n'étant plus gratuit, ce test serait devenu
+faux pour tout le monde : plus aucun essai, sans erreur, sans journal, sans
+rien. Le déclenchement ne dépend plus du prix — tout forfait choisi ouvre
+14 jours d'essai. Un test (`aucun forfait n'est gratuit`) verrouille la
+situation pour que personne ne réintroduise la condition.
 
-Le catalogue applicatif n'a **pas** été modifié : ces prix sont présentés
-comme des hypothèses à tester, et réécrire le catalogue de facturation sur des
-hypothèses non validées engage bien plus que la page vitrine.
-
-### Marche à suivre pour aligner
-
-Quand les prix seront confirmés, l'alignement touche :
-
-1. **`server/db.ts`** — le `INSERT INTO plans … ON CONFLICT DO UPDATE` : passer
-   `free` → code `starter`, nom « Starter », `price_cents` 1000000 ; `pro` →
-   2000000 ; `business` → 3500000. Le `ON CONFLICT` met déjà à jour les prix au
-   redémarrage ; **changer un `code` demande en revanche une migration**, car
-   `subscriptions.plan_id` référence la ligne existante.
-2. **`server/entitlements.ts`** — la logique d'essai s'appuie sur
-   `price_cents === 0` pour reconnaître le forfait gratuit
-   (`const isFree = Number(plan.price_cents) === 0` dans `server/onboarding.ts`).
-   Sans forfait à 0 F, l'essai doit être déclenché par le code du forfait ou un
-   drapeau dédié, sinon **plus aucun compte n'obtient d'essai**.
-3. **`src/config/pricing.ts`** — ajuster le champ `code` de chaque forfait.
-4. **`tests/entitlements.test.ts`** — les cas qui dépendent du forfait gratuit.
-5. **`ESSAI-GRATUIT.md`** et ce fichier.
-
-Le point 2 est le piège : c'est une bascule silencieuse, pas une erreur de
-compilation. Toute modification des prix doit être accompagnée d'un test qui
-vérifie qu'un nouveau compte reçoit bien `trialing` et 14 jours.
+**Conséquence sur l'essai : on essaie ce que l'on achète.** L'essai ne débloque
+plus les options des forfaits supérieurs. Tant qu'un forfait à 0 F existait,
+offrir un aperçu de Pro avait du sens. Maintenant que le client choisit et
+essaie un forfait payant, lui donner Pro pendant 14 jours rendrait les trois
+offres indiscernables au moment exact du choix, et ferait du quinzième jour une
+perte de fonctionnalités — le meilleur moyen de faire fuir quelqu'un qui venait
+de s'habituer. Pour essayer autre chose, on change de forfait pendant l'essai ;
+le décompte, lui, ne repart pas à zéro.
 
 ---
 
@@ -141,13 +129,18 @@ noms, positionnements, prix, listes de fonctionnalités et durée d'essai
 annoncée. La section `src/app/landing/components/pricing-section.tsx` ne fait
 que la mettre en forme — aucun prix n'est écrit en dur dans le JSX.
 
+Depuis l'alignement, **deux fichiers doivent changer ensemble** : ce fichier
+pour la vitrine, et le seed `plans` de `server/db.ts` pour le catalogue
+applicatif. Le test « les trois forfaits publics existent en base, au même
+prix » (`tests/plan-guardrails.test.ts`) échoue si l'un part sans l'autre.
+
 ---
 
 ## 6. État de couverture des promesses (20 octobre 2026)
 
-Les seize fonctionnalités annoncées sont désormais **toutes construites**, à
-deux exceptions documentées. Elles sont en revanche **accessibles à tout le
-monde** : aucune n'est encore réservée au forfait qui la vend.
+Les seize fonctionnalités annoncées sont **toutes construites**, à deux
+exceptions documentées, et **réservées au forfait qui les vend** depuis la pose
+des garde-fous (section 7).
 
 | Forfait | Promesse | État |
 | --- | --- | --- |
@@ -156,8 +149,8 @@ monde** : aucune n'est encore réservée au forfait qui la vend.
 | Starter | Recettes par mode de paiement | ✅ |
 | Starter | Suivi simple des dépenses | ✅ |
 | Starter | Rapport quotidien | ✅ |
-| Pro | Gestion des équipes et attributions | ✅ |
-| Pro | Suivi des sessions de caisse | ✅ |
+| Pro | Gestion des équipes et attributions | ⚠️ différenciée par le plafond (voir 7.2) |
+| Pro | Suivi des sessions de caisse | ⚠️ disponible aussi en Starter (voir 7.2) |
 | Pro | Suivi des dépenses et marges opérationnelles | ✅ |
 | Pro | Rapports détaillés et exports | ✅ |
 | Pro | Historique des opérations et traçabilité | ✅ *(ajouté)* |
@@ -176,20 +169,99 @@ tri de file ? Promettre « prioritaire » sans délai mesurable est une promesse
 que l'on ne peut ni tenir ni démentir. Tant que l'arbitrage n'est pas fait,
 mieux vaut l'absence de code qu'un badge décoratif.
 
-### Ce qu'il reste à faire : les garde-fous
+### Les garde-fous, maintenant posés
 
-Trois décisions à prendre avant de restreindre, dans cet ordre :
+Les trois décisions annoncées ici ont été prises. Voir la section 7.
 
-1. **Résoudre l'écart de la section 4.** Les codes de forfait en base
-   (`free` / `pro` / `business`) ne correspondent pas à la vitrine
-   (Starter / Pro / Business). Poser des garde-fous sur des codes que l'on
-   s'apprête à renommer reviendrait à les écrire deux fois.
-2. **Choisir le point de blocage pour chaque fonction.** Masquer l'entrée de
-   menu ne protège rien : la restriction doit vivre côté serveur, comme les
-   permissions. Et la règle de cumul avec le RBAC doit être explicite — un
-   gérant en forfait Starter, que voit-il de l'historique ?
-3. **Décider du sort des données déjà saisies** en cas de rétrogradation. Une
-   organisation Business qui repasse en Pro garde trois stations : lecture
-   seule, blocage des nouveaux enregistrements, ou avertissement ? Couper
-   l'accès à des données déjà saisies est le moyen le plus sûr de perdre un
-   client — c'est une décision commerciale, pas technique.
+---
+
+## 7. Les garde-fous par forfait
+
+### 7.1 La règle de cumul avec le RBAC
+
+Deux verrous, deux questions distinctes, dans cet ordre :
+
+| Verrou | Question | Refus | Code HTTP |
+|--------|----------|-------|-----------|
+| **Rôle** (`requirePermission`) | Cette **personne** a-t-elle le droit ? | définitif | 403 `forbidden` |
+| **Forfait** (`requireCapability`) | Cette **organisation** l'a-t-elle souscrit ? | achetable | 402 `plan_upgrade_required` |
+
+**Le rôle se vérifie en premier, et l'ordre n'est pas interchangeable.**
+Proposer de passer au forfait supérieur à un caissier l'enverrait réclamer une
+dépense à son patron pour une fonction qu'il n'aurait, de toute façon, pas le
+droit d'utiliser. Un refus de rôle est une fin de non-recevoir ; un refus de
+forfait est une invitation à acheter, et ne doit s'afficher que lorsque
+l'achat débloque réellement quelque chose.
+
+**La réponse à la question posée** — « un gérant en Starter, que voit-il de
+l'historique ? » : **rien, exactement comme le propriétaire.** Le verrou de
+forfait ne connaît pas les rôles. `audit:read` dit « ce rôle peut consulter
+l'historique » ; le forfait Starter dit « cette organisation n'a pas souscrit
+la traçabilité ». Les deux reçoivent le même écran d'argumentaire, parce que
+ce n'est pas une question de personne. La différence entre eux n'apparaît
+qu'une fois l'organisation passée en Pro : propriétaire et gérant y accèdent,
+le caissier non — et le caissier, lui, n'a jamais vu passer la moindre
+proposition d'achat.
+
+Côté interface, `useAccess(permission, capability)` applique la même priorité,
+et le composant `PlanGate` distingue visuellement les deux refus : bouclier et
+aucun bouton pour le rôle, étincelle et « Voir les forfaits » pour le forfait.
+
+### 7.2 Où chaque fonction est bloquée
+
+| Fonction | Forfait minimum | Point de blocage serveur |
+|---|---|---|
+| Historique des opérations | Pro | `requireCapability("audit.read")` sur `/audit-logs` |
+| Regroupement semaine / mois | Pro | 402 dans `/reports/summary` si `granularity ≠ day` |
+| Export des rapports | Pro | `reports.export` (construit côté client, gardé à l'affichage) |
+| Vue et rapports consolidés | Business | `by_site` vide hors `reports.consolidated` |
+| Plusieurs stations | Business | `max_sites` via `assertSiteCapacity` |
+
+**Ce qui n'est délibérément pas gardé**, bien que la page publique le range
+sous Pro :
+
+- **Les sessions de caisse.** Un paiement en espèces et une dépense en espèces
+  exigent tous deux une session ouverte. Gardée au niveau Pro, la caisse
+  rendrait un client Starter incapable d'encaisser un billet — l'opération la
+  plus courante d'une station de lavage à Abidjan. On ne casse pas la boucle
+  centrale du produit pour faire respecter une ligne d'argumentaire.
+- **La gestion des équipes.** Un lavage s'attribue à des laveurs ; sans
+  laveurs, la fiche de lavage Starter perd son intérêt. La différenciation
+  passe par le **plafond**, déjà appliqué : 3 laveurs en Starter, 20 en Pro,
+  illimité en Business. C'est la limite qui se vend, pas la fonction.
+
+Ces deux lignes de la grille publique sont donc **tenues en partie seulement**.
+Recommandation : reformuler la ligne Pro « Suivi des sessions de caisse » en
+quelque chose qui décrit un vrai écart — par exemple le rapprochement de caisse
+détaillé ou l'historique des écarts, qui relèvent bien de la traçabilité Pro.
+La copie publique n'a pas été modifiée sans arbitrage de votre part.
+
+### 7.3 Que devient une organisation qui rétrograde
+
+**Principe non négociable : aucune donnée saisie n'est jamais supprimée ni
+masquée par un changement de forfait.** La lecture et l'export restent ouverts,
+indéfiniment, sur la totalité de l'historique. Couper l'accès à des données
+déjà saisies est le moyen le plus sûr de perdre un client — et, pour un gérant
+qui doit justifier une recette, une faute.
+
+Ce qui change, c'est la capacité à en produire de nouvelles :
+
+1. **Création bloquée immédiatement** (409 `plan_site_limit`). Pas de délai de
+   grâce ici : on ne laisse personne aggraver un dépassement.
+2. **14 jours de grâce sur l'existant.** Toutes les stations continuent de
+   fonctionner normalement. Un bandeau annonce l'échéance et ce qui va se
+   passer. Le propriétaire choisit lesquelles garder actives.
+3. **Au terme du délai**, les stations excédentaires passent en lecture seule
+   (402 `site_over_plan_limit` sur lavage, caisse et dépense). Leur historique
+   reste entièrement lisible et exportable.
+
+**Quelles stations restent actives ?** Les plus anciennes, par date de
+création. Le critère devait être déterministe et explicable : « la station
+historique reste » se comprend sans un mot d'explication, « celle dont
+l'identifiant est le plus petit » ne se comprend jamais. Le propriétaire
+recompose son choix à tout moment en désactivant une station pour en réactiver
+une autre — et la réactivation repasse par le plafond, sinon le détour
+désactiver/réactiver contournerait la limite.
+
+**Remonter de forfait ne demande aucune manipulation** : tout se rouvre à
+l'instant. Le client vient de payer, il doit retrouver son outil intact.

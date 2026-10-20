@@ -5,6 +5,7 @@ import { getPool } from "./db.ts"
 import { asyncRoute, body, tenant, parseId, requirePermission, HttpError } from "./http.ts"
 import { fingerprint, withIdempotency } from "./idempotency.ts"
 import { initialPaymentStatus, resolvePaymentStatus, PAYMENT_METHODS } from "./payments.ts"
+import { assertSiteCapacity, assertSiteWritable, loadSiteLimitState } from "./plan-limits.ts"
 
 export const catalogValidators = {
   category: z
@@ -82,11 +83,27 @@ export function createApiRouter() {
     requirePermission("wash:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
-      const q = await db().query(
+      const pool = db()
+      const q = await pool.query(
         "SELECT id, name, city, address, phone, email, description, logo_url, slug, is_active, created_at, updated_at FROM sites WHERE organization_id=$1::uuid ORDER BY created_at",
         [t.organizationId],
       )
-      res.json(q.rows)
+      // `writable` dit à l'interface ce que le serveur refusera de toute façon :
+      // après une rétrogradation, les stations excédentaires restent listées et
+      // consultables, mais n'acceptent plus de nouvelle opération.
+      const limit = await loadSiteLimitState(pool, t.organizationId)
+      const writableIds =
+        limit.enforced && limit.limit !== null
+          ? new Set(
+              q.rows.filter((row) => row.is_active).slice(0, limit.limit).map((row) => row.id),
+            )
+          : null
+      res.json(
+        q.rows.map((row) => ({
+          ...row,
+          writable: writableIds ? writableIds.has(row.id) : true,
+        })),
+      )
     }),
   )
 
@@ -108,12 +125,26 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(catalogValidators.site, req.body)
-      const q = await db().query(
-        `INSERT INTO sites(organization_id, name, city, address, phone, email, description, is_active)
-         VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE($8,true)) RETURNING *`,
-        [t.organizationId, input.name, input.city, input.address ?? null, input.phone ?? null, input.email ?? null, input.description ?? null, input.is_active ?? null],
-      )
-      res.status(201).json(q.rows[0])
+      // Le plafond se vérifie sous verrou : deux créations simultanées
+      // passeraient toutes les deux un simple COUNT.
+      const client = await db().connect()
+      try {
+        await client.query("BEGIN")
+        await assertSiteCapacity(client, t.organizationId)
+        const created = await client.query(
+          `INSERT INTO sites(organization_id, name, city, address, phone, email, description, is_active)
+           VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE($8,true)) RETURNING *`,
+          [t.organizationId, input.name, input.city, input.address ?? null, input.phone ?? null, input.email ?? null, input.description ?? null, input.is_active ?? null],
+        )
+        await client.query("COMMIT")
+        res.status(201).json(created.rows[0])
+        return
+      } catch (error) {
+        await client.query("ROLLBACK")
+        throw error
+      } finally {
+        client.release()
+      }
     }),
   )
 
@@ -127,12 +158,24 @@ export function createApiRouter() {
       const oldQ = await db().query("SELECT * FROM sites WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!oldQ.rowCount) throw new HttpError(404, "site_not_found", "Station introuvable.")
       const merged = { ...oldQ.rows[0], ...input }
-      const q = await db().query(
-        `UPDATE sites SET name=$3, city=$4, address=$5, phone=$6, email=$7, description=$8, is_active=$9, updated_at=now()
-         WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING *`,
-        [id, t.organizationId, merged.name, merged.city, merged.address, merged.phone, merged.email, merged.description, merged.is_active],
-      )
-      res.json(q.rows[0])
+      const reactivating = oldQ.rows[0].is_active === false && merged.is_active === true
+      const client = await db().connect()
+      try {
+        await client.query("BEGIN")
+        if (reactivating) await assertSiteCapacity(client, t.organizationId)
+        const q = await client.query(
+          `UPDATE sites SET name=$3, city=$4, address=$5, phone=$6, email=$7, description=$8, is_active=$9, updated_at=now()
+           WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING *`,
+          [id, t.organizationId, merged.name, merged.city, merged.address, merged.phone, merged.email, merged.description, merged.is_active],
+        )
+        await client.query("COMMIT")
+        res.json(q.rows[0])
+      } catch (error) {
+        await client.query("ROLLBACK")
+        throw error
+      } finally {
+        client.release()
+      }
     }),
   )
 
@@ -517,6 +560,7 @@ export function createApiRouter() {
 
           const paymentStatus = resolvePaymentStatus(totalCents, input.amount_received_cents)
 
+          await assertSiteWritable(client, t.organizationId, input.site_id)
           const washQ = await client.query(
             `INSERT INTO washes(organization_id, site_id, vehicle_category_id, status, payment_status, total_cents, payment_method, created_by, reference)
              VALUES($1,$2,$3,'completed',$4,$5,$6,$7,

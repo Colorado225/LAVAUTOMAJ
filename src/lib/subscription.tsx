@@ -21,6 +21,8 @@ export type Capability =
   | "team.manage"
   | "reports.export"
   | "reports.advanced"
+  | "reports.consolidated"
+  | "audit.read"
   | "sites.multiple"
 
 export type SubscriptionStatus =
@@ -52,6 +54,27 @@ export interface SubscriptionState {
   server_time: string
   warning_days: number
   capability_labels: Record<Capability, string>
+  limits: { sites: PlanLimitState }
+  downgrade_grace_days: number
+}
+
+/**
+ * Limite numérique d'un forfait. Un dépassement n'efface jamais de données :
+ * il bloque la création et, le délai de grâce écoulé, met l'excédent en
+ * lecture seule. Voir `server/plan-limits.ts`.
+ */
+export interface PlanLimitState {
+  /** `null` = illimité. */
+  limit: number | null
+  active_count: number
+  remaining: number | null
+  over_limit: boolean
+  excess: number
+  grace_ends_at: string | null
+  grace_days_remaining: number
+  /** Vrai quand le délai est écoulé : l'excédent est passé en lecture seule. */
+  enforced: boolean
+  creation_blocked: boolean
 }
 
 interface SubscriptionContextValue {

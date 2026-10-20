@@ -153,7 +153,21 @@ export function createReportsRouter() {
       const t = tenant(req)
       const today = new Date().toISOString().slice(0, 10)
       const requested = parseReportRange({ from: req.query.from || today, to: req.query.to || today })
+      // Garde de forfait, posée après celle du rôle (voir server/app.ts).
+      // « Rapport quotidien » est la promesse Starter ; le regroupement par
+      // semaine ou par mois relève des « rapports détaillés » du forfait Pro.
+      // On refuse plutôt que de retomber silencieusement sur le jour : une
+      // courbe mensuelle qui s'affiche en jours sans un mot ferait douter des
+      // chiffres eux-mêmes.
       const granularity = parseGranularity(req.query.granularity)
+      const advanced = req.subscription?.capabilities["reports.advanced"] ?? true
+      if (granularity !== "day" && !advanced) {
+        throw new HttpError(
+          402,
+          "plan_upgrade_required",
+          "Le regroupement par semaine ou par mois fait partie des rapports détaillés du forfait Pro. Votre forfait couvre le rapport quotidien.",
+        )
+      }
       // Essai terminé : l'historique consultable est ramené à 7 jours. On
       // tronque la période au lieu de refuser la requête, pour que l'écran
       // reste utilisable et que la limite soit visible plutôt que bloquante.
@@ -337,6 +351,7 @@ export function createReportsRouter() {
       // réservé aux rôles qui en ont le droit : un gérant voit son activité,
       // pas la rentabilité de la station.
       const financial = t.can("report:financial")
+      const consolidated = req.subscription?.capabilities["reports.consolidated"] ?? true
 
       res.json({
         period: { from: range.from, to: range.to, granularity },
@@ -370,9 +385,11 @@ export function createReportsRouter() {
         expense_categories: financial ? expenseCategoriesQ.rows : [],
         // Site filtré, le cas échéant : l'interface affiche de quoi elle parle.
         site: site ? { id: site.id, name: site.name } : null,
-        // Ventilation par site. Dépenses et marge suivent la même règle que
-        // le reste : sans `report:financial`, elles valent null.
-        by_site: bySiteQ.rows.map((row) => ({
+        // Ventilation par site : fonction Business. Sur les autres forfaits
+        // le tableau est vide plutôt qu'absent, pour que l'interface puisse
+        // afficher l'argumentaire au lieu d'un écran qui ne réagit pas.
+        consolidated_access: consolidated,
+        by_site: (consolidated ? bySiteQ.rows : []).map((row) => ({
           site_id: row.site_id,
           site_name: row.site_name,
           city: row.city,

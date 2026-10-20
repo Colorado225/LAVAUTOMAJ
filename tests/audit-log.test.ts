@@ -4,6 +4,7 @@ import type { Server } from "node:http"
 import type { Pool } from "pg"
 import { initDatabaseSchema, getPool, closeDatabase } from "../server/db.ts"
 import { createApiApp } from "../server/app.ts"
+import { invalidateSubscriptionCache } from "../server/entitlements.ts"
 import {
   AUDIT_ACTION_LABELS,
   auditActionLabel,
@@ -25,6 +26,19 @@ let pool: Pool
 
 const PASSWORD = "WashPilot2026!"
 const sessions = new Map<string, string>()
+let orgId: string
+
+/** Place l'organisation de test sur un forfait donné. */
+async function setPlan(code: string) {
+  await pool.query(
+    `UPDATE subscriptions SET plan_id = (SELECT id FROM plans WHERE code=$2),
+       status='active', plan_changed_at=now(), updated_at=now()
+     WHERE organization_id=$1::uuid`,
+    [orgId, code],
+  )
+  invalidateSubscriptionCache(orgId)
+}
+
 
 async function api(path: string, options: { as?: string; method?: string; body?: unknown } = {}) {
   const headers: Record<string, string> = { "Content-Type": "application/json" }
@@ -76,7 +90,10 @@ before(async () => {
   const org = await pool.query(
     "SELECT m.organization_id FROM organization_members m JOIN users u ON u.id = m.user_id WHERE u.email='demo@washpilot.ci'",
   )
-  const orgId = org.rows[0].organization_id
+  orgId = org.rows[0].organization_id
+  // L'historique est une fonction du forfait Pro : sans cela, toutes les
+  // lectures répondraient 402 et l'on ne testerait que la garde de forfait.
+  await setPlan("pro")
   const owner = await pool.query("SELECT id FROM users WHERE email='demo@washpilot.ci'")
   const ownerId = owner.rows[0].id
 

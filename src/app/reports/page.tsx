@@ -27,6 +27,7 @@ import {
 import { MotionCard } from "@/components/ui/motion"
 import { useApi } from "@/lib/api"
 import { useAccess } from "@/lib/permissions"
+import { useCapability } from "@/lib/subscription"
 import type { ChartConfig } from "@/components/ui/chart"
 import type { ReportGranularity, ReportResponse } from "@/lib/reporting-api"
 import type { SiteRecord } from "@/lib/sites-api"
@@ -225,6 +226,10 @@ function downloadReport(report: ReportResponse) {
 
 export default function ReportsPage() {
   const exportReports = useAccess("report:export", "reports.export")
+  // Gardes de forfait. Le serveur refuse de toute façon ; l'interface évite
+  // d'envoyer une requête vouée au 402 et explique pourquoi le bouton est gris.
+  const advancedReports = useCapability("reports.advanced")
+  const consolidatedReports = useCapability("reports.consolidated")
   const today = useMemo(() => dateInAbidjan(), [])
   const [from, setFrom] = useState(() => shiftDate(dateInAbidjan(), -29))
   const [to, setTo] = useState(today)
@@ -304,7 +309,16 @@ export default function ReportsPage() {
               <Button type="button" size="sm" variant="outline" onClick={chooseCurrentWeek}>Cette semaine</Button>
               <Button type="button" size="sm" variant="outline" onClick={chooseCurrentMonth}>Ce mois</Button>
               <Button type="button" size="sm" variant="outline" onClick={() => choosePeriod(90)}>90 jours</Button>
-              <Button type="button" size="sm" variant="outline" onClick={chooseYearByMonth}>12 mois</Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!advancedReports.allowed}
+                title={advancedReports.allowed ? undefined : (advancedReports.reason ?? undefined)}
+                onClick={chooseYearByMonth}
+              >
+                12 mois
+              </Button>
             </div>
             <div
               className="flex flex-col gap-1 text-xs font-medium text-muted-foreground"
@@ -313,22 +327,28 @@ export default function ReportsPage() {
             >
               Regroupement
               <div className="flex overflow-hidden rounded-md border">
-                {GRANULARITY_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    title={option.description}
-                    aria-pressed={granularity === option.value}
-                    onClick={() => setGranularity(option.value)}
-                    className={`h-9 min-w-16 px-3 text-sm transition-colors duration-150 ${
-                      granularity === option.value
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-background text-foreground hover:bg-accent"
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
+                {GRANULARITY_OPTIONS.map((option) => {
+                  // « Rapport quotidien » est la promesse Starter ; le
+                  // regroupement par semaine ou par mois relève du forfait Pro.
+                  const locked = option.value !== "day" && !advancedReports.allowed
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      title={locked ? (advancedReports.reason ?? undefined) : option.description}
+                      aria-pressed={granularity === option.value}
+                      disabled={locked}
+                      onClick={() => setGranularity(option.value)}
+                      className={`h-9 min-w-16 px-3 text-sm transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
+                        granularity === option.value
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-background text-foreground hover:bg-accent"
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  )
+                })}
               </div>
             </div>
             <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
@@ -505,7 +525,25 @@ export default function ReportsPage() {
           ])}
         />
 
-        {multiSite && (
+        {multiSite && !consolidatedReports.allowed && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Building2 className="size-4 text-muted-foreground" /> Résultats par station
+              </CardTitle>
+              <CardDescription>
+                Comparez vos points de lavage côte à côte — lavages, encaissements,
+                dépenses et solde — sur la même période.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+              <Lock className="size-4 shrink-0" aria-hidden="true" />
+              <span className="flex-1 min-w-48">{consolidatedReports.reason}</span>
+            </CardContent>
+          </Card>
+        )}
+
+        {multiSite && consolidatedReports.allowed && (
           <BreakdownTable
             title="Résultats par station"
             description={

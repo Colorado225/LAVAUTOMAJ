@@ -10,14 +10,20 @@ import {
 const DAY = 86_400_000
 const NOW = new Date("2026-10-20T12:00:00.000Z")
 
-/** Abonnement d'essai dont l'échéance tombe dans `days` jours. */
+/** Abonnement d'essai sur le forfait d'entrée, échéance dans `days` jours. */
 function trialEndingIn(days: number) {
   return {
     status: "trialing",
     current_period_end: new Date(NOW.getTime() + days * DAY),
-    plan_code: "free",
-    plan_price_cents: 0,
-    plan_features: { "reports.advanced": false, "reports.export": false, "sites.multiple": false },
+    plan_code: "starter",
+    plan_price_cents: 1_000_000,
+    plan_features: {
+      "reports.advanced": false,
+      "reports.export": false,
+      "reports.consolidated": false,
+      "audit.read": false,
+      "sites.multiple": false,
+    },
     now: NOW,
   }
 }
@@ -38,16 +44,42 @@ test("un essai qui vient de démarrer laisse 14 jours et tout est autorisé", ()
   assert.equal(state.progress, 0)
   assert.equal(state.capabilities["washes.create"], true)
   assert.equal(state.capabilities["cash.manage"], true)
-  assert.deepEqual(state.restricted, ["sites.multiple"])
+  // Les écritures sont ouvertes ; les fonctions des forfaits supérieurs, non.
+  assert.deepEqual(state.restricted, [
+    "reports.export",
+    "reports.advanced",
+    "reports.consolidated",
+    "audit.read",
+    "sites.multiple",
+  ])
 })
 
-test("l'essai débloque les rapports avancés même sur le forfait Gratuit", () => {
-  const state = computeSubscriptionState(trialEndingIn(5))
+test("l'essai ne débloque rien au-delà du forfait choisi", () => {
+  // Décision produit : on essaie exactement ce que l'on achète. Débloquer les
+  // options supérieures pendant l'essai rendrait les trois forfaits
+  // indiscernables au moment du choix, et ferait du quinzième jour une perte
+  // de fonctionnalités — le meilleur moyen de faire fuir un client qui venait
+  // de s'habituer.
+  const starter = computeSubscriptionState(trialEndingIn(5))
+  assert.equal(starter.capabilities["reports.advanced"], false)
+  assert.equal(starter.capabilities["reports.export"], false)
+  assert.equal(starter.capabilities["audit.read"], false)
+  assert.equal(starter.capabilities["sites.multiple"], false)
 
-  assert.equal(state.capabilities["reports.advanced"], true)
-  assert.equal(state.capabilities["reports.export"], true)
-  // Limite structurelle du forfait : elle n'est pas levée par l'essai.
-  assert.equal(state.capabilities["sites.multiple"], false)
+  // Le même essai sur un forfait supérieur donne bien ses options.
+  const business = computeSubscriptionState({
+    ...trialEndingIn(5),
+    plan_code: "business",
+    plan_features: {
+      "reports.advanced": true,
+      "reports.export": true,
+      "reports.consolidated": true,
+      "audit.read": true,
+      "sites.multiple": true,
+    },
+  })
+  assert.equal(business.capabilities["reports.consolidated"], true)
+  assert.equal(business.capabilities["sites.multiple"], true)
 })
 
 test("à mi-parcours la progression vaut la moitié", () => {
@@ -85,8 +117,8 @@ test("en lecture seule, les écritures et les options payantes sont coupées", (
   ] as const) {
     assert.equal(state.capabilities[capability], false, `${capability} devrait être bloquée`)
   }
-  // 7 capacités d'écriture (dont la gestion des encaissements) + export + rapports avancés.
-  assert.equal(state.restricted.length, 10)
+  // Les 7 capacités d'écriture plus les 5 options de forfait.
+  assert.equal(state.restricted.length, 12)
 })
 
 test("l'échéance exacte compte comme expirée", () => {
@@ -156,7 +188,7 @@ test("un statut stocké « expired » reste expiré sans date d'échéance", () 
   const state = computeSubscriptionState({
     status: "expired",
     current_period_end: null,
-    plan_code: "free",
+    plan_code: "starter",
     plan_price_cents: 0,
     now: NOW,
   })

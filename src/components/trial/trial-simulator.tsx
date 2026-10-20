@@ -32,7 +32,7 @@ export function TrialSimulator() {
     try {
       const response = await apiFetch("/api/v1/subscription/simulate", {
         method: "POST",
-        body: JSON.stringify({ days_left: days, plan_code: "free" }),
+        body: JSON.stringify({ days_left: days, plan_code: "starter" }),
       })
       if (!response.ok) {
         setError(await apiErrorMessage(response))

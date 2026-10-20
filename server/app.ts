@@ -31,7 +31,18 @@ import { attachSubscription, blockWritesWhenReadOnly } from "./entitlements.ts"
  *   2. `requireTenantContext`  — de quelle station, avec quel rôle, et le
  *                                compte est-il toujours actif ? (403 sinon)
  *   3. `attachSubscription`    — que permet le forfait ?
- *   4. `requirePermission`     — posé par chaque route (403 sinon)
+ *   4. `requirePermission`     — posé par chaque route : cette personne a-t-elle
+ *                                le droit ? (403 `forbidden` sinon)
+ *   5. `requireCapability`     — posé par chaque route : l'organisation a-t-elle
+ *                                acheté cette fonction ? (402
+ *                                `plan_upgrade_required` sinon)
+ *
+ * L'ordre entre 4 et 5 n'est pas interchangeable. Le rôle se vérifie **avant**
+ * le forfait : proposer de passer au forfait supérieur à un caissier qui n'aura
+ * de toute façon pas le droit d'agir l'enverrait demander une dépense inutile à
+ * son patron. Un refus de rôle est définitif pour cette personne ; un refus de
+ * forfait est une invitation à acheter, et ne doit s'afficher que quand l'achat
+ * débloquerait réellement quelque chose.
  */
 export function mountApi(app: Express) {
   app.use("/api/v1/auth", createAuthRouter())

@@ -2,26 +2,27 @@
  * Grille tarifaire publique — source unique de la section « Tarifs ».
  *
  * ⚠️ Ces prix sont des **hypothèses commerciales à tester** auprès des gérants
- * ivoiriens. Ils ne sont pas validés par le marché, et ils ne correspondent
- * pas (encore) au catalogue réellement servi par l'application.
+ * ivoiriens. Ils ne sont pas validés par le marché.
  *
- * État au 20 octobre 2026 :
+ * Depuis le 20 octobre 2026, la vitrine et le catalogue applicatif sont
+ * alignés : chaque `code` ci-dessous existe à l'identique dans `plans`
+ * (`server/db.ts`), au même prix. Toute modification doit porter sur les deux,
+ * sans quoi un visiteur verrait un prix sur la page publique et un autre dans
+ * l'onboarding.
  *
- * | Rang | Vitrine (ce fichier) | Catalogue applicatif (`server/db.ts`) |
- * |------|----------------------|---------------------------------------|
- * | 1    | Starter — 10 000 F   | `free` « Gratuit » — 0 F              |
- * | 2    | Pro — 20 000 F       | `pro` — 10 000 F                      |
- * | 3    | Business — 35 000 F  | `business` — 25 000 F                 |
+ * | Rang | Forfait  | Prix     | Code applicatif |
+ * |------|----------|----------|-----------------|
+ * | 1    | Starter  | 10 000 F | `starter`       |
+ * | 2    | Pro      | 20 000 F | `pro`           |
+ * | 3    | Business | 35 000 F | `business`      |
  *
- * Tant que l'écart subsiste, un visiteur voit un prix sur la page publique et
- * un autre dans l'onboarding. Pour aligner, voir la marche à suivre dans
- * `TARIFS.md`. Le `code` ci-dessous pointe déjà vers le forfait applicatif
- * correspondant, pour que le raccordement se limite à ce fichier et au seed.
+ * Il n'existe plus de forfait à 0 F : les trois sont payants et ouvrent
+ * chacun 14 jours d'essai sans carte bancaire.
  */
 
 export interface PricingPlan {
   /** Code du forfait applicatif visé (`plans.code` en base). */
-  code: "free" | "pro" | "business"
+  code: "starter" | "pro" | "business"
   name: string
   /** Positionnement affiché au-dessus du nom. */
   tagline: string
@@ -38,7 +39,7 @@ export interface PricingPlan {
 
 export const PRICING_PLANS: PricingPlan[] = [
   {
-    code: "free",
+    code: "starter",
     name: "Starter",
     tagline: "Entrée de gamme",
     priceXof: 10_000,

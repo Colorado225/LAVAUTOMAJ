@@ -2,7 +2,9 @@
 
 import { Fragment, useMemo, useState } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { useAccess } from "@/lib/permissions"
+import { PlanGate } from "@/components/subscription/plan-gate"
+import { usePermission } from "@/lib/permissions"
+import { useCapability } from "@/lib/subscription"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -49,7 +51,6 @@ import {
   History,
   RotateCcw,
   ScrollText,
-  ShieldAlert,
 } from "lucide-react"
 
 const PAGE_SIZE = 25
@@ -121,7 +122,12 @@ function downloadHistory(entries: AuditEntry[], from: string, to: string) {
 }
 
 export default function HistoryPage() {
-  const access = useAccess("audit:read")
+  // Deux verrous distincts : le rôle (définitif) et le forfait (achetable).
+  // On n'interroge l'API que si les deux passent, sinon chaque chargement de
+  // page produirait un 402 inutile dans les journaux.
+  const role = usePermission("audit:read")
+  const plan = useCapability("audit.read")
+  const access = { allowed: role.allowed && plan.allowed }
   const today = dateInAbidjan()
 
   const [from, setFrom] = useState(() => shiftDate(today, -29))
@@ -184,14 +190,14 @@ export default function HistoryPage() {
         description="Qui a fait quoi, quand, sur quel élément."
       >
         <div className="p-4">
-          <EmptyState
-            icon={ShieldAlert}
-            title="Accès réservé"
-            description={
-              access.reason ??
-              "La consultation de l’historique demande le droit « Consulter l’historique des opérations »."
-            }
-          />
+          <PlanGate
+            permission="audit:read"
+            capability="audit.read"
+            title="Historique des opérations"
+            pitch="Retrouvez qui a annulé un lavage, remboursé un encaissement ou modifié les droits d’un collaborateur, avec la date et le motif."
+          >
+            <span />
+          </PlanGate>
         </div>
       </BaseLayout>
     )

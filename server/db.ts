@@ -64,10 +64,18 @@ ALTER TABLE plans ADD COLUMN IF NOT EXISTS price_cents integer NOT NULL DEFAULT 
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS billing_cycle text NOT NULL DEFAULT 'monthly';
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_services integer;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS sort_order integer NOT NULL DEFAULT 0;
+-- Migration du forfait d'entrée : « free » (0 F) devient « starter » (10 000 F),
+-- pour coller à la grille publique. Le renommage se fait AVANT le seed, sinon
+-- ON CONFLICT(code) insérerait un doublon en laissant « free » orphelin —
+-- or les abonnements existants pointent dessus par plan_id. En renommant,
+-- les abonnements en cours suivent sans la moindre réécriture.
+UPDATE plans SET code='starter' WHERE code='free';
+-- Chaque forfait est payant et ouvre un essai de 14 jours (voir
+-- server/entitlements.ts). Prix en centimes : 10 000 F = 1 000 000.
 INSERT INTO plans(code,name,description,price_cents,billing_cycle,max_users,max_workers,max_sites,max_services,sort_order,features) VALUES
- ('free','Gratuit','Pour démarrer : une station, une petite équipe.',0,'monthly',1,3,1,10,1,'{"reports.advanced":false,"reports.export":false,"sites.multiple":false}'::jsonb),
- ('pro','Pro','Pour les stations en croissance : rapports avancés et exports.',1000000,'monthly',10,20,1,NULL,2,'{"reports.advanced":true,"reports.export":true,"sites.multiple":false}'::jsonb),
- ('business','Business','Multi-stations, équipe illimitée, analyses consolidées.',2500000,'monthly',NULL,NULL,NULL,NULL,3,'{"reports.advanced":true,"reports.export":true,"sites.multiple":true}'::jsonb)
+ ('starter','Starter','Pour les petites stations qui veulent abandonner le cahier de caisse.',1000000,'monthly',2,3,1,10,1,'{"reports.advanced":false,"reports.export":false,"reports.consolidated":false,"audit.read":false,"sites.multiple":false}'::jsonb),
+ ('pro','Pro','Pour les stations qui ont plusieurs laveurs et veulent mieux contrôler leurs opérations.',2000000,'monthly',10,20,1,NULL,2,'{"reports.advanced":true,"reports.export":true,"reports.consolidated":false,"audit.read":true,"sites.multiple":false}'::jsonb),
+ ('business','Business','Pour les stations importantes ou les propriétaires qui gèrent plusieurs sites.',3500000,'monthly',NULL,NULL,NULL,NULL,3,'{"reports.advanced":true,"reports.export":true,"reports.consolidated":true,"audit.read":true,"sites.multiple":true}'::jsonb)
 ON CONFLICT(code) DO UPDATE SET
  name=EXCLUDED.name, description=EXCLUDED.description, price_cents=EXCLUDED.price_cents,
  billing_cycle=EXCLUDED.billing_cycle, max_users=EXCLUDED.max_users, max_workers=EXCLUDED.max_workers,
@@ -78,6 +86,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
  plan_id uuid NOT NULL REFERENCES plans(id), status text NOT NULL DEFAULT 'trialing',
  current_period_end timestamptz, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan_changed_at timestamptz;
+UPDATE subscriptions SET plan_changed_at = created_at WHERE plan_changed_at IS NULL;
 CREATE TABLE IF NOT EXISTS organization_members (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  user_id uuid NOT NULL REFERENCES users(id), role text NOT NULL DEFAULT 'cashier',
@@ -330,10 +340,10 @@ async function seedDemoData(
     );
   }
 
-  // Démonstration : la station est sur le forfait Gratuit, en cours d'essai.
+  // Démonstration : la station est sur le forfait Starter, en cours d'essai.
   // L'essai de 14 jours a démarré il y a 3 jours → il reste 11 jours, ce qui
   // rend le compte à rebours visible dès la première connexion.
-  const freePlanRes = await queryFn("SELECT id FROM plans WHERE code = 'free'");
+  const freePlanRes = await queryFn("SELECT id FROM plans WHERE code = 'starter'");
   if (freePlanRes.rows.length > 0) {
     await queryFn(
       `INSERT INTO subscriptions (organization_id, plan_id, status, current_period_end)
@@ -479,7 +489,7 @@ async function seedDemoData(
 
   await queryFn(
     `INSERT INTO onboarding_progress (organization_id, current_stage, completed_at, plan_code)
-     VALUES ($1, 'completed', NOW(), 'free')
+     VALUES ($1, 'completed', NOW(), 'starter')
      ON CONFLICT (organization_id) DO UPDATE SET current_stage = 'completed', completed_at = NOW()`,
     [orgId]
   );

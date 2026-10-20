@@ -20,6 +20,12 @@ export interface SiteRecord {
   is_active: boolean
   created_at: string
   updated_at: string
+  /**
+   * Faux pour une station devenue excédentaire après une rétrogradation, une
+   * fois le délai de grâce écoulé : son historique reste entièrement lisible
+   * et exportable, mais elle n'accepte plus de nouvelle opération.
+   */
+  writable: boolean
 }
 
 /** Champs acceptés en création et en modification. */

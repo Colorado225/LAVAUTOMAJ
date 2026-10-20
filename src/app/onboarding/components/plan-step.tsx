@@ -121,14 +121,15 @@ export function PlanStep({ progress, onDone, onQuit }: OnboardingWizardProps) {
           ))}
         </div>
 
-        {selectedCode && selectedCode !== "free" && (
+        {selectedCode && (
           <p className="flex items-start gap-2 rounded-lg bg-muted p-3 text-xs text-muted-foreground">
             <Info className="mt-0.5 size-4 shrink-0" />
-            Votre abonnement {plans?.find((p) => p.code === selectedCode)?.name} sera
-            créé avec l'état « en attente ». Un administrateur validera le paiement.
+            Votre forfait {plans?.find((p) => p.code === selectedCode)?.name} démarre
+            par 14 jours d’essai gratuit, sans carte bancaire. Vous essayez
+            exactement ce que vous achetez : aucune fonctionnalité ne disparaîtra
+            au quinzième jour. Vous pouvez changer de forfait pendant l’essai.
           </p>
         )}
-
         {serverError && <p className="text-destructive text-sm">{serverError}</p>}
 
         <div className="flex items-center justify-between gap-2">

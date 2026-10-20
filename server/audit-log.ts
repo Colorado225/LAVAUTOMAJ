@@ -17,6 +17,7 @@ import { z } from "zod"
 import type { Pool } from "pg"
 import { getPool } from "./db.ts"
 import { asyncRoute, tenant, requirePermission } from "./http.ts"
+import { requireCapability } from "./entitlements.ts"
 import { HttpError } from "./auth.ts"
 
 function db(): Pool {
@@ -107,6 +108,7 @@ export function createAuditLogRouter(): Router {
   r.get(
     "/audit-logs",
     requirePermission("audit:read"),
+    requireCapability("audit.read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const parsed = querySchema.safeParse(req.query)
@@ -204,6 +206,7 @@ export function createAuditLogRouter(): Router {
   r.get(
     "/audit-logs/filters",
     requirePermission("audit:read"),
+    requireCapability("audit.read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
 

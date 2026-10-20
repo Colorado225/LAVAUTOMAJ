@@ -4,6 +4,7 @@ import type { Server } from "node:http"
 import type { Pool } from "pg"
 import { initDatabaseSchema, getPool, closeDatabase } from "../server/db.ts"
 import { createApiApp } from "../server/app.ts"
+import { invalidateSubscriptionCache } from "../server/entitlements.ts"
 
 // ---------------------------------------------------------------------------
 // Rapports multi-stations
@@ -21,12 +22,24 @@ let pool: Pool
 
 const PASSWORD = "WashPilot2026!"
 const sessions = new Map<string, string>()
+let orgId: string
+
+/** Place l'organisation de test sur un forfait donné. */
+async function setPlan(code: string) {
+  await pool.query(
+    `UPDATE subscriptions SET plan_id = (SELECT id FROM plans WHERE code=$2),
+       status='active', plan_changed_at=now(), updated_at=now()
+     WHERE organization_id=$1::uuid`,
+    [orgId, code],
+  )
+  invalidateSubscriptionCache(orgId)
+}
+
 
 /** Période large mais valide : le serveur refuse au-delà d'un an. */
 const FROM = new Date(Date.now() - 180 * 86_400_000).toISOString().slice(0, 10)
 const TO = new Date(Date.now() + 1 * 86_400_000).toISOString().slice(0, 10)
 
-let orgId: string
 let siteA: string
 let siteB: string
 let foreignSite: string
@@ -91,6 +104,8 @@ before(async () => {
     "SELECT m.organization_id FROM organization_members m JOIN users u ON u.id = m.user_id WHERE u.email='demo@washpilot.ci'",
   )
   orgId = org.rows[0].organization_id
+  // Le multi-stations et la vue consolidée sont des fonctions Business.
+  await setPlan("business")
 
   const existing = await pool.query(
     "SELECT id FROM sites WHERE organization_id=$1::uuid ORDER BY created_at LIMIT 1",
