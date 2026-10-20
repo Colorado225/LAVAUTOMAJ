@@ -55,7 +55,7 @@ export async function withIdempotency(
   const key = requireIdempotencyKey(req.get("Idempotency-Key") ?? undefined)
 
   const existing = await pool.query(
-    "SELECT fingerprint, response_status, response_body FROM idempotency_keys WHERE organization_id=$1 AND key=$2",
+    "SELECT fingerprint, response_status, response_body FROM idempotency_keys WHERE organization_id=$1::uuid AND key=$2",
     [organizationId, key],
   )
   if (existing.rowCount) {
@@ -83,13 +83,13 @@ export async function withIdempotency(
   try {
     const result = await handler()
     await pool.query(
-      "UPDATE idempotency_keys SET response_status=$3, response_body=$4 WHERE organization_id=$1 AND key=$2",
+      "UPDATE idempotency_keys SET response_status=$3, response_body=$4 WHERE organization_id=$1::uuid AND key=$2",
       [organizationId, key, result.status, JSON.stringify(result.body ?? null)],
     )
     res.status(result.status).json(result.body)
   } catch (error) {
     // Free the key so the caller can retry after a failure.
-    await pool.query("DELETE FROM idempotency_keys WHERE organization_id=$1 AND key=$2 AND response_status IS NULL", [organizationId, key]).catch(() => {})
+    await pool.query("DELETE FROM idempotency_keys WHERE organization_id=$1::uuid AND key=$2 AND response_status IS NULL", [organizationId, key]).catch(() => {})
     throw error
   }
 }

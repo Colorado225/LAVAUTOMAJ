@@ -22,15 +22,6 @@ import type {
 import { saveStage } from "./save-stage"
 import type { OnboardingWizardProps } from "./onboarding-wizard"
 
-const CATEGORY_LABELS: Record<string, string> = {
-  exterieur: "Extérieur",
-  interieur: "Intérieur",
-  complet: "Complet",
-  detailing: "Detailing",
-  "deux-roues": "Deux-roues",
-  utilitaire: "Utilitaire",
-}
-
 const formatXOF = (cents: number | null | undefined) =>
   cents == null ? "—"
     : `${(cents / 100).toLocaleString("fr-CI")} F CFA`
@@ -51,15 +42,7 @@ export function ServicesStep({ progress, onDone, onQuit }: OnboardingWizardProps
   const [saving, setSaving] = React.useState(false)
   const [serverError, setServerError] = React.useState<string | null>(null)
 
-  const grouped = React.useMemo(() => {
-    const map = new Map<string, CatalogTemplate[]>()
-    for (const t of catalog ?? []) {
-      const list = map.get(t.category) ?? []
-      list.push(t)
-      map.set(t.category, list)
-    }
-    return map
-  }, [catalog])
+  const items = catalog ?? []
 
   function toggle(t: CatalogTemplate) {
     setSelected((prev) => {
@@ -125,33 +108,26 @@ export function ServicesStep({ progress, onDone, onQuit }: OnboardingWizardProps
         )}
         {error && <p className="text-destructive text-sm">{error}</p>}
 
-        {[...grouped.entries()].map(([category, items]) => (
-          <div key={category} className="flex flex-col gap-2">
-            <p className="text-sm font-medium text-muted-foreground">
-              {CATEGORY_LABELS[category] ?? category}
-            </p>
-            <div className="grid gap-2 md:grid-cols-2">
-              {items.map((t) => {
-                const checked = selected.some((s) => s.template_id === t.id)
-                return (
-                  <label
-                    key={t.id}
-                    className="flex items-center gap-3 rounded-lg border p-3 cursor-pointer hover:bg-muted/50 has-[[data-state=checked]]:border-primary"
-                  >
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={() => toggle(t)}
-                    />
-                    <span className="flex-1 text-sm">{t.name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {formatXOF(t.price_cents)}
-                    </span>
-                  </label>
-                )
-              })}
-            </div>
-          </div>
-        ))}
+        <div className="grid gap-2 md:grid-cols-2">
+          {items.map((t) => {
+            const checked = selected.some((s) => s.template_id === t.id)
+            return (
+              <label
+                key={t.id}
+                className="flex items-center gap-3 rounded-lg border p-3 cursor-pointer hover:bg-muted/50 has-[[data-state=checked]]:border-primary"
+              >
+                <Checkbox
+                  checked={checked}
+                  onCheckedChange={() => toggle(t)}
+                />
+                <span className="flex-1 text-sm">{t.name}</span>
+                <span className="text-xs text-muted-foreground">
+                  {formatXOF(t.price_cents)}
+                </span>
+              </label>
+            )
+          })}
+        </div>
 
         {/* « Autre service » : prestation personnalisée, exclusivement rattachée à la station (§5) */}
         <div className="flex flex-col gap-2 rounded-lg border border-dashed p-4">

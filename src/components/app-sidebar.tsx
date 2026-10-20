@@ -14,6 +14,8 @@ import {
 import { Link } from "react-router-dom"
 import { Logo } from "@/components/logo"
 import { useOnboardingStatus } from "@/lib/onboarding-api"
+import { useApi } from "@/lib/api"
+import type { OnboardingSummary } from "@/lib/onboarding-api"
 
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
@@ -111,6 +113,27 @@ const data = {
   ],
 }
 
+function TrialCountdown() {
+  const { data } = useApi<OnboardingSummary>("/api/v1/onboarding/summary")
+  const end = data?.subscription_period_end ? new Date(data.subscription_period_end).getTime() : null
+  const [now, setNow] = React.useState(Date.now())
+  React.useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  if (!end || data?.subscription_status !== "trialing") return null
+  const diff = Math.max(0, end - now)
+  const days = Math.floor(diff / 86400000)
+  const hours = Math.floor((diff % 86400000) / 3600000)
+  const mins = Math.floor((diff % 3600000) / 60000)
+  const secs = Math.floor((diff % 60000) / 1000)
+  return (
+    <div className="px-2 py-2 text-xs text-muted-foreground">
+      Essai gratuit: {days}j {hours}h {mins}m {secs}s
+    </div>
+  )
+}
+
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { data: status } = useOnboardingStatus()
   const stationName = status?.station?.name ?? status?.org_name ?? "WashPilot CI"
@@ -141,6 +164,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         ))}
       </SidebarContent>
       <SidebarFooter>
+        <TrialCountdown />
         <NavUser user={data.user} />
       </SidebarFooter>
     </Sidebar>

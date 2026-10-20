@@ -41,13 +41,65 @@ export function createReportsRouter() {
     "/dashboard/metrics",
     asyncRoute(async (req, res) => {
       const t = tenant(req)
-      const q = await db().query(
-        `SELECT
-           (SELECT COUNT(*)::int FROM washes WHERE organization_id=$1 AND status <> 'cancelled') AS total_washes,
-           (SELECT COALESCE(SUM(amount_cents),0)::int FROM payments WHERE organization_id=$1 AND status IN ('verified','completed','pending')) AS total_revenue_cents`,
-        [t.organizationId],
-      )
-      res.json(q.rows[0])
+
+      const [
+        totalWashes,
+        completedWashes,
+        inProgressWashes,
+        cancelledWashes,
+        totalRevenue,
+        monthlyRevenue,
+        recentWashes,
+      ] = await Promise.all([
+        db().query(
+          "SELECT COUNT(*)::int AS count FROM washes WHERE organization_id=$1::uuid",
+          [t.organizationId],
+        ),
+        db().query(
+          "SELECT COUNT(*)::int AS count FROM washes WHERE organization_id=$1::uuid AND status = 'completed'",
+          [t.organizationId],
+        ),
+        db().query(
+          "SELECT COUNT(*)::int AS count FROM washes WHERE organization_id=$1::uuid AND status = 'in_progress'",
+          [t.organizationId],
+        ),
+        db().query(
+          "SELECT COUNT(*)::int AS count FROM washes WHERE organization_id=$1::uuid AND status = 'cancelled'",
+          [t.organizationId],
+        ),
+        db().query(
+          "SELECT COALESCE(SUM(amount_cents),0)::int AS sum FROM payments WHERE organization_id=$1::uuid AND status = 'verified'",
+          [t.organizationId],
+        ),
+        db().query(
+          `SELECT TO_CHAR(created_at, 'Mon YYYY') AS month, SUM(amount_cents)::int AS revenue
+           FROM payments
+           WHERE organization_id=$1::uuid AND status = 'verified'
+           GROUP BY TO_CHAR(created_at, 'Mon YYYY')
+           ORDER BY MIN(created_at)`,
+          [t.organizationId],
+        ),
+        db().query(
+          `SELECT w.id, w.reference AS vehicle_plate,
+                  COALESCE((SELECT wi.service_name FROM wash_items wi WHERE wi.wash_id = w.id LIMIT 1), 'Service') AS service,
+                  w.total_cents AS amount_cents, w.status, w.created_at
+           FROM washes w
+           WHERE w.organization_id=$1::uuid
+           ORDER BY w.created_at DESC
+           LIMIT 5`,
+          [t.organizationId],
+        ),
+      ])
+
+      res.json({
+        total_washes: totalWashes.rows[0].count,
+        completed_washes: completedWashes.rows[0].count,
+        in_progress_washes: inProgressWashes.rows[0].count,
+        cancelled_washes: cancelledWashes.rows[0].count,
+        total_revenue_cents: totalRevenue.rows[0].sum,
+        monthly_revenue: monthlyRevenue.rows,
+        recent_washes: recentWashes.rows,
+      })
     }),
   )
 
@@ -67,15 +119,15 @@ export function createReportsRouter() {
              COUNT(*) FILTER (WHERE status='completed')::int AS completed_washes,
              COUNT(*) FILTER (WHERE payment_status='paid')::int AS paid_washes,
              (SELECT COALESCE(SUM(p.amount_cents),0)::int FROM payments p
-               WHERE p.organization_id=$1 AND p.status <> 'refunded'
+               WHERE p.organization_id=$1::uuid AND p.status <> 'refunded'
                  AND p.created_at >= $2::date AND p.created_at < ($3::date + interval '1 day')) AS revenue_cents
            FROM washes
-           WHERE organization_id=$1 AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')`,
+           WHERE organization_id=$1::uuid AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')`,
           args,
         ),
         pool.query(
           `SELECT COALESCE(SUM(amount_cents),0)::int AS expenses_cents FROM expenses
-           WHERE organization_id=$1 AND status='completed' AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')`,
+           WHERE organization_id=$1::uuid AND status='completed' AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')`,
           args,
         ),
         pool.query(
@@ -86,15 +138,15 @@ export function createReportsRouter() {
            FROM generate_series($2::date, $3::date, interval '1 day') AS d(day)
            LEFT JOIN (
              SELECT created_at::date AS day, COUNT(*)::int AS wash_count FROM washes
-             WHERE organization_id=$1 AND status <> 'cancelled' GROUP BY 1
+             WHERE organization_id=$1::uuid AND status <> 'cancelled' GROUP BY 1
            ) w ON w.day = d.day::date
            LEFT JOIN (
              SELECT created_at::date AS day, SUM(amount_cents)::int AS revenue_cents FROM payments
-             WHERE organization_id=$1 AND status <> 'refunded' GROUP BY 1
+             WHERE organization_id=$1::uuid AND status <> 'refunded' GROUP BY 1
            ) p ON p.day = d.day::date
            LEFT JOIN (
              SELECT created_at::date AS day, SUM(amount_cents)::int AS expenses_cents FROM expenses
-             WHERE organization_id=$1 AND status='completed' GROUP BY 1
+             WHERE organization_id=$1::uuid AND status='completed' GROUP BY 1
            ) e ON e.day = d.day::date
            ORDER BY d.day`,
           args,
@@ -105,7 +157,7 @@ export function createReportsRouter() {
              SUM(i.quantity)::int AS quantity,
              SUM(i.line_total_cents)::int AS amount_cents
            FROM wash_items i JOIN washes w ON w.id = i.wash_id
-           WHERE w.organization_id=$1 AND w.status <> 'cancelled'
+           WHERE w.organization_id=$1::uuid AND w.status <> 'cancelled'
              AND w.created_at >= $2::date AND w.created_at < ($3::date + interval '1 day')
            GROUP BY i.service_name ORDER BY amount_cents DESC LIMIT 10`,
           args,
@@ -113,7 +165,7 @@ export function createReportsRouter() {
         pool.query(
           `SELECT method, COUNT(*)::int AS payment_count, SUM(amount_cents)::int AS amount_cents
            FROM payments
-           WHERE organization_id=$1 AND status <> 'refunded'
+           WHERE organization_id=$1::uuid AND status <> 'refunded'
              AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')
            GROUP BY method ORDER BY amount_cents DESC`,
           args,
@@ -121,7 +173,7 @@ export function createReportsRouter() {
         pool.query(
           `SELECT category, COUNT(*)::int AS expense_count, SUM(amount_cents)::int AS amount_cents
            FROM expenses
-           WHERE organization_id=$1 AND status='completed'
+           WHERE organization_id=$1::uuid AND status='completed'
              AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')
            GROUP BY category ORDER BY amount_cents DESC`,
           args,

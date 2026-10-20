@@ -19,7 +19,7 @@ export async function requireTenantContext(req: Request, _res: Response, next: N
     const q = await pool.query(
       `SELECT m.organization_id, m.role
        FROM organization_members m
-       WHERE m.user_id = $1
+       WHERE m.user_id = $1::uuid
        ORDER BY m.created_at ASC
        LIMIT 1`,
       [auth.userId],
@@ -39,7 +39,7 @@ export async function requireTenantContext(req: Request, _res: Response, next: N
 export async function assertOrganizationUserCapacity(client: PoolClient, organizationId: string, userId: string) {
   await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [organizationId])
   const exists = await client.query(
-    "SELECT 1 FROM organization_members WHERE organization_id=$1 AND user_id=$2",
+    "SELECT 1 FROM organization_members WHERE organization_id=$1::uuid AND user_id=$2::uuid",
     [organizationId, userId],
   )
   if (exists.rowCount) return

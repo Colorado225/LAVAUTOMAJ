@@ -73,7 +73,7 @@ export function createTeamRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
-        `SELECT ${WORKER_FIELDS} FROM workers WHERE organization_id=$1 ORDER BY status, first_name, last_name`,
+        `SELECT ${WORKER_FIELDS} FROM workers WHERE organization_id=$1::uuid ORDER BY status, first_name, last_name`,
         [t.organizationId],
       )
       res.json(q.rows)
@@ -86,7 +86,7 @@ export function createTeamRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
-      const q = await db().query(`SELECT ${WORKER_FIELDS} FROM workers WHERE id=$1 AND organization_id=$2`, [id, t.organizationId])
+      const q = await db().query(`SELECT ${WORKER_FIELDS} FROM workers WHERE id=$1::uuid AND organization_id=$2::uuid`, [id, t.organizationId])
       if (!q.rowCount) throw new HttpError(404, "worker_not_found", "Travailleur introuvable.")
       res.json(q.rows[0])
     }),
@@ -139,7 +139,7 @@ export function createTeamRouter() {
       const client = await db().connect()
       try {
         await client.query("BEGIN")
-        const oldQ = await client.query(`SELECT ${WORKER_FIELDS} FROM workers WHERE id=$1 AND organization_id=$2 FOR UPDATE`, [id, t.organizationId])
+        const oldQ = await client.query(`SELECT ${WORKER_FIELDS} FROM workers WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE`, [id, t.organizationId])
         if (!oldQ.rowCount) throw new HttpError(404, "worker_not_found", "Travailleur introuvable.")
         const current = oldQ.rows[0]
 
@@ -156,7 +156,7 @@ export function createTeamRouter() {
 
         const q = await client.query(
           `UPDATE workers SET first_name=$3, last_name=$4, phone=$5, district=$6, role=$7, custom_role=$8, status=$9, joined_at=$10, updated_at=now()
-           WHERE id=$1 AND organization_id=$2 RETURNING ${WORKER_FIELDS}`,
+           WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING ${WORKER_FIELDS}`,
           [
             id,
             t.organizationId,
@@ -181,6 +181,23 @@ export function createTeamRouter() {
     }),
   )
 
+  // DELETE /api/v1/workers/:id — hard delete unless the worker appears in wash history.
+  r.delete(
+    "/workers/:id",
+    requireRole("owner", "manager"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const used = await db().query("SELECT 1 FROM wash_assignments WHERE worker_id=$1::uuid LIMIT 1", [id])
+      if (used.rowCount) {
+        throw new HttpError(409, "worker_in_use", "Des lavages assignent ce travailleur. Désactivez-le plutôt.")
+      }
+      const q = await db().query("DELETE FROM workers WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
+      if (!q.rowCount) throw new HttpError(404, "worker_not_found", "Travailleur introuvable.")
+      res.status(204).send()
+    }),
+  )
+
   // GET /api/v1/users — login accounts of the organization.
   r.get(
     "/users",
@@ -189,7 +206,7 @@ export function createTeamRouter() {
       const q = await db().query(
         `SELECT u.id, u.first_name, u.last_name, u.email, m.role, u.status, u.created_at, u.updated_at
          FROM organization_members m JOIN users u ON u.id = m.user_id
-         WHERE m.organization_id=$1 ORDER BY m.created_at`,
+         WHERE m.organization_id=$1::uuid ORDER BY m.created_at`,
         [t.organizationId],
       )
       res.json(q.rows)

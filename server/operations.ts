@@ -38,6 +38,18 @@ export const operationValidators = {
       cash_session_id: z.string().uuid().optional(),
     })
     .strip(),
+  expensePatch: z
+    .object({
+      category: z.enum(["supply", "salary", "maintenance", "utilities", "rent", "tax", "marketing", "other"]).optional(),
+      amount_cents: z.number().int().positive().max(100000000).optional(),
+      payment_method: z.enum(["cash", "orange_money", "mtn_momo", "moov_money", "wave", "other"]).optional(),
+      site_id: z.string().uuid().optional(),
+      beneficiary: z.string().trim().max(200).nullable().optional(),
+      description: z.string().trim().max(1000).nullable().optional(),
+      reference: z.string().trim().max(120).nullable().optional(),
+      cash_session_id: z.string().uuid().optional(),
+    })
+    .strip(),
 }
 
 function db(): Pool {
@@ -78,7 +90,7 @@ export function createOperationsRouter() {
       const t = tenant(req)
       const status = typeof req.query.status === "string" && ["open", "closed"].includes(req.query.status) ? req.query.status : null
       const q = await db().query(
-        `${SESSION_SELECT} WHERE cs.organization_id=$1 AND ($2::text IS NULL OR cs.status=$2) ORDER BY cs.opened_at DESC LIMIT 100`,
+        `${SESSION_SELECT} WHERE cs.organization_id=$1::uuid AND ($2::text IS NULL OR cs.status=$2) ORDER BY cs.opened_at DESC LIMIT 100`,
         [t.organizationId, status],
       )
       res.json(q.rows)
@@ -91,7 +103,7 @@ export function createOperationsRouter() {
       const t = tenant(req)
       const siteId = typeof req.query.site_id === "string" && req.query.site_id ? parseId(req.query.site_id) : null
       const q = await db().query(
-        `${SESSION_SELECT} WHERE cs.organization_id=$1 AND cs.status='open' AND ($2::uuid IS NULL OR cs.site_id=$2)
+        `${SESSION_SELECT} WHERE cs.organization_id=$1::uuid AND cs.status='open' AND ($2::uuid IS NULL OR cs.site_id=$2::uuid)
          ORDER BY cs.opened_at DESC LIMIT 1`,
         [t.organizationId, siteId],
       )
@@ -113,11 +125,11 @@ export function createOperationsRouter() {
           await client.query("BEGIN")
           await client.query("SELECT pg_advisory_xact_lock(hashtext($1 || $2))", [t.organizationId, input.site_id])
 
-          const siteQ = await client.query("SELECT id FROM sites WHERE id=$1 AND organization_id=$2 AND is_active", [input.site_id, t.organizationId])
+          const siteQ = await client.query("SELECT id FROM sites WHERE id=$1::uuid AND organization_id=$2::uuid AND is_active", [input.site_id, t.organizationId])
           if (!siteQ.rowCount) throw new HttpError(400, "invalid_site", "Station invalide.")
 
           const openQ = await client.query(
-            "SELECT 1 FROM cash_sessions WHERE organization_id=$1 AND site_id=$2 AND status='open' LIMIT 1",
+            "SELECT 1 FROM cash_sessions WHERE organization_id=$1::uuid AND site_id=$2::uuid AND status='open' LIMIT 1",
             [t.organizationId, input.site_id],
           )
           if (openQ.rowCount) {
@@ -128,7 +140,7 @@ export function createOperationsRouter() {
             "INSERT INTO cash_sessions(organization_id, site_id, opened_by, opening_amount_cents) VALUES($1,$2,$3,$4) RETURNING id",
             [t.organizationId, input.site_id, t.userId, input.opening_amount_cents],
           )
-          const sessionQ = await client.query(`${SESSION_SELECT} WHERE cs.id=$1`, [insertQ.rows[0].id])
+          const sessionQ = await client.query(`${SESSION_SELECT} WHERE cs.id=$1::uuid`, [insertQ.rows[0].id])
           await client.query("COMMIT")
           return { status: 201, body: sessionQ.rows[0] }
         } catch (error) {
@@ -146,7 +158,7 @@ export function createOperationsRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
-      const q = await db().query(`${SESSION_SELECT} WHERE cs.id=$1 AND cs.organization_id=$2`, [id, t.organizationId])
+      const q = await db().query(`${SESSION_SELECT} WHERE cs.id=$1::uuid AND cs.organization_id=$2::uuid`, [id, t.organizationId])
       if (!q.rowCount) throw new HttpError(404, "cash_session_not_found", "Session introuvable.")
       res.json(q.rows[0])
     }),
@@ -157,10 +169,10 @@ export function createOperationsRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
-      const sessionQ = await db().query("SELECT 1 FROM cash_sessions WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      const sessionQ = await db().query("SELECT 1 FROM cash_sessions WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!sessionQ.rowCount) throw new HttpError(404, "cash_session_not_found", "Session introuvable.")
       const q = await db().query(
-        "SELECT id, type, amount_cents, source, description, wash_id, created_at FROM cash_movements WHERE cash_session_id=$1 ORDER BY created_at DESC",
+        "SELECT id, type, amount_cents, source, description, wash_id, created_at FROM cash_movements WHERE cash_session_id=$1::uuid ORDER BY created_at DESC",
         [id],
       )
       res.json(q.rows)
@@ -181,7 +193,7 @@ export function createOperationsRouter() {
         try {
           await client.query("BEGIN")
           const sessionQ = await client.query(
-            "SELECT id, status FROM cash_sessions WHERE id=$1 AND organization_id=$2 FOR UPDATE",
+            "SELECT id, status FROM cash_sessions WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE",
             [id, t.organizationId],
           )
           if (!sessionQ.rowCount) throw new HttpError(404, "cash_session_not_found", "Session introuvable.")
@@ -218,11 +230,11 @@ export function createOperationsRouter() {
       try {
         await client.query("BEGIN")
         const lockQ = await client.query(
-          "SELECT id FROM cash_sessions WHERE id=$1 AND organization_id=$2 FOR UPDATE",
+          "SELECT id FROM cash_sessions WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE",
           [id, t.organizationId],
         )
         if (!lockQ.rowCount) throw new HttpError(404, "cash_session_not_found", "Session introuvable.")
-        const sessionQ = await client.query(`${SESSION_SELECT} WHERE cs.id=$1`, [id])
+        const sessionQ = await client.query(`${SESSION_SELECT} WHERE cs.id=$1::uuid`, [id])
         const session = sessionQ.rows[0]
         if (session.status !== "open") {
           throw new HttpError(409, "cash_session_closed", "Cette session de caisse est déjà clôturée.")
@@ -237,14 +249,14 @@ export function createOperationsRouter() {
         await client.query(
           `UPDATE cash_sessions SET status='closed', closed_by=$3, closed_at=now(),
              closing_amount_cents=$4, expected_amount_cents=$5, discrepancy_reason=$6
-           WHERE id=$1 AND organization_id=$2`,
+           WHERE id=$1::uuid AND organization_id=$2::uuid`,
           [id, t.organizationId, t.userId, input.counted_amount_cents, theoretical, discrepancy !== 0 ? input.discrepancy_reason?.trim() || null : null],
         )
         await client.query(
           "INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, metadata) VALUES($1,$2,'cash_session.closed','cash_session',$3,$4)",
           [t.organizationId, t.userId, id, JSON.stringify({ counted_amount_cents: input.counted_amount_cents, discrepancy_cents: discrepancy })],
         )
-        const closedQ = await client.query(`${SESSION_SELECT} WHERE cs.id=$1`, [id])
+        const closedQ = await client.query(`${SESSION_SELECT} WHERE cs.id=$1::uuid`, [id])
         await client.query("COMMIT")
         res.json(closedQ.rows[0])
       } catch (error) {
@@ -262,7 +274,7 @@ export function createOperationsRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
-        `SELECT ${EXPENSE_FIELDS} FROM expenses WHERE organization_id=$1 ORDER BY created_at DESC LIMIT 200`,
+        `SELECT ${EXPENSE_FIELDS} FROM expenses WHERE organization_id=$1::uuid ORDER BY created_at DESC LIMIT 200`,
         [t.organizationId],
       )
       res.json(q.rows)
@@ -284,7 +296,7 @@ export function createOperationsRouter() {
 
           let siteId: string | null = input.site_id ?? null
           if (siteId) {
-            const siteQ = await client.query("SELECT 1 FROM sites WHERE id=$1 AND organization_id=$2", [siteId, t.organizationId])
+            const siteQ = await client.query("SELECT 1 FROM sites WHERE id=$1::uuid AND organization_id=$2::uuid", [siteId, t.organizationId])
             if (!siteQ.rowCount) throw new HttpError(400, "invalid_site", "Station invalide.")
           }
 
@@ -294,7 +306,7 @@ export function createOperationsRouter() {
               throw new HttpError(400, "cash_session_required", "Une session de caisse ouverte est requise pour une dépense en espèces.")
             }
             const sessionQ = await client.query(
-              "SELECT id, site_id, status FROM cash_sessions WHERE id=$1 AND organization_id=$2 FOR UPDATE",
+              "SELECT id, site_id, status FROM cash_sessions WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE",
               [input.cash_session_id, t.organizationId],
             )
             if (!sessionQ.rowCount || sessionQ.rows[0].status !== "open") {
@@ -324,9 +336,9 @@ export function createOperationsRouter() {
 
           if (cashSessionId) {
             await client.query(
-              `INSERT INTO cash_movements(organization_id, cash_session_id, type, amount_cents, source, description, created_by)
-               VALUES($1,$2,'exit',$3,'expense',$4,$5)`,
-              [t.organizationId, cashSessionId, input.amount_cents, input.description || `Dépense ${input.category}`, t.userId],
+              `INSERT INTO cash_movements(organization_id, cash_session_id, type, amount_cents, source, description, expense_id, created_by)
+               VALUES($1,$2,'exit',$3,'expense',$4,$5,$6)`,
+              [t.organizationId, cashSessionId, input.amount_cents, input.description || `Dépense ${input.category}`, expense.id, t.userId],
             )
           }
 
@@ -343,6 +355,171 @@ export function createOperationsRouter() {
           client.release()
         }
       })
+    }),
+  )
+
+  // PATCH /api/v1/expenses/:id — editable only while the cash session is open.
+  r.patch(
+    "/expenses/:id",
+    requireRole("owner", "manager", "cashier"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const input = body(operationValidators.expensePatch, req.body)
+      const client = await db().connect()
+      try {
+        await client.query("BEGIN")
+        const oldQ = await client.query(
+          "SELECT * FROM expenses WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE",
+          [id, t.organizationId],
+        )
+        if (!oldQ.rowCount) throw new HttpError(404, "expense_not_found", "Dépense introuvable.")
+        const old = oldQ.rows[0]
+
+        // A closed cash session is an accounting cut-off: its movements are frozen.
+        if (old.cash_session_id) {
+          const sessionQ = await client.query(
+            "SELECT status FROM cash_sessions WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE",
+            [old.cash_session_id, t.organizationId],
+          )
+          if (!sessionQ.rowCount || sessionQ.rows[0].status !== "open") {
+            throw new HttpError(409, "expense_locked", "La session de caisse de cette dépense est clôturée. Elle n'est plus modifiable.")
+          }
+        }
+
+        if (input.site_id) {
+          const siteQ = await client.query("SELECT 1 FROM sites WHERE id=$1::uuid AND organization_id=$2::uuid", [input.site_id, t.organizationId])
+          if (!siteQ.rowCount) throw new HttpError(400, "invalid_site", "Station invalide.")
+        }
+
+        // Resolving the cash session to attach (kept when unchanged).
+        let cashSessionId: string | null = old.cash_session_id ?? null
+        const wantsCash = input.payment_method === "cash" || (input.payment_method === undefined && old.payment_method === "cash")
+        if (wantsCash) {
+          const sessionId = input.cash_session_id ?? old.cash_session_id ?? null
+          if (!sessionId) {
+            throw new HttpError(400, "cash_session_required", "Une session de caisse ouverte est requise pour une dépense en espèces.")
+          }
+          const sessionQ = await client.query(
+            "SELECT status FROM cash_sessions WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE",
+            [sessionId, t.organizationId],
+          )
+          if (!sessionQ.rowCount || sessionQ.rows[0].status !== "open") {
+            throw new HttpError(400, "cash_session_invalid", "Session de caisse introuvable ou clôturée.")
+          }
+          cashSessionId = sessionId
+        } else {
+          cashSessionId = null
+        }
+
+        const merged = { ...old, ...input, cash_session_id: cashSessionId }
+        const q = await client.query(
+          `UPDATE expenses SET site_id=$3, category=$4, amount_cents=$5, payment_method=$6, cash_session_id=$7,
+             description=$8, beneficiary=$9, reference=$10
+           WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING ${EXPENSE_FIELDS}`,
+          [
+            id,
+            t.organizationId,
+            merged.site_id ?? null,
+            merged.category,
+            merged.amount_cents,
+            merged.payment_method,
+            merged.cash_session_id,
+            merged.description || null,
+            merged.beneficiary || null,
+            merged.reference || null,
+          ],
+        )
+        const expense = q.rows[0]
+
+        // Keep the cash drawer in sync with the new amount / payment method.
+        const movementQ = await client.query(
+          `SELECT id FROM cash_movements
+           WHERE expense_id=$1::uuid OR (expense_id IS NULL AND cash_session_id=$2::uuid AND source='expense' AND amount_cents=$3::int AND description=$4)
+           FOR UPDATE`,
+          [id, old.cash_session_id, old.amount_cents, old.description || `Dépense ${old.category}`],
+        )
+        const movement = movementQ.rows[0] ?? null
+        if (cashSessionId) {
+          if (movement) {
+            await client.query(
+              "UPDATE cash_movements SET cash_session_id=$2, amount_cents=$3, expense_id=$4 WHERE id=$1::uuid",
+              [movement.id, cashSessionId, merged.amount_cents, id],
+            )
+          } else {
+            await client.query(
+              `INSERT INTO cash_movements(organization_id, cash_session_id, type, amount_cents, source, description, expense_id, created_by)
+               VALUES($1,$2,'exit',$3,'expense',$4,$5,$6)`,
+              [t.organizationId, cashSessionId, merged.amount_cents, merged.description || `Dépense ${merged.category}`, id, t.userId],
+            )
+          }
+        } else if (movement) {
+          await client.query("DELETE FROM cash_movements WHERE id=$1::uuid", [movement.id])
+        }
+
+        await client.query(
+          "INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, metadata) VALUES($1,$2,'expense.updated','expense',$3,$4)",
+          [t.organizationId, t.userId, id, JSON.stringify({ amount_cents: { from: old.amount_cents, to: merged.amount_cents } })],
+        )
+        await client.query("COMMIT")
+        res.json(expense)
+      } catch (error) {
+        await client.query("ROLLBACK")
+        throw error
+      } finally {
+        client.release()
+      }
+    }),
+  )
+
+  // DELETE /api/v1/expenses/:id — reverses the cash movement when the session is still open.
+  r.delete(
+    "/expenses/:id",
+    requireRole("owner", "manager", "cashier"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const client = await db().connect()
+      try {
+        await client.query("BEGIN")
+        const oldQ = await client.query(
+          "SELECT * FROM expenses WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE",
+          [id, t.organizationId],
+        )
+        if (!oldQ.rowCount) throw new HttpError(404, "expense_not_found", "Dépense introuvable.")
+        const old = oldQ.rows[0]
+
+        if (old.cash_session_id) {
+          const sessionQ = await client.query(
+            "SELECT status FROM cash_sessions WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE",
+            [old.cash_session_id, t.organizationId],
+          )
+          if (!sessionQ.rowCount || sessionQ.rows[0].status !== "open") {
+            throw new HttpError(409, "expense_locked", "La session de caisse de cette dépense est clôturée. Elle n'est plus supprimable.")
+          }
+          await client.query(
+            `DELETE FROM cash_movements
+             WHERE id IN (
+               SELECT id FROM cash_movements
+               WHERE expense_id=$1::uuid OR (expense_id IS NULL AND cash_session_id=$2::uuid AND source='expense' AND amount_cents=$3::int AND description=$4)
+             )`,
+            [id, old.cash_session_id, old.amount_cents, old.description || `Dépense ${old.category}`],
+          )
+        }
+
+        await client.query("DELETE FROM expenses WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
+        await client.query(
+          "INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id) VALUES($1,$2,'expense.deleted','expense',$3)",
+          [t.organizationId, t.userId, id],
+        )
+        await client.query("COMMIT")
+        res.status(204).send()
+      } catch (error) {
+        await client.query("ROLLBACK")
+        throw error
+      } finally {
+        client.release()
+      }
     }),
   )
 

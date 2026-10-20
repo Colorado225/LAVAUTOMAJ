@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express"
 import type { NextFunction, Request, Response } from "express"
 import cors from "cors"
@@ -134,6 +135,7 @@ app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
 
   if (status >= 500) {
     console.error("[api] Request failed:", error instanceof Error ? error.message : "Unknown API error")
+    console.log("[api] ERROR STACK:", error instanceof Error ? error.stack : String(error))
   }
   // Development aid: surface auth/tenant failures so session issues are diagnosable.
   if (env.NODE_ENV !== "production" && (status === 401 || status === 403)) {

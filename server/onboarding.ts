@@ -90,7 +90,7 @@ function db(): Pool {
 
 async function ensureProgressRow(pool: Pool, organizationId: string) {
   await pool.query(
-    "INSERT INTO onboarding_progress (organization_id, current_stage) VALUES ($1, 'station') ON CONFLICT (organization_id) DO NOTHING",
+    "INSERT INTO onboarding_progress (organization_id, current_stage) VALUES ($1::uuid, 'station') ON CONFLICT (organization_id) DO NOTHING",
     [organizationId],
   )
 }
@@ -107,7 +107,7 @@ interface ProgressRow {
 async function getProgress(pool: Pool, organizationId: string): Promise<ProgressRow> {
   await ensureProgressRow(pool, organizationId)
   const q = await pool.query(
-    "SELECT current_stage, station_data, services_data, workers_data, plan_code, completed_at FROM onboarding_progress WHERE organization_id=$1",
+    "SELECT current_stage, station_data, services_data, workers_data, plan_code, completed_at FROM onboarding_progress WHERE organization_id=$1::uuid",
     [organizationId],
   )
   return q.rows[0] as ProgressRow
@@ -153,12 +153,12 @@ export function createOnboardingRouter() {
       const t = tenant(req)
       const pool = db()
       const progress = await getProgress(pool, t.organizationId)
-      const orgQ = await pool.query("SELECT name, onboarding_completed FROM organizations WHERE id=$1", [t.organizationId])
+      const orgQ = await pool.query("SELECT name, onboarding_completed FROM organizations WHERE id=$1::uuid", [t.organizationId])
       const org = orgQ.rows[0] ?? { name: "Mon organisation", onboarding_completed: false }
       const completed = Boolean(org.onboarding_completed || progress.completed_at)
 
       const siteQ = await pool.query(
-        "SELECT id, name, phone, email, address, city, description, logo_url, slug FROM sites WHERE organization_id=$1 ORDER BY created_at LIMIT 1",
+        "SELECT id, name, phone, email, address, city, description, logo_url, slug FROM sites WHERE organization_id=$1::uuid ORDER BY created_at LIMIT 1",
         [t.organizationId],
       )
 
@@ -218,12 +218,12 @@ export function createOnboardingRouter() {
 
       if (input.stage === "plan") {
         await pool.query(
-          "UPDATE onboarding_progress SET plan_code=$2, current_stage=$3, draft=$4, updated_at=now() WHERE organization_id=$1",
+          "UPDATE onboarding_progress SET plan_code=$2, current_stage=$3, draft=$4, updated_at=now() WHERE organization_id=$1::uuid",
           [t.organizationId, planCode, newStage, input.draft],
         )
       } else {
         await pool.query(
-          `UPDATE onboarding_progress SET ${columnByStage[input.stage]}=$2::jsonb, current_stage=$3, draft=$4, updated_at=now() WHERE organization_id=$1`,
+          `UPDATE onboarding_progress SET ${columnByStage[input.stage]}=$2::jsonb, current_stage=$3, draft=$4, updated_at=now() WHERE organization_id=$1::uuid`,
           [t.organizationId, JSON.stringify(stageData), newStage, input.draft],
         )
       }
@@ -240,21 +240,23 @@ export function createOnboardingRouter() {
       const t = tenant(req)
       const pool = db()
       const progress = await getProgress(pool, t.organizationId)
-      const orgQ = await pool.query("SELECT name, onboarding_completed FROM organizations WHERE id=$1", [t.organizationId])
+      const orgQ = await pool.query("SELECT name, onboarding_completed FROM organizations WHERE id=$1::uuid", [t.organizationId])
       const org = orgQ.rows[0] ?? { name: "Mon organisation", onboarding_completed: false }
 
       const subscriptionQ = await pool.query(
-        `SELECT s.status, ${PLAN_FIELDS.split(", ").map((f) => `p.${f}`).join(", ")}
-         FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.organization_id=$1`,
+        `SELECT s.status, s.current_period_end, ${PLAN_FIELDS.split(", ").map((f) => `p.${f}`).join(", ")}
+         FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.organization_id=$1::uuid`,
         [t.organizationId],
       )
 
       let plan = null
       let subscriptionStatus = "none"
+      let subscriptionPeriodEnd = null
       if (subscriptionQ.rowCount) {
-        const { status, ...planRow } = subscriptionQ.rows[0]
+        const { status, current_period_end, ...planRow } = subscriptionQ.rows[0]
         plan = planRow
         subscriptionStatus = status
+        subscriptionPeriodEnd = current_period_end
       } else if (progress.plan_code) {
         const planQ = await pool.query(`SELECT ${PLAN_FIELDS} FROM plans WHERE code=$1`, [progress.plan_code])
         plan = planQ.rows[0] ?? null
@@ -267,6 +269,7 @@ export function createOnboardingRouter() {
         workers: progress.workers_data,
         plan,
         subscription_status: subscriptionStatus,
+        subscription_period_end: subscriptionPeriodEnd,
         completed: Boolean(org.onboarding_completed || progress.completed_at),
         org_name: org.name,
       })
@@ -280,9 +283,10 @@ export function createOnboardingRouter() {
     requireRole("owner", "manager"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
+      console.log("[api] confirm handler:", { organizationId: t.organizationId, userId: t.userId })
       const pool = db()
 
-      const orgQ = await pool.query("SELECT onboarding_completed FROM organizations WHERE id=$1", [t.organizationId])
+      const orgQ = await pool.query("SELECT onboarding_completed FROM organizations WHERE id=$1::uuid", [t.organizationId])
       if (orgQ.rows[0]?.onboarding_completed) {
         res.json({ completed: true, already_completed: true })
         return
@@ -300,7 +304,7 @@ export function createOnboardingRouter() {
       const client = await pool.connect()
       try {
         await client.query("BEGIN")
-        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [t.organizationId])
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1::text))", [t.organizationId])
 
         const planQ = await client.query("SELECT id, price_cents FROM plans WHERE code=$1", [planCode])
         if (!planQ.rowCount) throw new HttpError(400, "invalid_plan", "Ce forfait n'existe pas.")
@@ -308,14 +312,14 @@ export function createOnboardingRouter() {
 
         // 1. Station (site) — reuse the existing one when confirm is retried.
         const existingSite = await client.query(
-          "SELECT id FROM sites WHERE organization_id=$1 ORDER BY created_at LIMIT 1",
+          "SELECT id FROM sites WHERE organization_id=$1::uuid ORDER BY created_at LIMIT 1",
           [t.organizationId],
         )
         const s = station.data
         if (existingSite.rowCount) {
           await client.query(
             `UPDATE sites SET name=$2, city=$3, address=$4, phone=$5, email=$6, description=$7, logo_url=$8, updated_at=now()
-             WHERE id=$1`,
+             WHERE id=$1::uuid`,
             [existingSite.rows[0].id, s.name, s.city, s.address || null, s.phone || null, s.email || null, s.description || null, s.logo_url || null],
           )
         } else {
@@ -336,7 +340,7 @@ export function createOnboardingRouter() {
             await client.query(
               `INSERT INTO services(organization_id, name, price_cents)
                SELECT $1, $2, $3
-               WHERE NOT EXISTS (SELECT 1 FROM services WHERE organization_id=$1 AND lower(name)=lower($2))`,
+               WHERE NOT EXISTS (SELECT 1 FROM services WHERE organization_id=$1::uuid AND lower(name)=lower($2))`,
               [t.organizationId, service.name, service.price_cents],
             )
           }
@@ -349,7 +353,7 @@ export function createOnboardingRouter() {
               `INSERT INTO workers(organization_id, first_name, last_name, phone, district, role, custom_role, joined_at)
                SELECT $1,$2,$3,$4,$5,$6,$7,$8
                WHERE NOT EXISTS (
-                 SELECT 1 FROM workers WHERE organization_id=$1 AND lower(first_name)=lower($2) AND lower(last_name)=lower($3)
+                 SELECT 1 FROM workers WHERE organization_id=$1::uuid AND lower(first_name)=lower($2) AND lower(last_name)=lower($3)
                )`,
               [
                 t.organizationId,
@@ -365,24 +369,25 @@ export function createOnboardingRouter() {
           }
         }
 
-        // 4. Subscription — free plans activate immediately, paid plans await validation.
-        const subscriptionStatus = Number(plan.price_cents) > 0 ? "pending" : "active"
+        // 4. Subscription — free plans get a 14-day trial from onboarding validation.
+        const isFree = Number(plan.price_cents) === 0
+        const subscriptionStatus = isFree ? "trialing" : "pending"
         await client.query(
-          `INSERT INTO subscriptions(organization_id, plan_id, status)
-           VALUES($1,$2,$3)
-           ON CONFLICT (organization_id) DO UPDATE SET plan_id=EXCLUDED.plan_id, status=EXCLUDED.status, updated_at=now()`,
-          [t.organizationId, plan.id, subscriptionStatus],
+          `INSERT INTO subscriptions(organization_id, plan_id, status, current_period_end)
+           VALUES($1,$2,$3, CASE WHEN $4 THEN now() + interval '14 days' ELSE NULL END)
+           ON CONFLICT (organization_id) DO UPDATE SET plan_id=EXCLUDED.plan_id, status=EXCLUDED.status, current_period_end=EXCLUDED.current_period_end, updated_at=now()`,
+          [t.organizationId, plan.id, subscriptionStatus, isFree],
         )
 
         // 5. Mark onboarding complete.
         await client.query(
-          "UPDATE onboarding_progress SET completed_at=now(), current_stage='review', draft=false, updated_at=now() WHERE organization_id=$1",
+          "UPDATE onboarding_progress SET completed_at=now(), current_stage='review', draft=false, updated_at=now() WHERE organization_id=$1::uuid",
           [t.organizationId],
         )
-        await client.query("UPDATE organizations SET onboarding_completed=true, updated_at=now() WHERE id=$1", [t.organizationId])
+        await client.query("UPDATE organizations SET onboarding_completed=true, updated_at=now() WHERE id=$1::uuid", [t.organizationId])
         await client.query(
-          "INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id) VALUES($1,$2,'onboarding.completed','organization',$1::text)",
-          [t.organizationId, t.userId],
+          "INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id) VALUES($1,$2,'onboarding.completed','organization',$3)",
+          [t.organizationId, t.userId, t.organizationId],
         )
 
         await client.query("COMMIT")

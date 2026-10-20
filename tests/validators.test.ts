@@ -50,7 +50,7 @@ test("onboarding services stage needs at least one service", () => {
   assert.ok(
     onboardingValidators.services.safeParse({
       selected: [],
-      custom: [{ name: "Lavage tapis", category: "detailing", price_cents: null }],
+      custom: [{ name: "Lavage tapis", category: "interior_cleaning", price_cents: null }],
     }).success,
   )
 })

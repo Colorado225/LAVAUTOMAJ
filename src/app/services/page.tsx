@@ -43,6 +43,7 @@ interface Service {
   id: string
   name: string
   price_cents: number
+  price_by_vehicle_type: Record<string, number> | null
   category_id: string | null
   duration_minutes: number | null
   is_active: boolean
@@ -59,6 +60,7 @@ interface ServiceForm {
   price_xof: string
   category_id: string | null
   duration_minutes: string
+  price_by_vehicle_type: Record<string, string>
 }
 
 const emptyForm = (): ServiceForm => ({
@@ -66,6 +68,7 @@ const emptyForm = (): ServiceForm => ({
   price_xof: "",
   category_id: null,
   duration_minutes: "",
+  price_by_vehicle_type: {},
 })
 
 function parseXofAmount(value: string): number | null {
@@ -82,11 +85,13 @@ function formatXof(cents: number) {
 
 export default function ServicesPage() {
   const [refreshKey, setRefreshKey] = useState(0)
-  const { data, loading, error } = useApi<Service[]>(`/api/v1/services?refresh=${refreshKey}`)
+  const { data: services, loading, error } = useApi<Service[]>(`/api/v1/services?refresh=${refreshKey}`)
   const { data: categories, loading: categoriesLoading, error: categoriesError } = useApi<ServiceCategory[]>(`/api/v1/service-categories?refresh=${refreshKey}`)
+  const { data: vehicleCategories, loading: vehicleCategoriesLoading } = useApi<VehicleCategory[]>(`/api/v1/vehicle-categories?refresh=${refreshKey}`)
   const { data: member } = useApi<CurrentMember>(`/api/v1/auth/me?refresh=${refreshKey}`)
-  const services = useMemo(() => data ?? [], [data])
+  const servicesList = useMemo(() => services ?? [], [services])
   const categoryById = useMemo(() => new Map((categories ?? []).map((category) => [category.id, category.name])), [categories])
+  const vehicleCategoryById = useMemo(() => new Map((vehicleCategories ?? []).map((vc) => [vc.id, vc.name])), [vehicleCategories])
   const canManage = member?.role === "owner" || member?.role === "manager"
 
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -104,8 +109,8 @@ export default function ServicesPage() {
 
   const filteredServices = useMemo(() => {
     const query = search.trim().toLocaleLowerCase("fr-CI")
-    return services.filter((service) => !query || service.name.toLocaleLowerCase("fr-CI").includes(query))
-  }, [services, search])
+    return servicesList.filter((service) => !query || service.name.toLocaleLowerCase("fr-CI").includes(query))
+  }, [servicesList, search])
 
   function openCreateDialog() {
     setEditingService(null)
@@ -122,6 +127,9 @@ export default function ServicesPage() {
       price_xof: String(service.price_cents / 100),
       category_id: service.category_id,
       duration_minutes: service.duration_minutes == null ? "" : String(service.duration_minutes),
+      price_by_vehicle_type: Object.fromEntries(
+        Object.entries(service.price_by_vehicle_type ?? {}).map(([k, v]) => [k, String(v / 100)])
+      ),
     })
     setMutationError(null)
     setMutationSuccess(null)

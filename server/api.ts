@@ -20,6 +20,7 @@ export const catalogValidators = {
       price_cents: z.number().int().min(0).max(100000000),
       duration_minutes: z.number().int().min(1).max(1440).nullable().optional(),
       is_active: z.boolean().optional(),
+      price_by_vehicle_type: z.record(z.string(), z.number().int().min(0).max(100000000)).optional(),
     })
     .strip(),
   site: z
@@ -80,7 +81,7 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
-        "SELECT id, name, city, address, phone, email, description, logo_url, slug, is_active, created_at, updated_at FROM sites WHERE organization_id=$1 ORDER BY created_at",
+        "SELECT id, name, city, address, phone, email, description, logo_url, slug, is_active, created_at, updated_at FROM sites WHERE organization_id=$1::uuid ORDER BY created_at",
         [t.organizationId],
       )
       res.json(q.rows)
@@ -92,7 +93,7 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
-      const q = await db().query("SELECT * FROM sites WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      const q = await db().query("SELECT * FROM sites WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!q.rowCount) throw new HttpError(404, "site_not_found", "Station introuvable.")
       res.json(q.rows[0])
     }),
@@ -120,15 +121,41 @@ export function createApiRouter() {
       const t = tenant(req)
       const id = parseId(req.params.id)
       const input = body(catalogValidators.site.partial(), req.body)
-      const oldQ = await db().query("SELECT * FROM sites WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      const oldQ = await db().query("SELECT * FROM sites WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!oldQ.rowCount) throw new HttpError(404, "site_not_found", "Station introuvable.")
       const merged = { ...oldQ.rows[0], ...input }
       const q = await db().query(
         `UPDATE sites SET name=$3, city=$4, address=$5, phone=$6, email=$7, description=$8, is_active=$9, updated_at=now()
-         WHERE id=$1 AND organization_id=$2 RETURNING *`,
+         WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING *`,
         [id, t.organizationId, merged.name, merged.city, merged.address, merged.phone, merged.email, merged.description, merged.is_active],
       )
       res.json(q.rows[0])
+    }),
+  )
+
+  // DELETE /api/v1/sites/:id — refuse when washes, sessions, expenses or workers still reference the site.
+  r.delete(
+    "/sites/:id",
+    requireRole("owner", "manager"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const pool = db()
+      const siteQ = await pool.query("SELECT 1 FROM sites WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
+      if (!siteQ.rowCount) throw new HttpError(404, "site_not_found", "Station introuvable.")
+      const refs = await pool.query(
+        `SELECT
+           (SELECT COUNT(*) FROM washes WHERE site_id=$1::uuid) +
+           (SELECT COUNT(*) FROM cash_sessions WHERE site_id=$1::uuid) +
+           (SELECT COUNT(*) FROM expenses WHERE site_id=$1::uuid) +
+           (SELECT COUNT(*) FROM workers WHERE site_id=$1::uuid)::int AS ref_count`,
+        [id],
+      )
+      if (Number(refs.rows[0].ref_count) > 0) {
+        throw new HttpError(409, "site_in_use", "Des lavages, caisses, dépenses ou travailleurs référencent cette station. Désactivez-la plutôt.")
+      }
+      await pool.query("DELETE FROM sites WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
+      res.status(204).send()
     }),
   )
 
@@ -138,7 +165,7 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
-        "SELECT id, name, is_active, created_at, updated_at FROM service_categories WHERE organization_id=$1 ORDER BY name",
+        "SELECT id, name, is_active, created_at, updated_at FROM service_categories WHERE organization_id=$1::uuid ORDER BY name",
         [t.organizationId],
       )
       res.json(q.rows)
@@ -173,12 +200,12 @@ export function createApiRouter() {
       const t = tenant(req)
       const id = parseId(req.params.id)
       const input = body(catalogValidators.category.partial(), req.body)
-      const oldQ = await db().query("SELECT * FROM service_categories WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      const oldQ = await db().query("SELECT * FROM service_categories WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!oldQ.rowCount) throw new HttpError(404, "category_not_found", "Catégorie introuvable.")
       const merged = { ...oldQ.rows[0], ...input }
       try {
         const q = await db().query(
-          "UPDATE service_categories SET name=$3, is_active=$4, updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id, name, is_active, created_at, updated_at",
+          "UPDATE service_categories SET name=$3, is_active=$4, updated_at=now() WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING id, name, is_active, created_at, updated_at",
           [id, t.organizationId, merged.name, merged.is_active],
         )
         res.json(q.rows[0])
@@ -197,11 +224,11 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
-      const used = await db().query("SELECT 1 FROM services WHERE category_id=$1 AND organization_id=$2 LIMIT 1", [id, t.organizationId])
+      const used = await db().query("SELECT 1 FROM services WHERE category_id=$1::uuid AND organization_id=$2::uuid LIMIT 1", [id, t.organizationId])
       if (used.rowCount) {
         throw new HttpError(409, "category_in_use", "Des prestations utilisent cette catégorie. Désactivez-la plutôt.")
       }
-      const q = await db().query("DELETE FROM service_categories WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      const q = await db().query("DELETE FROM service_categories WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!q.rowCount) throw new HttpError(404, "category_not_found", "Catégorie introuvable.")
       res.status(204).send()
     }),
@@ -213,7 +240,7 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
-        "SELECT id, name, is_active, created_at, created_at AS updated_at FROM vehicle_categories WHERE organization_id=$1 ORDER BY name",
+        "SELECT id, name, is_active, created_at, created_at AS updated_at FROM vehicle_categories WHERE organization_id=$1::uuid ORDER BY name",
         [t.organizationId],
       )
       res.json(q.rows)
@@ -248,12 +275,12 @@ export function createApiRouter() {
       const t = tenant(req)
       const id = parseId(req.params.id)
       const input = body(catalogValidators.category.partial(), req.body)
-      const oldQ = await db().query("SELECT * FROM vehicle_categories WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      const oldQ = await db().query("SELECT * FROM vehicle_categories WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!oldQ.rowCount) throw new HttpError(404, "category_not_found", "Catégorie introuvable.")
       const merged = { ...oldQ.rows[0], ...input }
       try {
         const q = await db().query(
-          "UPDATE vehicle_categories SET name=$3, is_active=$4 WHERE id=$1 AND organization_id=$2 RETURNING id, name, is_active, created_at, created_at AS updated_at",
+          "UPDATE vehicle_categories SET name=$3, is_active=$4 WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING id, name, is_active, created_at, created_at AS updated_at",
           [id, t.organizationId, merged.name, merged.is_active],
         )
         res.json(q.rows[0])
@@ -272,11 +299,11 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
-      const used = await db().query("SELECT 1 FROM washes WHERE vehicle_category_id=$1 AND organization_id=$2 LIMIT 1", [id, t.organizationId])
+      const used = await db().query("SELECT 1 FROM washes WHERE vehicle_category_id=$1::uuid AND organization_id=$2::uuid LIMIT 1", [id, t.organizationId])
       if (used.rowCount) {
         throw new HttpError(409, "category_in_use", "Des lavages utilisent cette catégorie. Désactivez-la plutôt.")
       }
-      const q = await db().query("DELETE FROM vehicle_categories WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      const q = await db().query("DELETE FROM vehicle_categories WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!q.rowCount) throw new HttpError(404, "category_not_found", "Catégorie introuvable.")
       res.status(204).send()
     }),
@@ -288,7 +315,7 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
-        "SELECT id, name, description, category_id, price_cents, duration_minutes, is_active, created_at, updated_at FROM services WHERE organization_id=$1 ORDER BY name",
+        "SELECT id, name, description, category_id, price_cents, price_by_vehicle_type, duration_minutes, is_active, created_at, updated_at FROM services WHERE organization_id=$1::uuid ORDER BY name",
         [t.organizationId],
       )
       res.json(q.rows)
@@ -300,7 +327,7 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
-      const q = await db().query("SELECT * FROM services WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      const q = await db().query("SELECT * FROM services WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!q.rowCount) throw new HttpError(404, "service_not_found", "Prestation introuvable.")
       res.json(q.rows[0])
     }),
@@ -313,13 +340,13 @@ export function createApiRouter() {
       const t = tenant(req)
       const input = body(catalogValidators.service, req.body)
       if (input.category_id) {
-        const categoryQ = await db().query("SELECT 1 FROM service_categories WHERE id=$1 AND organization_id=$2", [input.category_id, t.organizationId])
+        const categoryQ = await db().query("SELECT 1 FROM service_categories WHERE id=$1::uuid AND organization_id=$2::uuid", [input.category_id, t.organizationId])
         if (!categoryQ.rowCount) throw new HttpError(400, "invalid_category", "Catégorie de prestation invalide.")
       }
       const q = await db().query(
-        `INSERT INTO services(organization_id, name, description, category_id, price_cents, duration_minutes, is_active)
-         VALUES($1,$2,$3,$4,$5,$6,COALESCE($7,true)) RETURNING *`,
-        [t.organizationId, input.name, input.description ?? null, input.category_id ?? null, input.price_cents, input.duration_minutes ?? null, input.is_active ?? null],
+        `INSERT INTO services(organization_id, name, description, category_id, price_cents, price_by_vehicle_type, duration_minutes, is_active)
+         VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE($8,true)) RETURNING *`,
+        [t.organizationId, input.name, input.description ?? null, input.category_id ?? null, input.price_cents, JSON.stringify(input.price_by_vehicle_type ?? {}), input.duration_minutes ?? null, input.is_active ?? null],
       )
       res.status(201).json(q.rows[0])
     }),
@@ -332,17 +359,17 @@ export function createApiRouter() {
       const t = tenant(req)
       const id = parseId(req.params.id)
       const input = body(catalogValidators.service.partial(), req.body)
-      const oldQ = await db().query("SELECT * FROM services WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      const oldQ = await db().query("SELECT * FROM services WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!oldQ.rowCount) throw new HttpError(404, "service_not_found", "Prestation introuvable.")
       if (input.category_id) {
-        const categoryQ = await db().query("SELECT 1 FROM service_categories WHERE id=$1 AND organization_id=$2", [input.category_id, t.organizationId])
+        const categoryQ = await db().query("SELECT 1 FROM service_categories WHERE id=$1::uuid AND organization_id=$2::uuid", [input.category_id, t.organizationId])
         if (!categoryQ.rowCount) throw new HttpError(400, "invalid_category", "Catégorie de prestation invalide.")
       }
       const merged = { ...oldQ.rows[0], ...input }
       const q = await db().query(
-        `UPDATE services SET name=$3, description=$4, category_id=$5, price_cents=$6, duration_minutes=$7, is_active=$8, updated_at=now()
-         WHERE id=$1 AND organization_id=$2 RETURNING *`,
-        [id, t.organizationId, merged.name, merged.description, merged.category_id, merged.price_cents, merged.duration_minutes, merged.is_active],
+        `UPDATE services SET name=$3, description=$4, category_id=$5::uuid, price_cents=$6, price_by_vehicle_type=$7, duration_minutes=$8, is_active=$9, updated_at=now()
+         WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING *`,
+        [id, t.organizationId, merged.name, merged.description, merged.category_id, merged.price_cents, JSON.stringify(merged.price_by_vehicle_type ?? {}), merged.duration_minutes, merged.is_active],
       )
       res.json(q.rows[0])
     }),
@@ -354,11 +381,11 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
-      const used = await db().query("SELECT 1 FROM wash_items WHERE service_id=$1 LIMIT 1", [id])
+      const used = await db().query("SELECT 1 FROM wash_items WHERE service_id=$1::uuid LIMIT 1", [id])
       if (used.rowCount) {
         throw new HttpError(409, "service_in_use", "Des lavages référencent cette prestation. Désactivez-la plutôt.")
       }
-      const q = await db().query("DELETE FROM services WHERE id=$1 AND organization_id=$2", [id, t.organizationId])
+      const q = await db().query("DELETE FROM services WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!q.rowCount) throw new HttpError(404, "service_not_found", "Prestation introuvable.")
       res.status(204).send()
     }),
@@ -370,7 +397,7 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
-        `SELECT ${WASH_FIELDS} FROM washes WHERE organization_id=$1 ORDER BY created_at DESC LIMIT 200`,
+        `SELECT ${WASH_FIELDS} FROM washes WHERE organization_id=$1::uuid ORDER BY created_at DESC LIMIT 200`,
         [t.organizationId],
       )
       res.json(q.rows)
@@ -383,20 +410,20 @@ export function createApiRouter() {
       const t = tenant(req)
       const id = parseId(req.params.id)
       const pool = db()
-      const washQ = await pool.query(`SELECT ${WASH_FIELDS} FROM washes WHERE id=$1 AND organization_id=$2`, [id, t.organizationId])
+      const washQ = await pool.query(`SELECT ${WASH_FIELDS} FROM washes WHERE id=$1::uuid AND organization_id=$2::uuid`, [id, t.organizationId])
       if (!washQ.rowCount) throw new HttpError(404, "wash_not_found", "Lavage introuvable.")
       const [items, workers, payments] = await Promise.all([
         pool.query(
-          "SELECT id, service_id, service_name AS service_name_snapshot, unit_price_cents AS price_cents_snapshot, quantity, line_total_cents FROM wash_items WHERE wash_id=$1",
+          "SELECT id, service_id, service_name AS service_name_snapshot, unit_price_cents AS price_cents_snapshot, quantity, line_total_cents FROM wash_items WHERE wash_id=$1::uuid",
           [id],
         ),
         pool.query(
           `SELECT w.id, w.first_name, w.last_name, w.role FROM wash_assignments a
-           JOIN workers w ON w.id = a.worker_id WHERE a.wash_id=$1`,
+           JOIN workers w ON w.id = a.worker_id WHERE a.wash_id=$1::uuid`,
           [id],
         ),
         pool.query(
-          "SELECT id, amount_cents, method, status, reference, created_at AS received_at FROM payments WHERE wash_id=$1 ORDER BY created_at",
+          "SELECT id, amount_cents, method, status, reference, created_at AS received_at FROM payments WHERE wash_id=$1::uuid ORDER BY created_at",
           [id],
         ),
       ])
@@ -419,18 +446,18 @@ export function createApiRouter() {
         try {
           await client.query("BEGIN")
 
-          const siteQ = await client.query("SELECT id FROM sites WHERE id=$1 AND organization_id=$2 AND is_active", [input.site_id, t.organizationId])
+          const siteQ = await client.query("SELECT id FROM sites WHERE id=$1::uuid AND organization_id=$2::uuid AND is_active", [input.site_id, t.organizationId])
           if (!siteQ.rowCount) throw new HttpError(400, "invalid_site", "Station invalide.")
 
           const categoryQ = await client.query(
-            "SELECT id FROM vehicle_categories WHERE id=$1 AND organization_id=$2 AND is_active",
+            "SELECT id FROM vehicle_categories WHERE id=$1::uuid AND organization_id=$2::uuid AND is_active",
             [input.vehicle_category_id, t.organizationId],
           )
           if (!categoryQ.rowCount) throw new HttpError(400, "invalid_vehicle_category", "Catégorie de véhicule invalide.")
 
           const serviceIds = input.items.map((item) => item.service_id)
           const servicesQ = await client.query(
-            "SELECT id, name, price_cents FROM services WHERE organization_id=$1 AND id = ANY($2::uuid[]) AND is_active",
+            "SELECT id, name, price_cents, price_by_vehicle_type FROM services WHERE organization_id=$1::uuid AND id = ANY($2::uuid[]) AND is_active",
             [t.organizationId, serviceIds],
           )
           if (servicesQ.rowCount !== new Set(serviceIds).size) {
@@ -438,9 +465,16 @@ export function createApiRouter() {
           }
           const serviceById = new Map(servicesQ.rows.map((row) => [row.id as string, row]))
 
+          const resolvePrice = (service: { price_cents: number; price_by_vehicle_type: Record<string, number> | null }, vehicleCategoryId: string): number => {
+            if (service.price_by_vehicle_type && service.price_by_vehicle_type[vehicleCategoryId] != null) {
+              return Number(service.price_by_vehicle_type[vehicleCategoryId])
+            }
+            return Number(service.price_cents)
+          }
+
           if (input.worker_ids.length) {
             const workersQ = await client.query(
-              "SELECT id FROM workers WHERE organization_id=$1 AND id = ANY($2::uuid[]) AND status='active'",
+              "SELECT id FROM workers WHERE organization_id=$1::uuid AND id = ANY($2::uuid[]) AND status='active'",
               [t.organizationId, input.worker_ids],
             )
             if (workersQ.rowCount !== new Set(input.worker_ids).size) {
@@ -450,7 +484,7 @@ export function createApiRouter() {
 
           const totalCents = input.items.reduce((total, item) => {
             const service = serviceById.get(item.service_id)!
-            return total + Number(service.price_cents) * item.quantity
+            return total + resolvePrice(service, input.vehicle_category_id) * item.quantity
           }, 0)
           if (input.amount_received_cents > totalCents) {
             throw new HttpError(400, "amount_exceeds_total", "Le montant reçu dépasse le total du lavage.")
@@ -463,7 +497,7 @@ export function createApiRouter() {
               throw new HttpError(400, "cash_session_required", "Une session de caisse ouverte est requise pour un paiement en espèces.")
             }
             const sessionQ = await client.query(
-              "SELECT id FROM cash_sessions WHERE id=$1 AND organization_id=$2 AND site_id=$3 AND status='open' FOR UPDATE",
+              "SELECT id FROM cash_sessions WHERE id=$1::uuid AND organization_id=$2::uuid AND site_id=$3::uuid AND status='open' FOR UPDATE",
               [input.cash_session_id, t.organizationId, input.site_id],
             )
             if (!sessionQ.rowCount) {
@@ -486,9 +520,10 @@ export function createApiRouter() {
 
           for (const item of input.items) {
             const service = serviceById.get(item.service_id)!
+            const unitPrice = resolvePrice(service, input.vehicle_category_id)
             await client.query(
               "INSERT INTO wash_items(wash_id, service_id, service_name, quantity, unit_price_cents, line_total_cents) VALUES($1,$2,$3,$4,$5,$6)",
-              [wash.id, item.service_id, service.name, item.quantity, service.price_cents, Number(service.price_cents) * item.quantity],
+              [wash.id, item.service_id, service.name, item.quantity, unitPrice, unitPrice * item.quantity],
             )
           }
           for (const workerId of new Set(input.worker_ids)) {
@@ -538,7 +573,7 @@ export function createApiRouter() {
       try {
         await client.query("BEGIN")
         const washQ = await client.query(
-          "SELECT id, reference, status FROM washes WHERE id=$1 AND organization_id=$2 FOR UPDATE",
+          "SELECT id, reference, status FROM washes WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE",
           [id, t.organizationId],
         )
         if (!washQ.rowCount) throw new HttpError(404, "wash_not_found", "Lavage introuvable.")
@@ -550,7 +585,7 @@ export function createApiRouter() {
         const movementQ = await client.query(
           `SELECT m.cash_session_id, m.amount_cents FROM cash_movements m
            JOIN cash_sessions s ON s.id = m.cash_session_id
-           WHERE m.wash_id=$1 AND m.type='entry' AND s.status='open'`,
+           WHERE m.wash_id=$1::uuid AND m.type='entry' AND s.status='open'`,
           [id],
         )
         for (const movement of movementQ.rows) {
@@ -561,13 +596,13 @@ export function createApiRouter() {
           )
         }
 
-        const hadPayments = await client.query("SELECT 1 FROM payments WHERE wash_id=$1 LIMIT 1", [id])
-        await client.query("UPDATE payments SET status='refunded' WHERE wash_id=$1", [id])
+        const hadPayments = await client.query("SELECT 1 FROM payments WHERE wash_id=$1::uuid LIMIT 1", [id])
+        await client.query("UPDATE payments SET status='refunded' WHERE wash_id=$1::uuid", [id])
 
         const q = await client.query(
           `UPDATE washes SET status='cancelled', payment_status=CASE WHEN $4 THEN 'refunded' ELSE payment_status END,
              cancelled_at=now(), cancelled_by=$3, cancellation_reason=$5
-           WHERE id=$1 AND organization_id=$2 RETURNING ${WASH_FIELDS}`,
+           WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING ${WASH_FIELDS}`,
           [id, t.organizationId, t.userId, Boolean(hadPayments.rowCount), input.reason],
         )
         await client.query(

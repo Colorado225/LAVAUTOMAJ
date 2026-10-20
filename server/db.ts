@@ -103,9 +103,15 @@ CREATE TABLE IF NOT EXISTS service_catalog (
   price_cents integer, sort_order integer NOT NULL DEFAULT 0, is_active boolean NOT NULL DEFAULT true
 );
 INSERT INTO service_catalog(category,name,price_cents,sort_order) VALUES
-  ('exterieur','Nettoyage extérieur',5000,1),('exterieur','Nettoyage intérieur',7000,2),
-  ('complet','Nettoyage complet',10000,3),('detailing','Lustrage',15000,4),
-  ('deux-roues','Nettoyage moto',4000,5),('utilitaire','Nettoyage utilitaire',6000,6)
+  ('exterior_wash','Lavage extérieur simple',200000,1),
+  ('exterior_wash','Nettoyage jantes et pneus',100000,2),
+  ('interior_cleaning','Aspiration habitacle',150000,3),
+  ('complete_wash','Lavage intérieur et extérieur',400000,4),
+  ('exterior_wash','Lavage haute pression',100000,5),
+  ('exterior_wash','Mousse active',100000,6),
+  ('exterior_wash','Nettoyage vitres',50000,7),
+  ('exterior_wash','Séchage manuel',50000,8),
+  ('exterior_wash','Lavage express',150000,9)
 ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS service_categories (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
@@ -118,12 +124,13 @@ CREATE TABLE IF NOT EXISTS vehicle_categories (
  UNIQUE(organization_id,name)
 );
 CREATE TABLE IF NOT EXISTS services (
- id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
- category_id uuid REFERENCES service_categories(id), name text NOT NULL, description text,
- price_cents integer NOT NULL CHECK(price_cents >= 0), duration_minutes integer CHECK(duration_minutes BETWEEN 1 AND 1440),
- is_active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(),
- updated_at timestamptz NOT NULL DEFAULT now()
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+  category_id uuid REFERENCES service_categories(id), name text NOT NULL, description text,
+  price_cents integer NOT NULL CHECK(price_cents >= 0), duration_minutes integer CHECK(duration_minutes BETWEEN 1 AND 1440),
+  is_active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE services ADD COLUMN IF NOT EXISTS price_by_vehicle_type jsonb NOT NULL DEFAULT '{}'::jsonb;
 CREATE TABLE IF NOT EXISTS workers (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  site_id uuid REFERENCES sites(id), first_name text NOT NULL, last_name text NOT NULL, phone text,
@@ -190,6 +197,7 @@ ALTER TABLE expenses ALTER COLUMN site_id DROP NOT NULL;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS beneficiary text;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS reference text;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS expense_date date NOT NULL DEFAULT CURRENT_DATE;
+ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS expense_id uuid REFERENCES expenses(id);
 CREATE TABLE IF NOT EXISTS idempotency_keys (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  key text NOT NULL, fingerprint text NOT NULL, response_status integer, response_body jsonb,
