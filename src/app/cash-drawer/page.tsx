@@ -22,6 +22,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { AnimatedNumber } from "@/components/ui/animated-number"
+import { Skeleton } from "@/components/ui/skeleton"
+import { EmptyState } from "@/components/ui/empty-state"
 import { ArrowDownToLine, ArrowUpFromLine, Plus, WalletCards } from "lucide-react"
 
 interface Site {
@@ -262,7 +265,20 @@ export default function CashDrawerPage() {
             Aucun site n’est associé à cette organisation. Terminez l’onboarding pour créer le premier site.
           </div>
         )}
-        {loading && <div className="text-muted-foreground">Chargement de la caisse…</div>}
+        {loading && (
+          <div className="grid gap-4 md:grid-cols-3" role="status" aria-busy="true" aria-label="Chargement de la caisse">
+            {[0, 1, 2].map((card) => (
+              <div
+                key={card}
+                className="row-in rounded border bg-card p-4"
+                style={{ "--row": card } as React.CSSProperties}
+              >
+                <Skeleton className="h-3 w-28" />
+                <Skeleton className="mt-3 h-7 w-36" />
+              </div>
+            ))}
+          </div>
+        )}
         {error && <div className="text-destructive">{error}</div>}
 
         {!loading && !error && siteId && !session && (
@@ -276,23 +292,45 @@ export default function CashDrawerPage() {
         {!loading && !error && session && (
           <>
             <div className="grid gap-4 md:grid-cols-3">
-              <div className="rounded border bg-card p-4">
-                <p className="text-sm text-muted-foreground">Solde théorique</p>
+              <div className="row-in rounded border bg-card p-4" style={{ "--row": 0 } as React.CSSProperties}>
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                  {/* Pastille qui respire : la caisse est ouverte, visible en vision périphérique. */}
+                  <span className="pulse-soft size-2 rounded-full bg-emerald-500" aria-hidden="true" />
+                  Solde théorique
+                </p>
+                {/* Lecture seule : le compteur peut être animé sans gêner un comptage. */}
                 <p className="text-2xl font-bold">
-                  {(session.theoretical_balance_cents / 100).toLocaleString("fr-CI")} XOF
+                  <AnimatedNumber
+                    value={session.theoretical_balance_cents}
+                    format={(cents) => `${(cents / 100).toLocaleString("fr-CI")} XOF`}
+                  />
                 </p>
               </div>
-              <div className="rounded border bg-card p-4">
+              <div className="row-in rounded border bg-card p-4" style={{ "--row": 1 } as React.CSSProperties}>
                 <p className="text-sm text-muted-foreground">Montant compté</p>
-                <p className="text-2xl font-bold">
+                {/* Jamais animé : c'est le chiffre que le gérant vérifie. */}
+                <p className="text-2xl font-bold tabular-nums">
                   {session.counted_amount_cents != null
                     ? `${(session.counted_amount_cents / 100).toLocaleString("fr-CI")} XOF`
                     : "—"}
                 </p>
               </div>
-              <div className="rounded border bg-card p-4">
+              <div
+                className={`row-in rounded border bg-card p-4 transition-colors ${
+                  session.discrepancy_cents ? "shake-x border-destructive/40 bg-destructive/5" : ""
+                }`}
+                style={{ "--row": 2 } as React.CSSProperties}
+              >
                 <p className="text-sm text-muted-foreground">Écart de caisse</p>
-                <p className={`text-2xl font-bold ${session.discrepancy_cents ? "text-destructive" : ""}`}>
+                <p
+                  className={`text-2xl font-bold tabular-nums transition-colors ${
+                    session.discrepancy_cents
+                      ? "text-destructive"
+                      : session.counted_amount_cents != null
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : ""
+                  }`}
+                >
                   {session.discrepancy_cents != null
                     ? `${(session.discrepancy_cents / 100).toLocaleString("fr-CI")} XOF`
                     : "—"}
@@ -349,16 +387,34 @@ export default function CashDrawerPage() {
                   <TableBody>
                     {(movements?.length ?? 0) === 0 && (
                       <TableRow>
-                        <TableCell colSpan={4} className="text-center text-muted-foreground">
-                          Aucun mouvement enregistré.
+                        <TableCell colSpan={4} className="p-0">
+                          <EmptyState
+                            icon={WalletCards}
+                            title="Aucun mouvement enregistré"
+                            description="Les encaissements de lavages et les sorties de caisse s'afficheront ici au fil de la journée."
+                          />
                         </TableCell>
                       </TableRow>
                     )}
-                    {movements?.map((movement) => (
-                      <TableRow key={movement.id}>
+                    {movements?.map((movement, index) => (
+                      <TableRow
+                        key={movement.id}
+                        className="row-in"
+                        style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
+                      >
                         <TableCell>{new Date(movement.created_at).toLocaleDateString("fr-CI")}</TableCell>
-                        <TableCell>{movement.type === "entry" ? "Entrée" : "Sortie"}</TableCell>
-                        <TableCell className="text-right">
+                        <TableCell>
+                          <span
+                            className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${
+                              movement.type === "entry"
+                                ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                                : "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                            }`}
+                          >
+                            {movement.type === "entry" ? "Entrée" : "Sortie"}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
                           {(movement.amount_cents / 100).toLocaleString("fr-CI")}
                         </TableCell>
                         <TableCell>{movement.source}</TableCell>

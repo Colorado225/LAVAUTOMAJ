@@ -1,8 +1,11 @@
 "use client"
 
+import type * as React from "react"
+
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { Badge } from "@/components/ui/badge"
+import { TableSkeleton } from "@/components/ui/table-skeleton"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -151,15 +154,15 @@ export default function ServiceCategoriesPage() {
           <CardContent className="space-y-4">
             <Input className="max-w-md" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Rechercher une catégorie…" aria-label="Rechercher une catégorie" />
             {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-            {loading && <p role="status" className="text-sm text-muted-foreground">Synchronisation avec Neon…</p>}
+            {loading && <TableSkeleton rows={4} cols={3} label="Synchronisation des catégories" />}
             {!loading && !error && (
               <div className="overflow-x-auto rounded-lg border">
                 <Table>
                   <TableHeader><TableRow><TableHead>Nom</TableHead><TableHead>Statut</TableHead>{canManage && <TableHead className="text-right">Actions</TableHead>}</TableRow></TableHeader>
                   <TableBody>
                     {filteredCategories.length === 0 && <TableRow><TableCell colSpan={canManage ? 3 : 2} className="h-24 text-center text-muted-foreground">{categories.length === 0 ? "Aucune catégorie. Créez-en une pour structurer les prestations." : "Aucune catégorie ne correspond à la recherche."}</TableCell></TableRow>}
-                    {filteredCategories.map((category) => (
-                      <TableRow key={category.id}>
+                    {filteredCategories.map((category, index) => (
+                      <TableRow key={category.id} className="row-in" style={{ "--row": Math.min(index, 10) } as React.CSSProperties}>
                         <TableCell className="font-medium">{category.name}</TableCell>
                         <TableCell><Badge variant={category.is_active ? "secondary" : "outline"}>{category.is_active ? "Active" : "Inactive"}</Badge></TableCell>
                         {canManage && <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" aria-label={`Modifier ${category.name}`} onClick={() => openEditDialog(category)}><Pencil className="size-4" /></Button><Button variant="ghost" size="icon" disabled={busyCategoryId === category.id} aria-label={category.is_active ? `Désactiver ${category.name}` : `Réactiver ${category.name}`} onClick={() => void toggleCategory(category)}>{busyCategoryId === category.id ? <RefreshCw className="size-4 animate-spin" /> : category.is_active ? <ToggleLeft className="size-4" /> : <ToggleRight className="size-4" />}</Button></div></TableCell>}

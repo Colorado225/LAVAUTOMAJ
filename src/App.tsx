@@ -1,4 +1,5 @@
 import { createBrowserRouter, RouterProvider } from "react-router-dom"
+import { MotionConfig } from "framer-motion"
 import { ThemeProvider } from "@/components/theme-provider"
 import { Toaster } from "@/components/ui/toast"
 import { RootFallback, RootLayout } from "@/components/router/root-layout"
@@ -32,13 +33,17 @@ function App() {
       className="font-sans antialiased"
       style={{ fontFamily: "var(--font-inter)" }}
     >
-      <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
-        <AuthProvider>
-          <Toaster>
-            <RouterProvider router={router} />
-          </Toaster>
-        </AuthProvider>
-      </ThemeProvider>
+      {/* reducedMotion="user" : framer-motion neutralise automatiquement les
+          animations si le système demande un mouvement réduit. */}
+      <MotionConfig reducedMotion="user">
+        <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
+          <AuthProvider>
+            <Toaster>
+              <RouterProvider router={router} />
+            </Toaster>
+          </AuthProvider>
+        </ThemeProvider>
+      </MotionConfig>
     </div>
   )
 }

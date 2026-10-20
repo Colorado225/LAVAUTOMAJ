@@ -144,7 +144,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link to="/dashboard" />}>
+            <SidebarMenuButton size="lg" render={<Link to="/dashboard" viewTransition />}>
               <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                 <Logo size={24} className="text-current" />
               </div>

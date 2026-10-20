@@ -101,14 +101,14 @@ export function NavUser({
             <DropdownMenuGroup>
               <DropdownMenuItem
                 className="cursor-pointer"
-                render={<Link to="/settings/account" />}
+                render={<Link to="/settings/account" viewTransition />}
               >
                 <CircleUser className="size-4 mr-2" />
                 Mon compte
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="cursor-pointer"
-                render={<Link to="/settings/billing" />}
+                render={<Link to="/settings/billing" viewTransition />}
               >
                 <CreditCard className="size-4 mr-2" />
                 Abonnement

@@ -1,5 +1,6 @@
 "use client"
 
+import type * as React from "react"
 import { useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { ArrowLeft, Ban, RefreshCw } from "lucide-react"
@@ -8,6 +9,8 @@ import { apiFetch, useApi } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Skeleton } from "@/components/ui/skeleton"
+import { TableSkeleton } from "@/components/ui/table-skeleton"
 
 interface Wash {
   id: string
@@ -138,16 +141,36 @@ export default function WashDetailPage() {
     <BaseLayout title="Détail du lavage" description="Détail et historique d’un lavage.">
       <div className="space-y-6 p-4">
         <div>
-          <Button render={<Link to="/washes" />} variant="ghost" className="-ml-2 mb-3">
-            <ArrowLeft className="mr-2 size-4" /> Retour aux lavages
+          <Button render={<Link to="/washes" viewTransition />} variant="ghost" className="group -ml-2 mb-3">
+            <ArrowLeft className="mr-2 size-4 transition-transform duration-150 group-hover:-translate-x-0.5" /> Retour aux lavages
           </Button>
           <h1 className="text-2xl font-bold tracking-tight">
-            {wash ? `Lavage ${wash.reference}` : "Détail du lavage"}
+            {wash ? (
+              <>
+                Lavage{" "}
+                {/* Cible de la transition depuis la ligne du tableau. */}
+                <span style={{ viewTransitionName: "wash-reference" }}>{wash.reference}</span>
+              </>
+            ) : (
+              "Détail du lavage"
+            )}
           </h1>
           <p className="text-sm text-muted-foreground">Consultez les prestations, employés et paiements associés.</p>
         </div>
 
-        {loading && <p className="text-sm text-muted-foreground">Chargement du lavage…</p>}
+        {loading && (
+          <div className="space-y-4" role="status" aria-busy="true" aria-label="Chargement du lavage">
+            <div className="grid gap-4 rounded-lg border bg-card p-4 sm:grid-cols-2 lg:grid-cols-4">
+              {[0, 1, 2, 3, 4, 5].map((field) => (
+                <div key={field} className="row-in space-y-2" style={{ "--row": field } as React.CSSProperties}>
+                  <Skeleton className="h-3 w-20" />
+                  <Skeleton className="h-5 w-32" />
+                </div>
+              ))}
+            </div>
+            <TableSkeleton rows={3} cols={4} label="Chargement des prestations" />
+          </div>
+        )}
         {error && <div role="alert" className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">{error}</div>}
 
         {!loading && !error && detail && (

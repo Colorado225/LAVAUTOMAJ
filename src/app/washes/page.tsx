@@ -1,14 +1,19 @@
 "use client"
 
 import { useMemo, useState, type FormEvent } from "react"
-import { Link } from "react-router-dom"
+import { Link, useViewTransitionState } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { ArrowRight, Check, Plus, RefreshCw } from "lucide-react"
+import { TableSkeleton } from "@/components/ui/table-skeleton"
+import { SubmitButton } from "@/components/ui/submit-button"
+import { Skeleton } from "@/components/ui/skeleton"
+import { EmptyState } from "@/components/ui/empty-state"
+import { useSuccessFlash } from "@/hooks/use-success-flash"
+import { ArrowRight, Check, Droplets, Plus } from "lucide-react"
 
 interface Site {
   id: string
@@ -90,6 +95,22 @@ function paymentStatusLabel(status: string): string {
   return status
 }
 
+/**
+ * Référence du lavage : pendant la navigation vers la fiche, cet élément porte
+ * le même `view-transition-name` que le titre de la page de détail. Le
+ * navigateur fait glisser l'un vers l'autre — on comprend d'où vient l'écran.
+ */
+function WashReference({ washId, reference }: { washId: string; reference: string }) {
+  const isTransitioning = useViewTransitionState(`/washes/${washId}`)
+  return (
+    <span
+      style={{ viewTransitionName: isTransitioning ? "wash-reference" : undefined }}
+    >
+      {reference}
+    </span>
+  )
+}
+
 export default function WashesPage() {
   const [selectedSiteId, setSelectedSiteId] = useState("")
   const sitePath = "/api/v1/sites"
@@ -117,6 +138,11 @@ export default function WashesPage() {
   const [amountReceived, setAmountReceived] = useState("0")
   const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  // Coche verte du bouton après enregistrement, puis retour à l'état normal.
+  const [saveSuccess, flashSaveSuccess] = useSuccessFlash()
+  // Identifiant du dernier lavage créé : sa ligne est surlignée une seconde
+  // dans l'historique, pour que l'œil retrouve immédiatement l'opération.
+  const [highlightedWashId, setHighlightedWashId] = useState<string | null>(null)
   const [mutationError, setMutationError] = useState<string | null>(null)
   const [mutationSuccess, setMutationSuccess] = useState<string | null>(null)
 
@@ -217,6 +243,9 @@ export default function WashesPage() {
         throw new Error((await response.text()) || `Erreur ${response.status}`)
       }
       const replayed = response.headers.get("Idempotency-Replayed") === "true"
+      const created = (await response.json().catch(() => null)) as { id?: string } | null
+      if (created?.id) setHighlightedWashId(created.id)
+      flashSaveSuccess()
       setMutationSuccess(replayed ? "Cette opération avait déjà été enregistrée." : "Lavage enregistré avec succès.")
       setQuantities({})
       setSelectedWorkerIds([])
@@ -330,7 +359,21 @@ export default function WashesPage() {
               <fieldset className="space-y-3">
                 <legend className="mb-2 text-sm font-semibold">Prestations</legend>
                 {servicesLoading ? (
-                  <p className="text-sm text-muted-foreground">Chargement du catalogue…</p>
+                  <div className="grid gap-3 sm:grid-cols-2" role="status" aria-busy="true" aria-label="Chargement du catalogue">
+                    {[0, 1, 2, 3].map((item) => (
+                      <div
+                        key={item}
+                        className="row-in flex items-center gap-3 rounded-md border p-3"
+                        style={{ "--row": item } as React.CSSProperties}
+                      >
+                        <Skeleton className="size-4 rounded" />
+                        <div className="flex-1 space-y-2">
+                          <Skeleton className="h-4 w-32" />
+                          <Skeleton className="h-3 w-20" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 ) : activeServices.length === 0 ? (
                   <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
                     Aucune prestation active. Configurez le catalogue avant d’enregistrer un lavage.
@@ -340,7 +383,12 @@ export default function WashesPage() {
                     {activeServices.map((service) => {
                       const quantity = quantities[service.id] ?? 0
                       return (
-                        <div key={service.id} className="flex items-center gap-3 rounded-md border p-3">
+                        <div
+                          key={service.id}
+                          className={`flex items-center gap-3 rounded-md border p-3 transition-all duration-150 ${
+                            quantity > 0 ? "border-primary/50 bg-primary/5" : "hover:border-primary/30 hover:bg-muted/40"
+                          }`}
+                        >
                           <input
                             id={`service-${service.id}`}
                             type="checkbox"
@@ -377,7 +425,15 @@ export default function WashesPage() {
               <fieldset className="space-y-3">
                 <legend className="mb-2 text-sm font-semibold">Employés affectés <span className="font-normal text-muted-foreground">(facultatif)</span></legend>
                 {workersLoading ? (
-                  <p className="text-sm text-muted-foreground">Chargement des employés…</p>
+                  <div className="flex flex-wrap gap-2" role="status" aria-busy="true" aria-label="Chargement des employés">
+                    {[0, 1, 2].map((item) => (
+                      <Skeleton
+                        key={item}
+                        className="row-in h-9 w-32 rounded-md"
+                        style={{ "--row": item } as React.CSSProperties}
+                      />
+                    ))}
+                  </div>
                 ) : activeWorkers.length === 0 ? (
                   <p className="text-sm text-muted-foreground">Aucun employé actif à affecter.</p>
                 ) : (
@@ -476,16 +532,19 @@ export default function WashesPage() {
               )}
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>Annuler</Button>
-                <Button
+                <SubmitButton
                   type="submit"
+                  pending={saving}
+                  success={saveSuccess}
+                  successLabel="Lavage enregistré"
+                  idleIcon={<Check className="size-4" />}
                   disabled={
-                    saving || !siteId || !vehicleCategoryId || selectedServices.length === 0 ||
+                    !siteId || !vehicleCategoryId || selectedServices.length === 0 ||
                     !amountIsValid || (cashNeedsSession && (cashSessionLoading || !cashSession))
                   }
                 >
-                  {saving ? <RefreshCw className="mr-2 size-4 animate-spin" /> : <Check className="mr-2 size-4" />}
-                  {saving ? "Enregistrement…" : "Enregistrer le lavage"}
-                </Button>
+                  Enregistrer le lavage
+                </SubmitButton>
               </div>
             </form>
           </section>
@@ -496,7 +555,7 @@ export default function WashesPage() {
             <h2 className="text-lg font-semibold">Historique des lavages</h2>
             <p className="text-sm text-muted-foreground">Les 200 opérations les plus récentes de l’organisation.</p>
           </div>
-          {washesLoading && <div className="p-4 text-sm text-muted-foreground">Chargement de l’historique…</div>}
+          {washesLoading && <div className="p-4"><TableSkeleton rows={6} cols={6} label="Chargement de l’historique des lavages" /></div>}
           {washesError && <div className="p-4 text-sm text-destructive">{washesError}</div>}
           {!washesLoading && !washesError && (
             <div className="overflow-x-auto">
@@ -516,14 +575,24 @@ export default function WashesPage() {
                 <TableBody>
                   {washes.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
-                        Aucun lavage enregistré.
+                      <TableCell colSpan={8} className="p-0">
+                        <EmptyState
+                          icon={Droplets}
+                          title="Aucun lavage enregistré"
+                          description="Enregistrez votre premier lavage : il apparaîtra ici avec sa référence, son montant et son statut de paiement."
+                        />
                       </TableCell>
                     </TableRow>
                   )}
-                  {washes.map((wash) => (
-                    <TableRow key={wash.id}>
-                      <TableCell className="font-medium">{wash.reference}</TableCell>
+                  {washes.map((wash, index) => (
+                    <TableRow
+                      key={wash.id}
+                      className={`row-in transition-colors hover:bg-muted/40 ${wash.id === highlightedWashId ? "row-flash" : ""}`}
+                      style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
+                    >
+                      <TableCell className="font-medium">
+                        <WashReference washId={wash.id} reference={wash.reference} />
+                      </TableCell>
                       <TableCell>{activeSites.find((site) => site.id === wash.site_id)?.name ?? "—"}</TableCell>
                       <TableCell>{activeCategories.find((category) => category.id === wash.vehicle_category_id)?.name ?? "—"}</TableCell>
                       <TableCell className="text-right">{formatXof(wash.total_cents)}</TableCell>
@@ -532,12 +601,12 @@ export default function WashesPage() {
                       <TableCell>{new Date(wash.created_at).toLocaleString("fr-CI")}</TableCell>
                       <TableCell>
                         <Button
-                          render={<Link to={`/washes/${wash.id}`} />}
+                          render={<Link to={`/washes/${wash.id}`} viewTransition />}
                           variant="ghost"
                           size="icon-sm"
                           aria-label={`Voir ${wash.reference}`}
                         >
-                          <ArrowRight className="size-4" />
+                          <ArrowRight className="size-4 transition-transform group-hover/button:translate-x-0.5" />
                         </Button>
                       </TableCell>
                     </TableRow>

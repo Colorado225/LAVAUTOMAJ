@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Check, Info } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { TiltCard } from "@/components/ui/tilt-card"
 import type { Plan } from "@/lib/onboarding-api"
 import { saveStage } from "./save-stage"
 import type { OnboardingWizardProps } from "./onboarding-wizard"
@@ -86,20 +87,23 @@ export function PlanStep({ progress, onDone, onQuit }: OnboardingWizardProps) {
         {error && <p className="text-destructive text-sm">{error}</p>}
 
         <div className="grid gap-4 md:grid-cols-3">
-          {(plans ?? []).map((p) => (
+          {(plans ?? []).map((p, index) => (
+            <TiltCard key={p.code} className="row-in" maxTilt={5}>
             <button
-              key={p.code}
               type="button"
               onClick={() => setSelectedCode(p.code)}
+              style={{ "--row": index } as React.CSSProperties}
               className={cn(
-                "flex flex-col gap-3 rounded-lg border p-4 text-left transition-colors hover:bg-muted/50",
-                selectedCode === p.code && "border-primary bg-primary/5"
+                "flex h-full w-full flex-col gap-3 rounded-lg border p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:bg-muted/50 hover:shadow-md",
+                selectedCode === p.code && "border-primary bg-primary/5 shadow-sm"
               )}
               aria-pressed={selectedCode === p.code}
             >
               <div className="flex items-center justify-between">
                 <p className="font-semibold">{p.name}</p>
-                {selectedCode === p.code && <Check className="size-4 text-primary" />}
+                {selectedCode === p.code && (
+                  <Check className="size-4 animate-in text-primary zoom-in-50 duration-200" />
+                )}
               </div>
               <p className="text-sm text-muted-foreground">{p.description}</p>
               <p className="text-lg font-bold">{formatXOF(p.price_cents)}</p>
@@ -111,6 +115,7 @@ export function PlanStep({ progress, onDone, onQuit }: OnboardingWizardProps) {
                 ))}
               </ul>
             </button>
+            </TiltCard>
           ))}
         </div>
 

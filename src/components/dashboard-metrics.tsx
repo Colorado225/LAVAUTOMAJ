@@ -12,6 +12,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DollarSign, CarFront, TrendingUp, Clock, CheckCircle, XCircle, Activity, BarChart3 } from 'lucide-react'
+import { AnimatedNumber } from '@/components/ui/animated-number'
 import { motion, type Variants } from 'framer-motion'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 
@@ -53,34 +54,35 @@ const containerVariants: Variants = {
   visible: {
     opacity: 1,
     transition: {
-      staggerChildren: 0.15
+      staggerChildren: 0.06
     }
   }
 }
 
 const itemVariants: Variants = {
-  hidden: { y: 25, opacity: 0 },
+  hidden: { y: 10, opacity: 0 },
   visible: {
     y: 0,
     opacity: 1,
     transition: {
       type: "spring" as const,
-      stiffness: 100,
-      damping: 12
+      stiffness: 220,
+      damping: 26,
+      mass: 0.6
     }
   }
 }
 
 const pieVariants: Variants = {
-  hidden: { scale: 0, rotate: -180 },
+  hidden: { scale: 0.96, opacity: 0 },
   visible: {
     scale: 1,
-    rotate: 0,
+    opacity: 1,
     transition: {
       type: "spring" as const,
-      stiffness: 80,
-      delay: 0.5,
-      duration: 0.8
+      stiffness: 200,
+      damping: 28,
+      delay: 0.1
     }
   }
 }
@@ -138,10 +140,14 @@ export function DashboardMetrics() {
 
   if (loading) {
     return (
-      <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-6" role="status" aria-busy="true" aria-label="Chargement des indicateurs">
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           {[0, 1, 2, 3].map((i) => (
-            <Card key={i} className="overflow-hidden border border-border/50 shadow-lg shadow-black/5">
+            <Card
+              key={i}
+              className="row-in overflow-hidden border border-border/50 shadow-lg shadow-black/5"
+              style={{ '--row': i } as React.CSSProperties}
+            >
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <div className="h-4 w-32 animate-pulse rounded bg-muted" />
                 <div className="h-4 w-4 animate-pulse rounded bg-muted" />
@@ -176,7 +182,9 @@ export function DashboardMetrics() {
               <DollarSign className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-blue-500" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{formatXOF(data?.total_revenue_cents || 0)}</div>
+              <div className="text-2xl font-bold">
+                <AnimatedNumber value={data?.total_revenue_cents || 0} format={formatXOF} />
+              </div>
               <p className="text-xs text-muted-foreground">Somme des paiements confirmés</p>
             </CardContent>
           </Card>
@@ -189,7 +197,9 @@ export function DashboardMetrics() {
               <CarFront className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-emerald-500" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{data?.total_washes || 0}</div>
+              <div className="text-2xl font-bold">
+                <AnimatedNumber value={data?.total_washes || 0} />
+              </div>
               <p className="text-xs text-muted-foreground">Nombre total de lavages</p>
             </CardContent>
           </Card>
@@ -202,7 +212,9 @@ export function DashboardMetrics() {
               <Clock className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-amber-500" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{data?.in_progress_washes || 0}</div>
+              <div className="text-2xl font-bold">
+                <AnimatedNumber value={data?.in_progress_washes || 0} />
+              </div>
               <p className="text-xs text-muted-foreground">Lavages en cours</p>
             </CardContent>
           </Card>
@@ -216,7 +228,10 @@ export function DashboardMetrics() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {data?.total_washes ? Math.round(((data.completed_washes || 0) / data.total_washes) * 100) : 0}%
+                <AnimatedNumber
+                  value={data?.total_washes ? Math.round(((data.completed_washes || 0) / data.total_washes) * 100) : 0}
+                  format={(value) => `${value}%`}
+                />
               </div>
               <p className="text-xs text-muted-foreground">Taux de réussite</p>
             </CardContent>
@@ -248,6 +263,8 @@ export function DashboardMetrics() {
                           outerRadius={100}
                           fill="#8884d8"
                           dataKey="value"
+                          animationDuration={600}
+                          animationEasing="ease-out"
                         >
                           {pieData.map((entry, index) => (
                             <Cell key={`cell-${index}`} fill={entry.color} />
@@ -279,7 +296,13 @@ export function DashboardMetrics() {
                         <XAxis dataKey="month" />
                         <YAxis />
                         <Tooltip formatter={(value) => [`${(value || 0).toLocaleString()} FCFA`, 'Revenu']} />
-                        <Bar dataKey="revenue" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                        <Bar
+                          dataKey="revenue"
+                          fill="#3b82f6"
+                          radius={[4, 4, 0, 0]}
+                          animationDuration={600}
+                          animationEasing="ease-out"
+                        />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -312,9 +335,9 @@ export function DashboardMetrics() {
                     {data.recent_washes.map((wash, index) => (
                       <motion.tr
                         key={wash.id}
-                        initial={{ opacity: 0, x: -20 }}
+                        initial={{ opacity: 0, x: -12 }}
                         animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: index * 0.08 }}
+                        transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1], delay: Math.min(index, 8) * 0.035 }}
                         className="border-b border-border/20 transition-colors hover:bg-muted/30"
                       >
                         <TableCell className="font-mono font-medium">{wash.vehicle_plate}</TableCell>

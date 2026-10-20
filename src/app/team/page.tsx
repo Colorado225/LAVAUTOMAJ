@@ -31,6 +31,8 @@ import {
 import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
 import type { OnboardingSummary } from "@/lib/onboarding-api"
 import type { CurrentMember, OrganizationAccount, WorkerInput, WorkerRecord, WorkerRole } from "@/lib/team-api"
+import { TableSkeleton } from "@/components/ui/table-skeleton"
+import { EmptyState } from "@/components/ui/empty-state"
 import { Search, UserPlus, Users, RefreshCw, Pencil, UserRoundX, UserRoundCheck } from "lucide-react"
 
 const roleLabels: Record<WorkerRole, string> = {
@@ -273,7 +275,7 @@ export default function TeamPage() {
             </div>
 
             {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-            {loading && <p role="status" className="text-sm text-muted-foreground">Chargement de l’équipe…</p>}
+            {loading && <TableSkeleton rows={5} cols={6} label="Chargement de l’équipe" />}
             {!loading && !error && (
               <div className="overflow-x-auto rounded-lg border">
                 <Table>
@@ -291,13 +293,29 @@ export default function TeamPage() {
                   <TableBody>
                     {filteredWorkers.length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={canManage ? 7 : 6} className="h-28 text-center text-muted-foreground">
-                          {workers.length === 0 ? "Aucun travailleur enregistré. Ajoutez l’équipe de votre station pour attribuer les lavages." : "Aucun travailleur ne correspond à ces filtres."}
+                        <TableCell colSpan={canManage ? 7 : 6} className="p-0">
+                          <EmptyState
+                            icon={Users}
+                            title={workers.length === 0 ? "Aucun travailleur enregistré" : "Aucun résultat"}
+                            description={
+                              workers.length === 0
+                                ? "Ajoutez l’équipe de votre station pour pouvoir attribuer les lavages et suivre les performances."
+                                : "Aucun travailleur ne correspond à ces filtres. Modifiez la recherche ou le statut."
+                            }
+                          />
                         </TableCell>
                       </TableRow>
                     )}
-                    {filteredWorkers.map((worker) => (
-                      <TableRow key={worker.id}>
+                    {filteredWorkers.map((worker, index) => (
+                      <TableRow
+                        key={worker.id}
+                        /* Ligne en cours de mise à jour : estompée tant que le
+                           serveur n'a pas répondu (retour immédiat). */
+                        className={`row-in transition-all duration-200 ${
+                          busyWorkerId === worker.id ? "scale-[0.995] opacity-50" : "hover:bg-muted/40"
+                        }`}
+                        style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
+                      >
                         <TableCell>
                           <div className="font-medium">{worker.first_name} {worker.last_name}</div>
                         </TableCell>
@@ -335,7 +353,7 @@ export default function TeamPage() {
           <CardContent>
             {accountsError && <p role="alert" className="mb-3 text-sm text-destructive">{accountsError}</p>}
             {accountsLoading ? (
-              <p role="status" className="text-sm text-muted-foreground">Chargement des comptes…</p>
+              <TableSkeleton rows={3} cols={3} label="Chargement des comptes" />
             ) : accounts && accounts.length > 0 ? (
               <div className="overflow-x-auto rounded-lg border">
                 <Table>

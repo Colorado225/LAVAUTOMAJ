@@ -1,5 +1,6 @@
 "use client"
 
+import type * as React from "react"
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { Button } from "@/components/ui/button"
@@ -37,7 +38,9 @@ import {
 } from "@/components/ui/table"
 import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
 import type { CurrentMember } from "@/lib/team-api"
-import { Pencil, Plus, RefreshCw, Search, ToggleLeft, ToggleRight } from "lucide-react"
+import { TableSkeleton } from "@/components/ui/table-skeleton"
+import { EmptyState } from "@/components/ui/empty-state"
+import { Pencil, Plus, RefreshCw, Search, Sparkles, ToggleLeft, ToggleRight } from "lucide-react"
 
 interface Service {
   id: string
@@ -242,15 +245,37 @@ export default function ServicesPage() {
             </div>
             {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
             {categoriesError && <p role="alert" className="text-sm text-destructive">Impossible de charger les catégories : {categoriesError}</p>}
-            {(loading || categoriesLoading) && <p role="status" className="text-sm text-muted-foreground">Synchronisation du catalogue…</p>}
+            {(loading || categoriesLoading) && <TableSkeleton rows={5} cols={5} label="Synchronisation du catalogue" />}
             {!loading && !error && (
               <div className="overflow-x-auto rounded-lg border">
                 <Table>
                   <TableHeader><TableRow><TableHead>Prestation</TableHead><TableHead>Catégorie</TableHead><TableHead>Durée</TableHead><TableHead className="text-right">Prix</TableHead><TableHead>Statut</TableHead>{canManage && <TableHead className="text-right">Actions</TableHead>}</TableRow></TableHeader>
                   <TableBody>
-                    {filteredServices.length === 0 && <TableRow><TableCell colSpan={canManage ? 6 : 5} className="h-24 text-center text-muted-foreground">{servicesList.length === 0 ? "Aucune prestation enregistrée. Ajoutez-en pour créer des lavages." : "Aucune prestation ne correspond à la recherche."}</TableCell></TableRow>}
-                    {filteredServices.map((service) => (
-                      <TableRow key={service.id}>
+                    {filteredServices.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={canManage ? 6 : 5} className="p-0">
+                          <EmptyState
+                            icon={Sparkles}
+                            title={servicesList.length === 0 ? "Aucune prestation enregistrée" : "Aucun résultat"}
+                            description={
+                              servicesList.length === 0
+                                ? "Ajoutez vos prestations (lavage extérieur, intérieur, complet…) pour pouvoir enregistrer des lavages."
+                                : "Aucune prestation ne correspond à la recherche."
+                            }
+                          />
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {filteredServices.map((service, index) => (
+                      <TableRow
+                        key={service.id}
+                        /* La ligne en cours de modification s'estompe : le
+                           retour est immédiat, avant même la réponse serveur. */
+                        className={`row-in transition-all duration-200 ${
+                          busyServiceId === service.id ? "scale-[0.995] opacity-50" : "hover:bg-muted/40"
+                        }`}
+                        style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
+                      >
                         <TableCell className="font-medium">{service.name}</TableCell>
                         <TableCell>{service.category_id ? categoryById.get(service.category_id) ?? "Catégorie archivée" : "—"}</TableCell>
                         <TableCell>{service.duration_minutes ? `${service.duration_minutes} min` : "—"}</TableCell>

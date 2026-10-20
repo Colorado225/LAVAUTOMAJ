@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion"
+import { AnimatePresence, motion, useMotionValueEvent, useReducedMotion, useScroll } from "framer-motion"
 import { ArrowRight, Menu, X } from "lucide-react"
 import { Link } from "react-router-dom"
 import { Logo } from "@/components/logo"
@@ -13,21 +13,44 @@ const navigationItems = [
 
 export function LandingNavbar() {
   const [menuOpen, setMenuOpen] = useState(false)
+  // La barre se compacte dès qu'on quitte le haut de page : plus de contenu
+  // visible, et un repère clair qu'on a commencé à défiler.
+  const [compact, setCompact] = useState(false)
   const motionPreference = useReducedMotion()
   const reduceMotion = motionPreference !== false
+  const { scrollY } = useScroll()
+
+  useMotionValueEvent(scrollY, "change", (value) => {
+    setCompact(value > 24)
+  })
 
   return (
-    <header className="sticky top-0 z-50 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl">
-      <div className="mx-auto flex h-[72px] max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+    <header
+      data-compact={compact || undefined}
+      className="sticky top-0 z-50 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl transition-shadow duration-300 data-compact:shadow-[0_6px_24px_-12px_rgba(16,35,66,0.35)]"
+    >
+      <div
+        className={`mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 transition-[height] duration-300 ease-out sm:px-6 lg:px-8 ${
+          compact ? "h-[60px]" : "h-[72px]"
+        }`}
+      >
         <Link to="/landing" className="flex shrink-0 items-center gap-3 rounded-xl outline-none focus-visible:ring-4 focus-visible:ring-blue-200">
-          <span className="grid size-10 place-items-center rounded-2xl bg-[#0c2852] text-white shadow-md shadow-blue-950/15">
+          <span
+            className={`grid place-items-center rounded-2xl bg-[#0c2852] text-white shadow-md shadow-blue-950/15 transition-all duration-300 ${
+              compact ? "size-9" : "size-10"
+            }`}
+          >
             <Logo size={25} />
           </span>
           <span className="flex flex-col gap-1">
             <span className="text-[16px] font-extrabold leading-none tracking-[-0.04em] text-[#102342]">
               WashPilot <span className="text-blue-600">CI</span>
             </span>
-            <span className="hidden text-[9px] font-bold uppercase tracking-[0.16em] text-slate-400 sm:block">
+            <span
+              className={`hidden overflow-hidden text-[9px] font-bold uppercase tracking-[0.16em] text-slate-400 transition-all duration-300 sm:block ${
+                compact ? "max-h-0 opacity-0" : "max-h-4 opacity-100"
+              }`}
+            >
               Gestion de station de lavage
             </span>
           </span>

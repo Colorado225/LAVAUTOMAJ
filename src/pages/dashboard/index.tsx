@@ -31,6 +31,8 @@ import { useOnboardingStatus } from '@/lib/onboarding-api'
 import { useApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { AnimatedNumber } from '@/components/ui/animated-number'
+import { Sparkline } from '@/components/ui/sparkline'
 import { Button } from '@/components/ui/button'
 import type { Plan } from '@/lib/onboarding-api'
 
@@ -117,18 +119,30 @@ function formatDayLabel(isoDate: string) {
 function SummaryCard({
   title,
   value,
+  unit,
   description,
   icon: Icon,
   loading = false,
+  index = 0,
+  trend,
 }: {
   title: string
-  value: string
+  /** Valeur brute (centimes ou compteur) animée à l'affichage. */
+  value: number | null | undefined
+  /** Mise en forme appliquée à la valeur animée. */
+  unit: (value: number) => string
   description: string
   icon: React.ElementType
   loading?: boolean
+  index?: number
+  /** Série pour la mini-courbe révélée au survol. */
+  trend?: number[]
 }) {
   return (
-    <div className="group rounded-2xl border bg-card p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+    <div
+      className="group row-in rounded-2xl border bg-card p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
+      style={{ '--row': index } as React.CSSProperties}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-medium text-muted-foreground">{title}</p>
@@ -136,7 +150,7 @@ function SummaryCard({
             <Skeleton className="mt-3 h-8 w-36" />
           ) : (
             <p className="mt-3 break-words text-2xl font-bold tracking-tight">
-              {value}
+              <AnimatedNumber value={value} format={unit} />
             </p>
           )}
         </div>
@@ -144,9 +158,17 @@ function SummaryCard({
           <Icon className="size-5 text-muted-foreground" aria-hidden="true" />
         </div>
       </div>
-      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-        {description}
-      </p>
+      <div className="mt-3 flex items-end justify-between gap-3">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {description}
+        </p>
+        {/* Tendance de la période : apparaît au survol, sans bousculer la mise en page. */}
+        {!loading && trend && trend.length > 1 && (
+          <span className="shrink-0 text-primary opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+            <Sparkline values={trend} />
+          </span>
+        )}
+      </div>
     </div>
   )
 }
@@ -163,11 +185,12 @@ function QuickAction({
   href: string
 }) {
   return (
-    <a
-      href={href}
-      className="group flex items-center gap-3 rounded-xl border p-4 transition-all hover:border-primary/40 hover:bg-muted/40"
+    <Link
+      to={href}
+      viewTransition
+      className="group flex items-center gap-3 rounded-xl border p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:bg-muted/40 hover:shadow-sm"
     >
-      <span className="rounded-xl bg-primary/10 p-3 text-primary">
+      <span className="rounded-xl bg-primary/10 p-3 text-primary transition-transform duration-200 group-hover:scale-105">
         <Icon className="size-5" aria-hidden="true" />
       </span>
       <span className="min-w-0 flex-1">
@@ -177,7 +200,7 @@ function QuickAction({
         </span>
       </span>
       <Plus className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-    </a>
+    </Link>
   )
 }
 
@@ -189,6 +212,9 @@ function QuickAction({
 export default function DashboardPage() {
   const [period, setPeriod] = useState<Period>('today')
   const [refreshKey, setRefreshKey] = useState(0)
+  // Mémorise que la courbe a déjà été tracée (évite de rejouer l'animation
+  // à chaque changement de période : le lecteur suit la donnée, pas l'effet).
+  const [chartAnimated, setChartAnimated] = useState(false)
 
   const { data: status, loading: statusLoading } = useOnboardingStatus()
   const { data: summary, loading: summaryLoading } = useApi<DashboardSummary>(
@@ -324,6 +350,7 @@ export default function DashboardPage() {
             {/* Pointe vers l'élément « Nouveau lavage » du sidebar (/washes) */}
             <Link
               to="/washes"
+              viewTransition
               className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-all hover:bg-muted hover:text-primary"
             >
               <Plus className="size-4" />
@@ -402,14 +429,18 @@ export default function DashboardPage() {
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <SummaryCard
               title="Recettes encaissées"
-              value={formatFCFA(totals?.revenue_cents)}
+              value={totals?.revenue_cents}
+              unit={formatFCFA}
               description="Paiements confirmés, hors opérations annulées."
               icon={Wallet}
               loading={reportLoading}
+              index={0}
+              trend={revenueSeries.map((day) => day.revenue)}
             />
             <SummaryCard
               title="Lavages réalisés"
-              value={formatCount(totals?.completed_washes)}
+              value={totals?.completed_washes}
+              unit={formatCount}
               description={
                 totals
                   ? `${formatCount(totals.total_washes)} lavage${totals.total_washes === 1 ? '' : 's'} enregistré${totals.total_washes === 1 ? '' : 's'} au total sur la période.`
@@ -417,20 +448,28 @@ export default function DashboardPage() {
               }
               icon={CarFront}
               loading={reportLoading}
+              index={1}
+              trend={revenueSeries.map((day) => day.washes)}
             />
             <SummaryCard
               title="Dépenses enregistrées"
-              value={formatFCFA(totals?.expenses_cents)}
+              value={totals?.expenses_cents}
+              unit={formatFCFA}
               description="Sorties enregistrées dans le module des dépenses."
               icon={Receipt}
               loading={reportLoading}
+              index={2}
+              trend={revenueSeries.map((day) => day.expenses)}
             />
             <SummaryCard
               title="Solde opérationnel estimé"
-              value={formatFCFA(totals?.net_cents)}
+              value={totals?.net_cents}
+              unit={formatFCFA}
               description="Recettes moins dépenses enregistrées. Ce n'est pas un bénéfice comptable."
               icon={ChartNoAxesCombined}
               loading={reportLoading}
+              index={3}
+              trend={revenueSeries.map((day) => day.revenue - day.expenses)}
             />
           </div>
         </section>
@@ -497,6 +536,12 @@ export default function DashboardPage() {
                       stroke="#3b82f6"
                       strokeWidth={2}
                       fill="url(#dashboard-revenue)"
+                      // Tracé animé au premier affichage seulement : changer de
+                      // période ne redessine pas la courbe depuis zéro.
+                      isAnimationActive={!chartAnimated}
+                      animationDuration={600}
+                      animationEasing="ease-out"
+                      onAnimationEnd={() => setChartAnimated(true)}
                     />
                     <Area
                       type="monotone"
@@ -504,13 +549,16 @@ export default function DashboardPage() {
                       stroke="#f97316"
                       strokeWidth={2}
                       fill="url(#dashboard-expenses)"
+                      isAnimationActive={!chartAnimated}
+                      animationDuration={600}
+                      animationEasing="ease-out"
                     />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
             ) : (
               <div className="mt-6 flex min-h-52 flex-col items-center justify-center rounded-xl border border-dashed bg-muted/20 p-6 text-center">
-                <ChartNoAxesCombined className="size-9 text-muted-foreground" />
+                <ChartNoAxesCombined className="float-soft size-9 text-muted-foreground" />
                 <p className="mt-3 font-medium">Aucune opération sur la période</p>
                 <p className="mt-1 max-w-sm text-sm text-muted-foreground">
                   Enregistrez des lavages ou des dépenses : la courbe se construit
@@ -635,6 +683,7 @@ export default function DashboardPage() {
             </div>
             <Link
               to="/settings/billing"
+              viewTransition
               className="inline-flex items-center gap-2 rounded-lg border border-border bg-background hover:bg-muted text-sm font-medium transition-all"
             >
               Gérer mon forfait

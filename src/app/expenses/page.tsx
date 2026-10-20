@@ -31,7 +31,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
-import { Plus, X } from "lucide-react"
+import { TableSkeleton } from "@/components/ui/table-skeleton"
+import { SubmitButton } from "@/components/ui/submit-button"
+import { EmptyState } from "@/components/ui/empty-state"
+import { useSuccessFlash } from "@/hooks/use-success-flash"
+import { Plus, Receipt, X } from "lucide-react"
 
 interface Site {
   id: string
@@ -116,6 +120,9 @@ export default function ExpensesPage() {
 
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [saveSuccess, flashSaveSuccess] = useSuccessFlash()
+  // La dépense qui vient d'être créée est surlignée brièvement dans la liste.
+  const [highlightedExpenseId, setHighlightedExpenseId] = useState<string | null>(null)
   const [mutationError, setMutationError] = useState<string | null>(null)
   const [mutationSuccess, setMutationSuccess] = useState<string | null>(null)
   const idempotencyKeys = useRef(new Map<string, string>())
@@ -204,6 +211,9 @@ export default function ExpensesPage() {
       }
 
       idempotencyKeys.current.clear()
+      const created = (await response.json().catch(() => null)) as { id?: string } | null
+      if (created?.id) setHighlightedExpenseId(created.id)
+      flashSaveSuccess()
       setMutationSuccess("Dépense enregistrée avec succès !")
       setTimeout(() => {
         setOpen(false)
@@ -390,16 +400,21 @@ export default function ExpensesPage() {
                   >
                     <X className="mr-2 h-4 w-4" /> Annuler
                   </Button>
-                  <Button type="submit" disabled={saving}>
-                    {saving ? "Enregistrement..." : "Enregistrer la dépense"}
-                  </Button>
+                  <SubmitButton
+                    type="submit"
+                    pending={saving}
+                    success={saveSuccess}
+                    successLabel="Dépense enregistrée"
+                  >
+                    Enregistrer la dépense
+                  </SubmitButton>
                 </div>
               </form>
             </DialogContent>
           </Dialog>
         </div>
 
-        {loading && <div className="text-muted-foreground">Chargement…</div>}
+        {loading && <TableSkeleton rows={6} cols={6} label="Chargement des dépenses" />}
         {error && <div className="text-destructive">{error}</div>}
 
         {!loading && !error && (
@@ -418,13 +433,21 @@ export default function ExpensesPage() {
               <TableBody>
                 {expenses.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground">
-                      Aucune dépense enregistrée.
+                    <TableCell colSpan={6} className="p-0">
+                      <EmptyState
+                        icon={Receipt}
+                        title="Aucune dépense enregistrée"
+                        description="Les sorties d'argent (carburant, produits, salaires…) apparaîtront ici dès la première saisie."
+                      />
                     </TableCell>
                   </TableRow>
                 )}
-                {expenses.map((e) => (
-                  <TableRow key={e.id}>
+                {expenses.map((e, index) => (
+                  <TableRow
+                    key={e.id}
+                    className={`row-in transition-colors ${e.id === highlightedExpenseId ? "row-flash" : ""}`}
+                    style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
+                  >
                     <TableCell>{new Date(e.expense_date).toLocaleDateString("fr-CI")}</TableCell>
                     <TableCell>{expenseCategories.find(c => c.value === e.category)?.label || e.category}</TableCell>
                     <TableCell>{e.beneficiary || "-"}</TableCell>

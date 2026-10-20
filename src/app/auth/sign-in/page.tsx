@@ -38,6 +38,7 @@ export default function SignInPage() {
   const [rememberMe, setRememberMe] = useState(() => Boolean(getInitialEmail()))
   const [showPassword, setShowPassword] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [signedIn, setSignedIn] = useState(false)
   const [error, setError] = useState("")
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -63,6 +64,8 @@ export default function SignInPage() {
     setIsSubmitting(true)
     try {
       await signIn(normalizedEmail, password)
+      // Coche verte très brève : la connexion a réussi, la page va changer.
+      setSignedIn(true)
       navigate("/dashboard", { replace: true })
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : "Connexion impossible pour le moment. Réessayez.")
@@ -171,7 +174,7 @@ export default function SignInPage() {
 
         {error ? <AuthNotice>{error}</AuthNotice> : null}
 
-        <AuthSubmitButton pending={isSubmitting}>
+        <AuthSubmitButton pending={isSubmitting} success={signedIn} successLabel="Connexion réussie">
           Se connecter <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" aria-hidden="true" />
         </AuthSubmitButton>
       </form>

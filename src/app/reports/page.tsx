@@ -13,6 +13,9 @@ import {
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
+import { TableSkeleton } from "@/components/ui/table-skeleton"
+import { AnimatedNumber } from "@/components/ui/animated-number"
+import { EmptyState } from "@/components/ui/empty-state"
 import {
   Table,
   TableBody,
@@ -193,10 +196,10 @@ export default function ReportsPage() {
         {error && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</p>}
 
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <MetricCard title="Lavages enregistrés" icon={<CarFront className="size-4 text-muted-foreground" />} value={data?.summary.total_washes} loading={loading} detail={data ? `${data.summary.completed_washes} terminé${data.summary.completed_washes === 1 ? "" : "s"}` : undefined} />
-          <MetricCard title="Encaissements vérifiés" icon={<Wallet className="size-4 text-muted-foreground" />} value={data?.summary.revenue_cents} loading={loading} money detail={data ? `${data.summary.paid_washes} lavage${data.summary.paid_washes === 1 ? "" : "s"} réglé${data.summary.paid_washes === 1 ? "" : "s"}` : undefined} />
-          <MetricCard title="Dépenses enregistrées" icon={<Receipt className="size-4 text-muted-foreground" />} value={data?.summary.expenses_cents} loading={loading} money />
-          <MetricCard title="Solde opérationnel" icon={<TrendingUp className="size-4 text-muted-foreground" />} value={data?.summary.net_cents} loading={loading} money />
+          <MetricCard index={0} title="Lavages enregistrés" icon={<CarFront className="size-4 text-muted-foreground" />} value={data?.summary.total_washes} loading={loading} detail={data ? `${data.summary.completed_washes} terminé${data.summary.completed_washes === 1 ? "" : "s"}` : undefined} />
+          <MetricCard index={1} title="Encaissements vérifiés" icon={<Wallet className="size-4 text-muted-foreground" />} value={data?.summary.revenue_cents} loading={loading} money detail={data ? `${data.summary.paid_washes} lavage${data.summary.paid_washes === 1 ? "" : "s"} réglé${data.summary.paid_washes === 1 ? "" : "s"}` : undefined} />
+          <MetricCard index={2} title="Dépenses enregistrées" icon={<Receipt className="size-4 text-muted-foreground" />} value={data?.summary.expenses_cents} loading={loading} money />
+          <MetricCard index={3} title="Solde opérationnel" icon={<TrendingUp className="size-4 text-muted-foreground" />} value={data?.summary.net_cents} loading={loading} money />
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
@@ -213,8 +216,8 @@ export default function ReportsPage() {
                     <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} tickFormatter={formatDate} />
                     <YAxis tickLine={false} axisLine={false} width={64} tickFormatter={formatChartXof} />
                     <ChartTooltip cursor={false} content={<ChartTooltipContent labelFormatter={(_, payload) => payload?.[0]?.payload?.date ? formatDate(String(payload[0].payload.date)) : ""} formatter={(value, name) => [formatXof(Number(value) * 100), name === "revenue" ? "Encaissements" : name === "expenses" ? "Dépenses" : String(name)]} />} />
-                    <Area dataKey="revenue" type="monotone" stroke="var(--color-revenue)" fill="var(--color-revenue)" fillOpacity={0.13} strokeWidth={2} />
-                    <Area dataKey="expenses" type="monotone" stroke="var(--color-expenses)" fill="var(--color-expenses)" fillOpacity={0.08} strokeWidth={2} />
+                    <Area dataKey="revenue" type="monotone" stroke="var(--color-revenue)" fill="var(--color-revenue)" fillOpacity={0.13} strokeWidth={2} animationDuration={600} animationEasing="ease-out" />
+                    <Area dataKey="expenses" type="monotone" stroke="var(--color-expenses)" fill="var(--color-expenses)" fillOpacity={0.08} strokeWidth={2} animationDuration={600} animationEasing="ease-out" />
                     <ChartLegend content={<ChartLegendContent />} />
                   </AreaChart>
                 </ChartContainer>
@@ -235,7 +238,7 @@ export default function ReportsPage() {
                     <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} tickFormatter={formatDate} />
                     <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={36} />
                     <ChartTooltip cursor={false} content={<ChartTooltipContent labelFormatter={(_, payload) => payload?.[0]?.payload?.date ? formatDate(String(payload[0].payload.date)) : ""} />} />
-                    <Bar dataKey="wash_count" name="Lavages" fill="var(--color-washes)" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="wash_count" name="Lavages" fill="var(--color-washes)" radius={[4, 4, 0, 0]} animationDuration={600} animationEasing="ease-out" />
                   </BarChart>
                 </ChartContainer>
               ) : <EmptyReportState />}
@@ -288,6 +291,7 @@ function MetricCard({
   loading,
   money = false,
   detail,
+  index = 0,
 }: {
   title: string
   icon: React.ReactNode
@@ -295,9 +299,13 @@ function MetricCard({
   loading: boolean
   money?: boolean
   detail?: string
+  index?: number
 }) {
   return (
-    <Card>
+    <Card
+      className="row-in transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
+      style={{ "--row": index } as React.CSSProperties}
+    >
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardDescription>{title}</CardDescription>
         {icon}
@@ -305,7 +313,12 @@ function MetricCard({
       <CardContent>
         {loading ? <Skeleton className="h-8 w-32" /> : (
           <>
-            <p className="text-2xl font-bold">{value == null ? "—" : money ? formatXof(value) : value.toLocaleString("fr-CI")}</p>
+            <p className="text-2xl font-bold">
+              <AnimatedNumber
+                value={value}
+                format={(amount) => (money ? formatXof(amount) : amount.toLocaleString("fr-CI"))}
+              />
+            </p>
             {detail && <p className="mt-1 text-xs text-muted-foreground">{detail}</p>}
           </>
         )}
@@ -316,8 +329,12 @@ function MetricCard({
 
 function EmptyReportState() {
   return (
-    <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-      Aucune donnée à afficher pour cette période.
+    <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed">
+      <EmptyState
+        icon={BarChart3}
+        title="Aucune donnée sur cette période"
+        description="Changez les dates ou enregistrez des opérations : les graphiques se construisent automatiquement."
+      />
     </div>
   )
 }
@@ -344,7 +361,7 @@ function BreakdownTable({
         <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent>
-        {loading ? <Skeleton className="h-32 w-full" /> : (
+        {loading ? <TableSkeleton rows={4} cols={columns.length} label={`Chargement : ${title}`} /> : (
           <div className="overflow-x-auto rounded-lg border">
             <Table>
               <TableHeader><TableRow>{columns.map((column) => <TableHead key={column}>{column}</TableHead>)}</TableRow></TableHeader>
@@ -352,7 +369,11 @@ function BreakdownTable({
                 {rows.length === 0 ? (
                   <TableRow><TableCell colSpan={columns.length} className="h-20 text-center text-muted-foreground">{empty}</TableCell></TableRow>
                 ) : rows.map((row, index) => (
-                  <TableRow key={`${title}-${index}`}>
+                  <TableRow
+                    key={`${title}-${index}`}
+                    className="row-in"
+                    style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
+                  >
                     {row.map((value, cellIndex) => <TableCell key={cellIndex} className={cellIndex > 0 ? "text-right" : undefined}>{value}</TableCell>)}
                   </TableRow>
                 ))}
