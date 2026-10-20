@@ -145,7 +145,7 @@ export function DashboardMetrics() {
           {[0, 1, 2, 3].map((i) => (
             <Card
               key={i}
-              className="row-in overflow-hidden border border-border/50 shadow-lg shadow-black/5"
+              className="row-in elev-2 border"
               style={{ '--row': i } as React.CSSProperties}
             >
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -176,7 +176,8 @@ export function DashboardMetrics() {
     >
       <motion.div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4" variants={containerVariants}>
         <motion.div variants={itemVariants}>
-          <Card className="group relative overflow-hidden rounded-xl border border-border/50 bg-card shadow-lg shadow-black/5 transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-xl hover:shadow-black/10">
+          <Card interactive
+            className="group relative rounded-xl border bg-card">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Recettes totales</CardTitle>
               <DollarSign className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-blue-500" />
@@ -191,7 +192,8 @@ export function DashboardMetrics() {
         </motion.div>
 
         <motion.div variants={itemVariants}>
-          <Card className="group relative overflow-hidden rounded-xl border border-border/50 bg-card shadow-lg shadow-black/5 transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-xl hover:shadow-black/10">
+          <Card interactive
+            className="group relative rounded-xl border bg-card">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Lavages totaux</CardTitle>
               <CarFront className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-emerald-500" />
@@ -206,7 +208,8 @@ export function DashboardMetrics() {
         </motion.div>
 
         <motion.div variants={itemVariants}>
-          <Card className="group relative overflow-hidden rounded-xl border border-border/50 bg-card shadow-lg shadow-black/5 transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-xl hover:shadow-black/10">
+          <Card interactive
+            className="group relative rounded-xl border bg-card">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">En cours</CardTitle>
               <Clock className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-amber-500" />
@@ -221,7 +224,8 @@ export function DashboardMetrics() {
         </motion.div>
 
         <motion.div variants={itemVariants}>
-          <Card className="group relative overflow-hidden rounded-xl border border-border/50 bg-card shadow-lg shadow-black/5 transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-xl hover:shadow-black/10">
+          <Card interactive
+            className="group relative rounded-xl border bg-card">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Taux de complétion</CardTitle>
               <TrendingUp className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-violet-500" />
@@ -243,7 +247,8 @@ export function DashboardMetrics() {
         <motion.div className="grid gap-6 lg:grid-cols-2" variants={itemVariants}>
           {pieData.length > 0 && (
             <motion.div variants={pieVariants}>
-              <Card className="overflow-hidden rounded-xl border border-border/50 bg-card shadow-lg shadow-black/5 transition-all duration-300 hover:shadow-xl hover:shadow-black/10">
+              <Card interactive
+                className="relative rounded-xl border bg-card">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Activity className="h-5 w-5" />
@@ -281,7 +286,8 @@ export function DashboardMetrics() {
 
           {barData.length > 0 && (
             <motion.div variants={itemVariants}>
-              <Card className="overflow-hidden rounded-xl border border-border/50 bg-card shadow-lg shadow-black/5 transition-all duration-300 hover:shadow-xl hover:shadow-black/10">
+              <Card interactive
+                className="relative rounded-xl border bg-card">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <BarChart3 className="h-5 w-5" />
@@ -315,7 +321,8 @@ export function DashboardMetrics() {
 
       {data?.recent_washes && data.recent_washes.length > 0 && (
         <motion.div variants={itemVariants}>
-          <Card className="overflow-hidden rounded-xl border border-border/50 bg-card shadow-lg shadow-black/5 transition-all duration-300 hover:shadow-xl hover:shadow-black/10">
+          <Card interactive
+                className="relative rounded-xl border bg-card">
             <CardHeader>
               <CardTitle>Derniers lavages enregistrés</CardTitle>
             </CardHeader>

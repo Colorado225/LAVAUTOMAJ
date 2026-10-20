@@ -3,6 +3,8 @@
 import * as React from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
+import { motion } from "framer-motion"
+import { TRANSITION } from "@/lib/motion"
 import { useApi, apiFetch } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import {
@@ -538,7 +540,16 @@ export default function CashDrawerPage() {
               />
             </label>
             {countHasDiscrepancy && (
-              <label className="flex flex-col gap-2 text-sm font-medium" htmlFor="discrepancy-reason">
+              /* Apparition en fondu simple : pendant un comptage de caisse,
+                 rien ne doit bouger sous les doigts de la personne qui saisit.
+                 La lueur rouge est fixe, elle ne clignote pas. */
+              <motion.label
+                className="glow-danger glow-static flex flex-col gap-2 rounded-lg p-3 text-sm font-medium"
+                htmlFor="discrepancy-reason"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={TRANSITION.enter}
+              >
                 Motif de l’écart obligatoire
                 <Input
                   id="discrepancy-reason"
@@ -546,7 +557,7 @@ export default function CashDrawerPage() {
                   onChange={(event) => setDiscrepancyReason(event.target.value)}
                   disabled={saving}
                 />
-              </label>
+              </motion.label>
             )}
             {mutationError && <p className="text-sm text-destructive">{mutationError}</p>}
             <DialogFooter>

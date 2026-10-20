@@ -387,3 +387,144 @@ Avec `layoutId` de framer-motion, la pastille de l'élément actif **glisse** d'
 - Animations limitées à `transform` / `opacity` (plus `background-color` sur le flash de ligne, non bloquant).
 - Zones en chargement : `role="status"` + `aria-busy="true"` ; boutons en attente : `aria-busy`.
 - Aucun octet de dépendance ajouté ; le poids du bundle est inchangé (les nouveaux composants pèsent quelques Ko).
+
+---
+
+## 13. Système d'élévation 3D et jetons Framer Motion (20 octobre 2026)
+
+Deuxième passe : les animations existantes étaient justes mais **dispersées**.
+Chaque écran choisissait sa durée (200 ms ici, 300 ms là), son déplacement
+(`-translate-y-0.5` ou `-translate-y-1`) et son ombre (`shadow-sm`,
+`shadow-lg shadow-black/5`). Trois cartes qui apparaissent à trois vitesses ne
+donnent pas « trois animations », elles donnent une impression de lenteur
+irrégulière.
+
+Cette passe ajoute deux fondations et y raccorde l'existant.
+
+### 13.1 Jetons de mouvement — `src/lib/motion.ts`
+
+Source unique des durées, courbes et variantes. Plus aucune valeur en dur
+dans les écrans.
+
+| Jeton | Valeur | Usage |
+|---|---|---|
+| `DURATION.hover` | 120 ms | Survol, pression, bascule |
+| `DURATION.enter` | 240 ms | Apparition d'un élément |
+| `DURATION.exit` | 180 ms | Disparition — toujours plus rapide que l'entrée |
+| `DURATION.page` | 340 ms | Changement d'écran, ouverture de modale |
+| `DURATION.counter` | 700 ms | Décompte d'un chiffre clé |
+
+Courbes : `EASE.out` (`cubic-bezier(0.22, 1, 0.36, 1)`) par défaut — démarrage
+franc, arrivée amortie. Ressorts : `SPRING.snappy` (survol), `SPRING.soft`
+(apparition), `SPRING.pointer` (suivi de curseur).
+
+Gestes : `HOVER_LIFT` = `scale 1.01` + `y -2px`. **1 %, pas 5 %** : sur une
+grille de quatre indicateurs, un agrandissement visible chevauche les voisines
+et fait trembler la grille entière. C'est l'ombre qui porte le message,
+l'échelle ne fait que l'appuyer.
+
+### 13.2 Élévations — `src/index.css`
+
+Une élévation n'est pas une ombre, c'est une lumière zénithale. Chaque niveau
+empile quatre couches :
+
+1. **biseau haut** — liseré clair sur la bordure supérieure (la lumière) ;
+2. **biseau bas** — liseré sombre sur la bordure inférieure (le contact) ;
+3. **liseré** — contour d'1 px qui détache la surface du fond ;
+4. **ombre portée** — diffusion ambiante + ombre directionnelle.
+
+Les couches 1 et 2 donnent le relief *sur la bordure*, la 4 donne la hauteur.
+
+| Classe | Rôle |
+|---|---|
+| `.elev-1` → `.elev-4` | Hauteur fixe. 1 = carte posée, 4 = modale |
+| `.edge-3d` | Relief seul, sans ombre portée (en-têtes, champs, segments) |
+| `.surface-3d` | Surface interactive : décolle au survol et au focus clavier |
+| `.glow-primary\|success\|warning\|danger` | Lueur colorée sur la bordure — un **état**, jamais une décoration |
+| `.glow-static` | Lueur permanente plutôt que révélée au survol |
+| `.glow-breathe` | Lueur qui respire. Réservée à ce qui exige une action |
+| `.scene-3d` / `.layer-3d` | Perspective partagée pour l'inclinaison au pointeur |
+
+**Pourquoi un pseudo-élément.** `box-shadow` n'est pas compositée par le GPU :
+l'animer force un recalcul du flou à chaque image. L'ombre haute est donc
+peinte sur `::after` et seule son `opacity` varie. Le contrat « uniquement
+`transform` et `opacity` » reste tenu, y compris sur les Android d'entrée de
+gamme visés par le projet.
+
+Deux conséquences qui se sont révélées à l'usage, et qui sont traitées :
+
+- `overflow-hidden` sur une carte **rogne l'ombre du pseudo-élément**. La
+  carte interactive ne le porte donc pas ; la carte statique le garde (elle en
+  a besoin pour arrondir les images).
+- Les ombres neutres utilisent un alpha explicite (`oklch(0 0 0 / 0.1)`) et
+  non `color-mix(… var(--foreground) …)` : le compilateur CSS replie
+  `color-mix` sur la couleur **opaque** pour les vieux navigateurs, ce qui
+  aurait donné des pavés noirs. Une ombre est noire dans les deux thèmes de
+  toute façon.
+
+En thème sombre, le biseau clair passe de 75 % à 10 % d'opacité — à 75 % il
+dessinerait une arête fluorescente — et les ombres sont creusées, car elles
+portent moins sur fond noir.
+
+### 13.3 Primitives — `src/components/ui/motion.tsx`
+
+| Composant | Usage |
+|---|---|
+| `<Surface>` | Surface élevée, niveau et lueur paramétrables |
+| `<ElevatedCard>` | Carte d'indicateur : cascade à l'entrée, décollement au survol, enfoncement au clic |
+| `<MotionCard>` | La `Card` de la bibliothèque, animée (`motion.create`) — les sous-composants gardent leurs variables CSS |
+| `<Tilt3D>` | Inclinaison vers le curseur, **avec l'ombre qui se déporte à l'opposé** — c'est ce décalage, plus que la rotation, qui fait lire l'objet comme physique |
+| `<Stagger>` / `<StaggerItem>` | Cascade pilotée par les variantes, pas par des délais calculés dans chaque écran |
+| `<FadeIn>` | Apparition simple, au montage ou à l'entrée dans la fenêtre |
+| `<Pressable>` | Retour au survol et à la pression pour un enfant non-`motion` |
+| `<PageTransition>` / `<PopIn>` | Entrée d'écran, entrée en surimpression |
+
+### 13.4 Raccordements
+
+- **Transition de page centralisée dans `BaseLayout`**, avec `key={pathname}` :
+  déclarée une fois, elle s'applique à tous les écrans. Tentée d'abord par
+  écran, l'approche a été abandonnée — un `div` intercalé casse le `flex-1`
+  du `<main>`.
+- **Primitives de la bibliothèque** : `Card` (`elev-1`, variante
+  `interactive`), `Dialog` (`elev-4`), menus / popovers / select / hover-card
+  (`elev-3`), panneau latéral (`elev-4`), toast (`elev-3`).
+- **Boutons** : pression `scale 0.98`, relief de bordure, et décollement
+  réservé à l'action principale — si tous les boutons décollent, plus aucun ne
+  ressort. L'ordre des variantes Tailwind fait gagner `active` sur `hover`,
+  vérifié dans le CSS compilé.
+- **Navigation** : l'indicateur actif coulissant (`layoutId`) prend du relief ;
+  l'icône de l'entrée survolée avance.
+- **Tableau de bord** : indicateurs en `ElevatedCard`, raccourcis en cascade
+  avec lueur primaire, panneaux en `Surface`.
+- **Styles ad hoc remplacés** : 8 occurrences de
+  `shadow-lg shadow-black/5 … duration-300 hover:-translate-y-1` dans
+  `dashboard-metrics.tsx`, plus les cartes de `reports` et le choix de forfait
+  de l'onboarding.
+- **États métier** : bandeau d'essai en `glow-warning` / `glow-danger`
+  permanent, motif d'écart de caisse en `glow-danger` fixe.
+
+### 13.5 Ce qui a été délibérément écarté
+
+- **Animer les modales avec Framer Motion.** Base UI pilote déjà leur cycle de
+  vie en CSS (`data-open` / `data-closed`). Y greffer `AnimatePresence`
+  demandait de dupliquer cet état pour un résultat identique. Elles reçoivent
+  l'élévation, pas une seconde mécanique d'animation.
+- **La lueur qui respire sur le comptage de caisse.** La règle tient :
+  pendant une saisie de montant, rien ne bouge sous les doigts. Le champ de
+  motif d'écart apparaît en fondu simple et sa lueur est fixe.
+- **L'inclinaison 3D sous 768 px** : pas de curseur à suivre, et un coût réel
+  en images par seconde sur les téléphones visés.
+
+### 13.6 Accessibilité
+
+La garde `prefers-reduced-motion` couvre les nouveaux effets. Choix assumé :
+**les élévations restent**, seuls le décollement, l'inclinaison et la
+respiration sont supprimés. Une ombre n'est pas du mouvement — c'est un repère
+de hiérarchie, et le supprimer appauvrirait la lecture sans rien apporter à
+qui demande moins d'animation.
+
+### 13.7 Coût
+
+Aucune dépendance ajoutée : `framer-motion` était déjà installé (14.4.0) et
+utilisé par 14 fichiers. Le bundle gagne quelques kilo-octets de CSS ; les
+primitives remplacent plus de code ad hoc qu'elles n'en ajoutent.

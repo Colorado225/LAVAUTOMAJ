@@ -3,6 +3,7 @@
 import { ChevronRight, type LucideIcon } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { motion } from "framer-motion"
+import { SPRING } from "@/lib/motion"
 
 import {
   Collapsible,
@@ -92,7 +93,7 @@ export function NavMain({
               <SidebarMenuButton
                 tooltip={item.title}
                 // Le fond actif est dessiné par l'indicateur animé ci-dessous.
-                className="relative isolate cursor-pointer data-active:bg-transparent"
+                className="group/nav relative isolate cursor-pointer transition-transform duration-150 ease-out hover:translate-x-0.5 data-active:bg-transparent"
                 isActive={location.pathname === item.url}
                 render={<Link to={item.url} viewTransition />}
               >
@@ -101,11 +102,13 @@ export function NavMain({
                      élément à l'autre au lieu de clignoter d'un écran à l'autre. */
                   <motion.span
                     layoutId="sidebar-active-indicator"
-                    className="absolute inset-0 -z-10 rounded-md bg-sidebar-accent"
-                    transition={{ type: "spring", stiffness: 380, damping: 32 }}
+                    className="edge-3d absolute inset-0 -z-10 rounded-md bg-sidebar-accent"
+                    transition={SPRING.snappy}
                   />
                 )}
-                {item.icon && <item.icon />}
+                {item.icon && (
+                  <item.icon className="transition-transform duration-150 ease-out group-hover/nav:scale-110" />
+                )}
                 <span>{item.title}</span>
               </SidebarMenuButton>
             )}

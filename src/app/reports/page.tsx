@@ -24,6 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { MotionCard } from "@/components/ui/motion"
 import { useApi } from "@/lib/api"
 import { useAccess } from "@/lib/permissions"
 import type { ChartConfig } from "@/components/ui/chart"
@@ -489,10 +490,7 @@ function MetricCard({
   index?: number
 }) {
   return (
-    <Card
-      className="row-in transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
-      style={{ "--row": index } as React.CSSProperties}
-    >
+    <MotionCard index={index} aria-busy={loading || undefined}>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardDescription>{title}</CardDescription>
         {icon}
@@ -510,7 +508,7 @@ function MetricCard({
           </>
         )}
       </CardContent>
-    </Card>
+    </MotionCard>
   )
 }
 

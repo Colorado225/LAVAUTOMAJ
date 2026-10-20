@@ -325,7 +325,7 @@ export default function WashesPage() {
         )}
 
         {formOpen && (
-          <section className="rounded-lg border bg-card p-4 shadow-sm md:p-6">
+          <section className="elev-1 rounded-lg border bg-card p-4 md:p-6">
             <div className="mb-5 flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">Nouveau lavage</h2>

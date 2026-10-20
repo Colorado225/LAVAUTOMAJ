@@ -31,7 +31,7 @@ export function TrialBanner({ className }: { className?: string }) {
     return (
       <div
         className={cn(
-          "row-in flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between",
+          "row-in glow-danger glow-static flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between",
           className,
         )}
         role="status"
@@ -66,7 +66,7 @@ export function TrialBanner({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "row-in flex flex-col gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between",
+        "row-in glow-warning glow-static flex flex-col gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between",
         className,
       )}
       role="status"

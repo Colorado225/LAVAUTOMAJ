@@ -26,6 +26,15 @@ import {
 } from 'recharts'
 
 import { BaseLayout } from '@/components/layouts/base-layout'
+import {
+  ElevatedCard,
+  Pressable,
+  Stagger,
+  StaggerItem,
+  Surface,
+} from '@/components/ui/motion'
+import { SPRING } from '@/lib/motion'
+import { motion } from 'framer-motion'
 import { DashboardMetrics } from '@/components/dashboard-metrics'
 import { useOnboardingStatus } from '@/lib/onboarding-api'
 import { useApi } from '@/lib/api'
@@ -142,9 +151,11 @@ function SummaryCard({
   trend?: number[]
 }) {
   return (
-    <div
-      className="group row-in rounded-2xl border bg-card p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
-      style={{ '--row': index } as React.CSSProperties}
+    <ElevatedCard
+      index={index}
+      readOnly
+      className="group p-5"
+      aria-busy={loading || undefined}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -157,22 +168,29 @@ function SummaryCard({
             </p>
           )}
         </div>
-        <div className="rounded-xl border bg-muted/50 p-3 transition-colors group-hover:bg-muted">
+        {/* L'icône se détache de la carte au survol : elle avance d'un cran
+            dans la hiérarchie de profondeur, le reste du contenu ne bouge pas. */}
+        <motion.div
+          className="edge-3d rounded-xl bg-muted/50 p-3"
+          whileHover={{ scale: 1.06 }}
+          transition={SPRING.snappy}
+        >
           <Icon className="size-5 text-muted-foreground" aria-hidden="true" />
-        </div>
+        </motion.div>
       </div>
       <div className="mt-3 flex items-end justify-between gap-3">
         <p className="text-xs leading-relaxed text-muted-foreground">
           {description}
         </p>
-        {/* Tendance de la période : apparaît au survol, sans bousculer la mise en page. */}
+        {/* Tendance de la période : apparaît au survol, sans bousculer la mise
+            en page — la hauteur est réservée, seule l'opacité varie. */}
         {!loading && trend && trend.length > 1 && (
-          <span className="shrink-0 text-primary opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+          <span className="shrink-0 translate-y-1 text-primary opacity-0 transition-all duration-150 ease-out group-hover:translate-y-0 group-hover:opacity-100">
             <Sparkline values={trend} />
           </span>
         )}
       </div>
-    </div>
+    </ElevatedCard>
   )
 }
 
@@ -188,22 +206,26 @@ function QuickAction({
   href: string
 }) {
   return (
-    <Link
-      to={href}
-      viewTransition
-      className="group flex items-center gap-3 rounded-xl border p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:bg-muted/40 hover:shadow-sm"
-    >
-      <span className="rounded-xl bg-primary/10 p-3 text-primary transition-transform duration-200 group-hover:scale-105">
-        <Icon className="size-5" aria-hidden="true" />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm font-semibold">{title}</span>
-        <span className="mt-1 block text-xs text-muted-foreground">
-          {description}
-        </span>
-      </span>
-      <Plus className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-    </Link>
+    <StaggerItem className="h-full">
+      <Pressable className="h-full">
+        <Link
+          to={href}
+          viewTransition
+          className="surface-3d glow-primary group flex h-full items-center gap-3 rounded-xl border bg-card p-4 hover:border-primary/40"
+        >
+          <span className="edge-3d rounded-xl bg-primary/10 p-3 text-primary transition-transform duration-150 ease-out group-hover:scale-110">
+            <Icon className="size-5" aria-hidden="true" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold">{title}</span>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {description}
+            </span>
+          </span>
+          <Plus className="size-4 text-muted-foreground transition-transform duration-150 ease-out group-hover:translate-x-0.5" />
+        </Link>
+      </Pressable>
+    </StaggerItem>
   )
 }
 
@@ -363,7 +385,7 @@ export default function DashboardPage() {
         </section>
 
         {/* Period selector */}
-        <section className="flex flex-col justify-between gap-3 rounded-2xl border bg-card p-4 sm:flex-row sm:items-center">
+        <section className="elev-1 flex flex-col justify-between gap-3 rounded-2xl border bg-card p-4 sm:flex-row sm:items-center">
           <div className="flex items-center gap-3">
             <span className="rounded-xl bg-muted p-2.5">
               <CalendarDays className="size-5" />
@@ -479,7 +501,7 @@ export default function DashboardPage() {
 
         {/* Activity panels */}
         <section className="grid gap-4 xl:grid-cols-3">
-          <div className="rounded-2xl border bg-card p-5 xl:col-span-2">
+          <Surface elevation={1} className="p-5 xl:col-span-2">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="font-semibold">Évolution des recettes</h2>
@@ -569,9 +591,9 @@ export default function DashboardPage() {
                 </p>
               </div>
             )}
-          </div>
+          </Surface>
 
-          <div className="rounded-2xl border bg-card p-5">
+          <Surface elevation={1} className="p-5">
             <div className="flex items-center gap-2">
               <Activity className="size-5 text-muted-foreground" />
               <h2 className="font-semibold">État de la station</h2>
@@ -629,7 +651,7 @@ export default function DashboardPage() {
                 </div>
               </div>
             </div>
-          </div>
+          </Surface>
         </section>
 
         {/* Quick actions */}
@@ -643,7 +665,7 @@ export default function DashboardPage() {
             </p>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <Stagger className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" inView>
             {/* Chaque raccourci pointe vers l'élément correspondant du sidebar */}
             <QuickAction
               icon={CarFront}
@@ -669,12 +691,12 @@ export default function DashboardPage() {
               description="Analyser les résultats"
               href="/reports"
             />
-          </div>
+          </Stagger>
         </section>
 
         {/* Subscription */}
         {plan && (
-          <section className="flex flex-col justify-between gap-4 rounded-2xl border bg-muted/20 p-5 sm:flex-row sm:items-center">
+          <section className="elev-1 flex flex-col justify-between gap-4 rounded-2xl border bg-muted/20 p-5 sm:flex-row sm:items-center">
             <div>
               <p className="font-semibold">Votre abonnement WashPilot CI</p>
               <p className="mt-1 text-sm text-muted-foreground">

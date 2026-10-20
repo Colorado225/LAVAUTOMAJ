@@ -94,8 +94,10 @@ export function PlanStep({ progress, onDone, onQuit }: OnboardingWizardProps) {
               onClick={() => setSelectedCode(p.code)}
               style={{ "--row": index } as React.CSSProperties}
               className={cn(
-                "flex h-full w-full flex-col gap-3 rounded-lg border p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:bg-muted/50 hover:shadow-md",
-                selectedCode === p.code && "border-primary bg-primary/5 shadow-sm"
+                "surface-3d surface-press flex h-full w-full flex-col gap-3 rounded-lg border bg-card p-4 text-left hover:bg-muted/50",
+                // Le forfait retenu garde une lueur permanente : son état doit
+                // rester lisible quand le curseur est ailleurs.
+                selectedCode === p.code && "glow-primary glow-static border-primary bg-primary/5"
               )}
               aria-pressed={selectedCode === p.code}
             >
