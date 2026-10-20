@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Activity,
@@ -15,6 +15,15 @@ import {
   Download,
   ArrowUpRight,
 } from 'lucide-react'
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
 import { BaseLayout } from '@/components/layouts/base-layout'
 import { DashboardMetrics } from '@/components/dashboard-metrics'
@@ -31,17 +40,78 @@ type DashboardSummary = {
   plan: Plan | null
 }
 
+/** Réponse de GET /api/v1/reports/summary (montants en centimes XOF). */
+type ReportsSummary = {
+  period: { from: string; to: string }
+  summary: {
+    total_washes: number
+    completed_washes: number
+    paid_washes: number
+    revenue_cents: number
+    expenses_cents: number
+    net_cents: number
+  }
+  daily: Array<{
+    date: string
+    wash_count: number
+    revenue_cents: number
+    expenses_cents: number
+  }>
+}
+
+type CashSession = {
+  id: string
+  status: 'open' | 'closed'
+  opened_at: string
+  opening_amount_cents: number
+  theoretical_balance_cents: number
+}
+
 const PERIOD_LABELS: Record<Period, string> = {
   today: "Aujourd'hui",
   '7days': '7 derniers jours',
   '30days': '30 derniers jours',
 }
 
-function formatFCFA(value: number | null | undefined) {
+/** Nombre de jours couverts par la période, aujourd'hui inclus. */
+const PERIOD_DAYS: Record<Period, number> = {
+  today: 1,
+  '7days': 7,
+  '30days': 30,
+}
+
+/** Date locale au format AAAA-MM-JJ attendu par l'API (évite le décalage UTC). */
+function toApiDate(date: Date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 10)
+}
+
+function periodRange(period: Period) {
+  const today = new Date()
+  const start = new Date(today)
+  start.setDate(start.getDate() - (PERIOD_DAYS[period] - 1))
+  return { from: toApiDate(start), to: toApiDate(today) }
+}
+
+/** Les montants API sont en centimes : conversion + mise en forme FCFA. */
+function formatFCFA(cents: number | null | undefined) {
+  if (cents == null || !Number.isFinite(cents)) return '—'
+  return (
+    new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 }).format(
+      Math.round(cents / 100)
+    ) + ' FCFA'
+  )
+}
+
+function formatCount(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return '—'
-  return new Intl.NumberFormat('fr-FR', {
-    maximumFractionDigits: 0,
-  }).format(value) + ' FCFA'
+  return new Intl.NumberFormat('fr-FR').format(value)
+}
+
+function formatDayLabel(isoDate: string) {
+  const parsed = new Date(`${isoDate}T00:00:00`)
+  if (Number.isNaN(parsed.getTime())) return isoDate
+  return parsed.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })
 }
 
 function SummaryCard({
@@ -119,15 +189,31 @@ function QuickAction({
 export default function DashboardPage() {
   const [period, setPeriod] = useState<Period>('today')
   const [refreshKey, setRefreshKey] = useState(0)
-  const [refreshing, setRefreshing] = useState(false)
 
   const { data: status, loading: statusLoading } = useOnboardingStatus()
   const { data: summary, loading: summaryLoading } = useApi<DashboardSummary>(
     `/api/v1/onboarding/summary?refresh=${refreshKey}`
   )
 
+  // Indicateurs financiers calculés par l'API sur la période sélectionnée.
+  const range = useMemo(() => periodRange(period), [period])
+  const {
+    data: report,
+    loading: reportLoading,
+    error: reportError,
+  } = useApi<ReportsSummary>(
+    `/api/v1/reports/summary?from=${range.from}&to=${range.to}&refresh=${refreshKey}`
+  )
+
+  // État de la caisse de la station (session ouverte ou non).
+  const { data: cashSession, loading: cashSessionLoading } =
+    useApi<CashSession | null>(`/api/v1/cash-sessions/current?refresh=${refreshKey}`)
+
   const station = status?.station
   const plan = summary?.plan
+  const totals = report?.summary ?? null
+  // Le bouton « Actualiser » tourne tant qu'une requête du tableau de bord est en vol.
+  const refreshing = summaryLoading || reportLoading
 
   const stationName =
     station?.name ?? status?.org_name ?? 'Votre station de lavage'
@@ -137,17 +223,50 @@ export default function DashboardPage() {
     station?.city,
   ].filter(Boolean).join(', ')
 
-  // Actualise toutes les données du dashboard : ré-instances les métriques
-  // (DashboardMetrics est remonté via key) et re-télécharge le résumé API.
+  // Série quotidienne du graphique : montants convertis en FCFA.
+  const revenueSeries = useMemo(
+    () =>
+      (report?.daily ?? []).map((day) => ({
+        date: day.date,
+        label: formatDayLabel(day.date),
+        revenue: Math.round(day.revenue_cents / 100),
+        expenses: Math.round(day.expenses_cents / 100),
+        washes: day.wash_count,
+      })),
+    [report]
+  )
+  const hasRevenueData = revenueSeries.some(
+    (day) => day.revenue > 0 || day.expenses > 0 || day.washes > 0
+  )
+
+  // Actualise toutes les données du dashboard : ré-instancie les métriques
+  // (DashboardMetrics est remonté via key) et re-télécharge les résumés API.
   function handleRefresh() {
-    setRefreshing(true)
     setRefreshKey((key) => key + 1)
   }
 
-  // Le spinner s'arrête dès que le rechargement est terminé.
-  useEffect(() => {
-    if (!summaryLoading) setRefreshing(false)
-  }, [summaryLoading])
+  /** Export CSV de la série quotidienne affichée (montants en FCFA). */
+  function handleExport() {
+    if (revenueSeries.length === 0) return
+    const rows = [
+      ['Date', 'Lavages', 'Recettes (FCFA)', 'Dépenses (FCFA)'],
+      ...revenueSeries.map((day) => [
+        day.date,
+        String(day.washes),
+        String(day.revenue),
+        String(day.expenses),
+      ]),
+    ]
+    const csv = rows.map((row) => row.join(';')).join('\n')
+    const url = URL.createObjectURL(
+      new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' })
+    )
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `washpilot-recettes-${range.from}_${range.to}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <BaseLayout
@@ -222,7 +341,7 @@ export default function DashboardPage() {
             <div>
               <p className="text-sm font-semibold">Période d'analyse</p>
               <p className="text-xs text-muted-foreground">
-                Sélectionnez la période à examiner
+                Du {formatDayLabel(range.from)} au {formatDayLabel(range.to)}
               </p>
             </div>
           </div>
@@ -267,39 +386,51 @@ export default function DashboardPage() {
               Finances et activité
             </h2>
             <p className="text-sm text-muted-foreground">
-              Connectez ces indicateurs au résumé API pour afficher les valeurs
-              calculées sur la période sélectionnée.
+              Calculé par l'API sur la période sélectionnée ({PERIOD_LABELS[period].toLowerCase()}).
             </p>
           </div>
+
+          {reportError && (
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+            >
+              Impossible de charger les indicateurs financiers : {reportError}
+            </p>
+          )}
 
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <SummaryCard
               title="Recettes encaissées"
-              value={formatFCFA(null)}
+              value={formatFCFA(totals?.revenue_cents)}
               description="Paiements confirmés, hors opérations annulées."
               icon={Wallet}
-              loading={summaryLoading}
+              loading={reportLoading}
             />
             <SummaryCard
               title="Lavages réalisés"
-              value="—"
-              description="Nombre de lavages terminés sur la période."
+              value={formatCount(totals?.completed_washes)}
+              description={
+                totals
+                  ? `${formatCount(totals.total_washes)} lavage${totals.total_washes === 1 ? '' : 's'} enregistré${totals.total_washes === 1 ? '' : 's'} au total sur la période.`
+                  : 'Nombre de lavages terminés sur la période.'
+              }
               icon={CarFront}
-              loading={summaryLoading}
+              loading={reportLoading}
             />
             <SummaryCard
               title="Dépenses enregistrées"
-              value={formatFCFA(null)}
+              value={formatFCFA(totals?.expenses_cents)}
               description="Sorties enregistrées dans le module des dépenses."
               icon={Receipt}
-              loading={summaryLoading}
+              loading={reportLoading}
             />
             <SummaryCard
               title="Solde opérationnel estimé"
-              value={formatFCFA(null)}
+              value={formatFCFA(totals?.net_cents)}
               description="Recettes moins dépenses enregistrées. Ce n'est pas un bénéfice comptable."
               icon={ChartNoAxesCombined}
-              loading={summaryLoading}
+              loading={reportLoading}
             />
           </div>
         </section>
@@ -311,23 +442,82 @@ export default function DashboardPage() {
               <div>
                 <h2 className="font-semibold">Évolution des recettes</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Visualisez les tendances de votre station.
+                  Recettes et dépenses jour par jour, en FCFA.
                 </p>
               </div>
-              <Button variant="outline" size="sm" className="gap-2" disabled>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={handleExport}
+                disabled={revenueSeries.length === 0}
+              >
                 <Download className="size-4" />
                 Exporter
               </Button>
             </div>
 
-            <div className="mt-6 flex min-h-52 flex-col items-center justify-center rounded-xl border border-dashed bg-muted/20 p-6 text-center">
-              <ChartNoAxesCombined className="size-9 text-muted-foreground" />
-              <p className="mt-3 font-medium">Votre graphique de recettes</p>
-              <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-                Le graphique apparaîtra lorsque l'API fournira les recettes
-                agrégées par jour. Aucun montant fictif n'est affiché.
-              </p>
-            </div>
+            {reportLoading ? (
+              <Skeleton className="mt-6 h-52 w-full rounded-xl" />
+            ) : hasRevenueData ? (
+              <div className="mt-6 h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={revenueSeries} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                    <defs>
+                      <linearGradient id="dashboard-revenue" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="dashboard-expenses" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#f97316" stopOpacity={0.28} />
+                        <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                    <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={12} />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      fontSize={12}
+                      width={70}
+                      tickFormatter={(value: number) =>
+                        new Intl.NumberFormat('fr-FR', { notation: 'compact' }).format(value)
+                      }
+                    />
+                    <Tooltip
+                      formatter={(value, name) => [
+                        `${new Intl.NumberFormat('fr-FR').format(Number(value))} FCFA`,
+                        name === 'revenue' ? 'Recettes' : 'Dépenses',
+                      ]}
+                      labelFormatter={(label) => `Journée du ${label}`}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="revenue"
+                      stroke="#3b82f6"
+                      strokeWidth={2}
+                      fill="url(#dashboard-revenue)"
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="expenses"
+                      stroke="#f97316"
+                      strokeWidth={2}
+                      fill="url(#dashboard-expenses)"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="mt-6 flex min-h-52 flex-col items-center justify-center rounded-xl border border-dashed bg-muted/20 p-6 text-center">
+                <ChartNoAxesCombined className="size-9 text-muted-foreground" />
+                <p className="mt-3 font-medium">Aucune opération sur la période</p>
+                <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                  Enregistrez des lavages ou des dépenses : la courbe se construit
+                  automatiquement à partir de vos données réelles.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="rounded-2xl border bg-card p-5">
@@ -344,10 +534,20 @@ export default function DashboardPage() {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">Session de caisse</p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Vérifiez si une caisse est ouverte avant les encaissements.
+                    {cashSessionLoading
+                      ? 'Vérification en cours…'
+                      : cashSession
+                        ? `Solde théorique ${formatFCFA(cashSession.theoretical_balance_cents)}.`
+                        : 'Aucune caisse ouverte : ouvrez-en une avant les encaissements.'}
                   </p>
                 </div>
-                <Badge variant="outline">À vérifier</Badge>
+                {cashSessionLoading ? (
+                  <Skeleton className="h-5 w-16" />
+                ) : (
+                  <Badge variant={cashSession ? 'secondary' : 'outline'}>
+                    {cashSession ? 'Ouverte' : 'Fermée'}
+                  </Badge>
+                )}
               </div>
 
               <div className="flex items-start gap-3">
@@ -357,7 +557,11 @@ export default function DashboardPage() {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">Activité récente</p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    L'historique sera affiché à partir des lavages enregistrés.
+                    {reportLoading
+                      ? 'Chargement des opérations…'
+                      : totals
+                        ? `${formatCount(totals.total_washes)} lavage${totals.total_washes === 1 ? '' : 's'} et ${formatCount(totals.paid_washes)} encaissement${totals.paid_washes === 1 ? '' : 's'} sur la période.`
+                        : "L'historique sera affiché à partir des lavages enregistrés."}
                   </p>
                 </div>
               </div>

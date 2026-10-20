@@ -36,6 +36,9 @@ export function RootLayout() {
   const { isLoaded, isSignedIn } = useAuth()
   const isPublicLandingRoute = location.pathname === "/" || location.pathname === "/landing"
   const isAuthRoute = location.pathname.startsWith("/auth/")
+  // Un lien de réinitialisation reste utilisable même avec une session active :
+  // sa validation révoque justement toutes les sessions ouvertes.
+  const isPasswordResetRoute = location.pathname === "/auth/reset-password"
 
   if (!isLoaded) return <AuthLoading />
 
@@ -47,7 +50,7 @@ export function RootLayout() {
   }
 
   if (isAuthRoute) {
-    if (isSignedIn) {
+    if (isSignedIn && !isPasswordResetRoute) {
       return <Navigate to="/dashboard" replace />
     }
     return <>

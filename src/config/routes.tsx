@@ -39,6 +39,10 @@ export const routes: RouteObject[] = [
     path: "/auth/forgot-password",
     lazy: page(() => import("@/app/auth/forgot-password/page")),
   },
+  {
+    path: "/auth/reset-password",
+    lazy: page(() => import("@/app/auth/reset-password/page")),
+  },
   // Error Pages
   {
     path: "/errors/unauthorized",

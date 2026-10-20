@@ -44,10 +44,19 @@ Variables d'environnement (voir [`.env.example`](.env.example)) :
 
 - `DATABASE_URL` — connexion Neon/PostgreSQL. **Obligatoire en production.**
 - `CORS_ORIGINS` — origines frontend autorisées (séparées par des virgules).
+- `APP_URL` — URL publique utilisée pour construire les liens envoyés par e-mail.
+- `PASSWORD_RESET_TTL_MINUTES` — validité d'un lien de réinitialisation (défaut `60`).
+- `RESEND_API_KEY` / `MAIL_FROM` — envoi des e-mails transactionnels via Resend.
 
 > L'authentification ne dépend d'aucun service externe : les comptes (mot de passe
 > haché scrypt) et les sessions (cookies httpOnly, table `auth_sessions`) vivent
 > dans la base PostgreSQL/Neon.
+
+> **Mot de passe oublié.** `POST /auth/forgot-password` crée un jeton à usage unique
+> (seul son SHA-256 est stocké dans `password_reset_tokens`) et envoie le lien par
+> e-mail. Sans `RESEND_API_KEY`, le lien est journalisé côté serveur ; **hors
+> production uniquement**, il est aussi renvoyé dans la réponse pour faciliter les
+> tests. La réponse est toujours identique, qu'un compte existe ou non.
 
 ## Architecture
 
@@ -58,7 +67,9 @@ server/
   db.ts              # Pool pg + schéma SQL idempotent (CREATE/ALTER IF NOT EXISTS)
   auth.ts            # Hachage scrypt, sessions cookie httpOnly, middleware requireSession
   tenant.ts          # Résolution du tenant (organisation + rôle) de l'utilisateur
-  auth-router.ts     # /auth/register, /auth/login, /auth/logout, /auth/me, /auth/profile, /auth/password
+  auth-router.ts     # /auth/register, /auth/login, /auth/logout, /auth/me, /auth/profile,
+                     # /auth/password, /auth/forgot-password, /auth/reset-password
+  mailer.ts          # E-mails transactionnels (Resend via fetch, journalisation sinon)
   onboarding.ts      # Assistant : status, progress, summary, confirm, plans, catalogue
   api.ts             # CRUD sites, services, catégories + lavages (création idempotente, annulation)
   operations.ts      # Sessions de caisse, mouvements, clôture, dépenses

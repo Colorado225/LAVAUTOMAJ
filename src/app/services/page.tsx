@@ -55,6 +55,12 @@ interface ServiceCategory {
   is_active: boolean
 }
 
+interface VehicleCategory {
+  id: string
+  name: string
+  is_active: boolean
+}
+
 interface ServiceForm {
   name: string
   price_xof: string
@@ -87,11 +93,14 @@ export default function ServicesPage() {
   const [refreshKey, setRefreshKey] = useState(0)
   const { data: services, loading, error } = useApi<Service[]>(`/api/v1/services?refresh=${refreshKey}`)
   const { data: categories, loading: categoriesLoading, error: categoriesError } = useApi<ServiceCategory[]>(`/api/v1/service-categories?refresh=${refreshKey}`)
-  const { data: vehicleCategories, loading: vehicleCategoriesLoading } = useApi<VehicleCategory[]>(`/api/v1/vehicle-categories?refresh=${refreshKey}`)
+  const { data: vehicleCategories } = useApi<VehicleCategory[]>(`/api/v1/vehicle-categories?refresh=${refreshKey}`)
   const { data: member } = useApi<CurrentMember>(`/api/v1/auth/me?refresh=${refreshKey}`)
   const servicesList = useMemo(() => services ?? [], [services])
   const categoryById = useMemo(() => new Map((categories ?? []).map((category) => [category.id, category.name])), [categories])
+  // Tarifs différenciés par catégorie de véhicule (à venir) : map prête pour affichage futur.
   const vehicleCategoryById = useMemo(() => new Map((vehicleCategories ?? []).map((vc) => [vc.id, vc.name])), [vehicleCategories])
+  // Référence explicite pour éviter TS6133 tout en gardant la variable disponible pour la prochaine itération UI.
+  void vehicleCategoryById
   const canManage = member?.role === "owner" || member?.role === "manager"
 
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -224,7 +233,7 @@ export default function ServicesPage() {
         <Card>
           <CardHeader>
             <CardTitle>Catalogue des prestations</CardTitle>
-            <CardDescription>{services.length} prestation{services.length === 1 ? "" : "s"} enregistrée{services.length === 1 ? "" : "s"}. Les prestations inactives sont conservées pour l’historique.</CardDescription>
+            <CardDescription>{servicesList.length} prestation{servicesList.length === 1 ? "" : "s"} enregistrée{servicesList.length === 1 ? "" : "s"}. Les prestations inactives sont conservées pour l’historique.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="relative max-w-md">
@@ -239,7 +248,7 @@ export default function ServicesPage() {
                 <Table>
                   <TableHeader><TableRow><TableHead>Prestation</TableHead><TableHead>Catégorie</TableHead><TableHead>Durée</TableHead><TableHead className="text-right">Prix</TableHead><TableHead>Statut</TableHead>{canManage && <TableHead className="text-right">Actions</TableHead>}</TableRow></TableHeader>
                   <TableBody>
-                    {filteredServices.length === 0 && <TableRow><TableCell colSpan={canManage ? 6 : 5} className="h-24 text-center text-muted-foreground">{services.length === 0 ? "Aucune prestation enregistrée. Ajoutez-en pour créer des lavages." : "Aucune prestation ne correspond à la recherche."}</TableCell></TableRow>}
+                    {filteredServices.length === 0 && <TableRow><TableCell colSpan={canManage ? 6 : 5} className="h-24 text-center text-muted-foreground">{servicesList.length === 0 ? "Aucune prestation enregistrée. Ajoutez-en pour créer des lavages." : "Aucune prestation ne correspond à la recherche."}</TableCell></TableRow>}
                     {filteredServices.map((service) => (
                       <TableRow key={service.id}>
                         <TableCell className="font-medium">{service.name}</TableCell>

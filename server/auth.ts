@@ -74,6 +74,69 @@ export async function destroySession(pool: pg.Pool, token: string): Promise<void
   await pool.query("DELETE FROM auth_sessions WHERE token_hash = $1", [hashSessionToken(token)])
 }
 
+// ---------------------------------------------------------------------------
+// Password reset tokens (single-use, short-lived; only the SHA-256 is stored)
+// ---------------------------------------------------------------------------
+
+function hashResetToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex")
+}
+
+/**
+ * Crée un jeton de réinitialisation à usage unique et invalide les jetons
+ * encore actifs de l'utilisateur (un seul lien valide à la fois).
+ */
+export async function createPasswordResetToken(
+  pool: pg.Pool,
+  userId: string,
+  ttlMinutes: number,
+  requestedIp?: string | null,
+): Promise<string> {
+  const token = randomBytes(32).toString("base64url")
+  await pool.query(
+    "UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL",
+    [userId],
+  )
+  await pool.query(
+    `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip)
+     VALUES ($1, $2, NOW() + make_interval(mins => $3), $4)`,
+    [userId, hashResetToken(token), ttlMinutes, requestedIp ?? null],
+  )
+  return token
+}
+
+/**
+ * Consomme un jeton de réinitialisation : l'opération est atomique, un jeton
+ * expiré ou déjà utilisé renvoie null (aucun indice sur la cause).
+ */
+export async function consumePasswordResetToken(
+  pool: pg.Pool,
+  token: string,
+): Promise<string | null> {
+  if (!token) return null
+  const q = await pool.query(
+    `UPDATE password_reset_tokens
+     SET used_at = NOW()
+     WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+     RETURNING user_id`,
+    [hashResetToken(token)],
+  )
+  const row = q.rows[0] as { user_id: string } | undefined
+  return row?.user_id ?? null
+}
+
+/** Vérifie qu'un jeton est encore exploitable sans le consommer (pré-affichage du formulaire). */
+export async function isPasswordResetTokenValid(pool: pg.Pool, token: string): Promise<boolean> {
+  if (!token) return false
+  const q = await pool.query(
+    `SELECT 1 FROM password_reset_tokens
+     WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+     LIMIT 1`,
+    [hashResetToken(token)],
+  )
+  return Boolean(q.rowCount)
+}
+
 /** The preview/production proxy serves HTTPS: cross-site iframes then require SameSite=None; Secure. */
 function cookieSecurity(req: Request): { secure: boolean; sameSite: "none" | "lax" } {
   const secure = req.secure || req.get("x-forwarded-proto") === "https"
