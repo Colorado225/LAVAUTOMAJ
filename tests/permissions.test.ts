@@ -13,6 +13,7 @@ import {
   isRole,
   deniedMessage,
   type Permission,
+  type Role,
 } from "../server/permissions.ts"
 import { requirePermission, assertPermission } from "../server/http.ts"
 import { HttpError } from "../server/auth.ts"
@@ -27,7 +28,7 @@ test("le propriétaire détient toutes les permissions", () => {
   }
 })
 
-test("le gérant gère l'opérationnel mais pas les tarifs, les finances ni les utilisateurs", () => {
+test("le gérant gère l'opérationnel et les dépenses, mais ne corrige ni les tarifs, ni les écritures, ni les utilisateurs", () => {
   // Autorisé
   for (const permission of [
     "wash:create",
@@ -39,6 +40,10 @@ test("le gérant gère l'opérationnel mais pas les tarifs, les finances ni les 
     "service:read",
     "worker:create",
     "report:operational",
+    // Supervision des sorties d'argent : le gérant voit et enregistre.
+    "expense:read",
+    "expense:create",
+    "report:financial",
   ] as Permission[]) {
     assert.equal(hasPermission("manager", permission), true, `manager devrait avoir ${permission}`)
   }
@@ -47,8 +52,10 @@ test("le gérant gère l'opérationnel mais pas les tarifs, les finances ni les 
     "service:manage",
     "wash:cancel",
     "payment:cancel",
-    "expense:create",
-    "report:financial",
+    // La frontière qui compte : enregistrer une dépense se délègue,
+    // la modifier ou la supprimer non.
+    "expense:manage",
+    "report:export",
     "worker:delete",
     "user:manage",
     "settings:manage",
@@ -101,10 +108,13 @@ test("seuls les quatre rôles prévus sont reconnus", () => {
 // ---------------------------------------------------------------------------
 
 test("le propriétaire peut accorder une permission à titre exceptionnel", () => {
-  const permissions = effectivePermissions("manager", [{ permission: "expense:create", granted: true }])
-  assert.equal(permissions.has("expense:create"), true)
+  // `report:export` et non `expense:create` : depuis que le gérant détient
+  // les dépenses par son rôle, s'en servir ici ne prouverait plus rien —
+  // le test passerait sans que le mécanisme d'exception soit sollicité.
+  const permissions = effectivePermissions("manager", [{ permission: "report:export", granted: true }])
+  assert.equal(permissions.has("report:export"), true)
   // L'exception ne déborde pas sur les autres droits du même domaine.
-  assert.equal(permissions.has("expense:manage"), false)
+  assert.equal(permissions.has("data:export"), false)
 })
 
 test("le propriétaire peut retirer une permission venant du rôle", () => {
@@ -186,7 +196,10 @@ test("une requête interdite reçoit 403, même venant d'un appel direct à l'AP
 
 test("le middleware exige toutes les permissions demandées", () => {
   let captured: unknown = "non-appelé"
-  requirePermission("wash:read", "report:financial")(fakeRequest("manager"), {} as never, ((e?: unknown) => {
+  // Le gérant détient `wash:read` mais pas `expense:manage` : la paire reste
+  // dissymétrique, ce qui est tout l'objet du test. (`report:financial` ne
+  // convient plus, le gérant l'a obtenu avec la supervision des dépenses.)
+  requirePermission("wash:read", "expense:manage")(fakeRequest("manager"), {} as never, ((e?: unknown) => {
     captured = e ?? null
   }) as never)
   assert.ok(captured instanceof HttpError)
@@ -204,4 +217,86 @@ test("assertPermission lève la même erreur depuis un gestionnaire", () => {
 test("le message de refus nomme l'action refusée", () => {
   assert.match(deniedMessage("service:manage"), /prestations/i)
   assert.match(deniedMessage("report:financial"), /financiers/i)
+})
+
+// ---------------------------------------------------------------------------
+// Matrice figée
+// ---------------------------------------------------------------------------
+
+/**
+ * Empreinte exacte de chaque rôle.
+ *
+ * Les tests ci-dessus vérifient des permissions choisies une à une : ils
+ * disent ce qui doit être vrai, pas ce qui ne doit pas apparaître. Une
+ * permission ajoutée par mégarde à un rôle passerait donc inaperçue.
+ *
+ * Ce test ferme cette porte. Le faire échouer n'est pas un incident : c'est
+ * le signal qu'un droit change de main, ce qui se décide et se consigne dans
+ * RBAC-PERMISSIONS.md avant de modifier cette liste.
+ */
+const EXPECTED_MATRIX: Record<Exclude<Role, "owner">, readonly Permission[]> = {
+  manager: [
+    "audit:read",
+    "cash_session:manage",
+    "cash_session:read",
+    "dashboard:read",
+    "expense:create",
+    "expense:read",
+    "payment:create",
+    "payment:read",
+    "payment:verify",
+    "report:financial",
+    "report:operational",
+    "service:read",
+    "wash:create",
+    "wash:read",
+    "wash:update",
+    "worker:create",
+    "worker:read",
+    "worker:update",
+  ],
+  cashier: [
+    "cash_session:manage",
+    "cash_session:read",
+    "dashboard:read",
+    "expense:create",
+    "expense:read",
+    "payment:create",
+    "payment:read",
+    "report:operational",
+    "service:read",
+    "wash:create",
+    "wash:read",
+    "worker:read",
+  ],
+  washer: ["service:read", "wash:read"],
+}
+
+test("la matrice des rôles est exactement celle qui a été décidée", () => {
+  for (const [role, expected] of Object.entries(EXPECTED_MATRIX)) {
+    assert.deepEqual(
+      [...rolePermissions(role)].sort(),
+      [...expected].sort(),
+      `la matrice du rôle « ${role} » a changé — consigner la décision dans RBAC-PERMISSIONS.md avant de modifier ce test`,
+    )
+  }
+  // Le propriétaire détient tout, par définition : le vérifier évite qu'une
+  // nouvelle permission soit introduite sans que personne ne puisse l'exercer.
+  assert.deepEqual([...rolePermissions("owner")].sort(), [...PERMISSIONS].sort())
+})
+
+test("aucun rôle subordonné ne voit plus de dépenses que son supérieur", () => {
+  // L'anomalie qui a motivé la migration : le caissier enregistrait des
+  // sorties d'argent que son responsable direct ne pouvait pas consulter.
+  for (const permission of ["expense:read", "expense:create"] as Permission[]) {
+    assert.equal(
+      hasPermission("manager", permission) || !hasPermission("cashier", permission),
+      true,
+      `le caissier détient ${permission} sans que le gérant l'ait : la hiérarchie de supervision est inversée`,
+    )
+  }
+  // Et la réécriture reste hors de portée des deux.
+  for (const role of ["manager", "cashier"] as Role[]) {
+    assert.equal(hasPermission(role, "expense:manage"), false)
+  }
 })

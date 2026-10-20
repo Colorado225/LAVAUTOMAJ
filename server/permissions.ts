@@ -76,7 +76,8 @@ export const ROLE_LABELS: Record<Role, string> = {
 
 export const ROLE_DESCRIPTIONS: Record<Role, string> = {
   owner: "Accès complet : paramètres, tarifs, finances, utilisateurs et abonnement.",
-  manager: "Gestion opérationnelle : lavages, encaissements, caisse et laveurs.",
+  manager:
+    "Gestion opérationnelle : lavages, encaissements, caisse, laveurs, dépenses et marges. Ne modifie ni les tarifs, ni les dépenses enregistrées, ni les utilisateurs.",
   cashier: "Tenue de la caisse : lavages, encaissements et dépenses courantes.",
   washer: "Accès limité : consultation des lavages et des prestations.",
 }
@@ -102,6 +103,26 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "worker:update",
     "report:operational",
     "audit:read",
+    // Dépenses : voir et enregistrer, jamais corriger.
+    //
+    // Une dépense en espèces insère un mouvement de sortie dans la session de
+    // caisse ouverte. Comme le caissier ouvre et clôture lui-même cette
+    // session, il était jusqu'ici seul à justifier un tiroir dans lequel il
+    // puisait : la sortie se déduisait du montant attendu, l'écart à la
+    // clôture restait nul, et aucun échelon intermédiaire ne la voyait.
+    //
+    // `expense:create` est accordé pour une raison moins évidente que
+    // `expense:read` : sans elle, un gérant qui achète des consommables fait
+    // enregistrer la dépense par son caissier, qui en devient l'auteur
+    // apparent. Refuser la permission fabriquait un journal d'audit faux.
+    //
+    // `expense:manage` (modifier, supprimer) reste au propriétaire : on
+    // délègue l'enregistrement, jamais la réécriture.
+    "expense:read",
+    "expense:create",
+    // Le détail des dépenses sans leur total rendrait l'écran de rapports
+    // incohérent — retenir l'agrégat quand on donne la ligne ne protège rien.
+    "report:financial",
   ],
 
   cashier: [

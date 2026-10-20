@@ -137,9 +137,24 @@ test("le gérant peut enregistrer un lavage", async () => {
 
 // --- 5. Cloisonnement des données financières ------------------------------
 
-test("le gérant ne voit ni les dépenses ni la marge dans les rapports", async () => {
+test("le gérant voit les dépenses et la marge dans les rapports", async () => {
+  // Supervision des sorties d'argent : donner le détail des dépenses sans
+  // leur total n'aurait rien protégé, le gérant pouvant les additionner.
   const response = await api("/api/v1/reports/summary?from=2026-01-01&to=2026-12-31", {
     as: "gerant@washpilot.ci",
+  })
+  assert.equal(response.status, 200)
+  const report = await response.json()
+  assert.equal(report.financial_access, true)
+  assert.equal(typeof report.summary.expenses_cents, "number")
+  assert.equal(typeof report.summary.net_cents, "number")
+})
+
+test("le caissier voit son activité mais pas la marge de la station", async () => {
+  // Le cloisonnement financier n'a pas disparu, il s'est déplacé : c'est
+  // désormais le caissier qui marque la frontière, pas le gérant.
+  const response = await api("/api/v1/reports/summary?from=2026-01-01&to=2026-12-31", {
+    as: "caisse@washpilot.ci",
   })
   assert.equal(response.status, 200)
   const report = await response.json()
@@ -158,9 +173,35 @@ test("le propriétaire voit l'intégralité du rapport", async () => {
   assert.equal(typeof report.summary.net_cents, "number")
 })
 
-test("le gérant ne peut pas lire les dépenses de la station", async () => {
-  assert.equal((await api("/api/v1/expenses", { as: "gerant@washpilot.ci" })).status, 403)
-  assert.equal((await api("/api/v1/expenses", { as: "demo@washpilot.ci" })).status, 200)
+test("gérant et caissier enregistrent les dépenses mais ne les réécrivent pas", async () => {
+  // La frontière de la séparation des tâches : l'enregistrement se délègue,
+  // la correction et la suppression restent au propriétaire. Sans quoi la
+  // personne qui puise dans la caisse pourrait effacer la trace de sa sortie.
+  const anyId = "00000000-0000-4000-8000-000000000000"
+
+  for (const who of ["gerant@washpilot.ci", "caisse@washpilot.ci"]) {
+    assert.equal((await api("/api/v1/expenses", { as: who })).status, 200, `${who} doit lire les dépenses`)
+
+    // `requirePermission` tranche avant toute lecture en base : l'identifiant
+    // inexistant donnerait 404 si la permission passait.
+    for (const method of ["PATCH", "DELETE"] as const) {
+      const response = await api(`/api/v1/expenses/${anyId}`, {
+        as: who,
+        method,
+        body: method === "PATCH" ? { description: "tentative" } : undefined,
+      })
+      assert.equal(response.status, 403, `${who} ne doit pas pouvoir ${method} une dépense`)
+      assert.equal((await response.json()).error.code, "forbidden")
+    }
+  }
+
+  // Le propriétaire, lui, atteint bien la logique métier : 404 et non 403.
+  const owner = await api(`/api/v1/expenses/${anyId}`, {
+    as: "demo@washpilot.ci",
+    method: "PATCH",
+    body: { description: "correction" },
+  })
+  assert.equal(owner.status, 404)
 })
 
 test("l'agent de lavage ne voit ni les encaissements, ni la caisse, ni les rapports", async () => {
@@ -230,23 +271,54 @@ test("une permission accordée par le propriétaire prend effet immédiatement",
   const members = await (await api("/api/v1/access/members", { as: "demo@washpilot.ci" })).json()
   const manager = members.members.find((m: { role: string }) => m.role === "manager")
 
-  assert.equal((await api("/api/v1/expenses", { as: "gerant@washpilot.ci" })).status, 403)
+  // `data:export` et non `expense:read` : le gérant détient désormais les
+  // dépenses par son rôle, le test ne solliciterait donc plus le mécanisme
+  // d'exception qu'il est censé vérifier.
+  assert.equal((await api("/api/v1/backup/summary", { as: "gerant@washpilot.ci" })).status, 403)
 
-  const granted = await api(`/api/v1/access/members/${manager.user_id}/permissions/expense:read`, {
+  const granted = await api(`/api/v1/access/members/${manager.user_id}/permissions/data:export`, {
     as: "demo@washpilot.ci",
     method: "PUT",
     body: { granted: true },
   })
   assert.equal(granted.status, 200)
-  assert.equal((await api("/api/v1/expenses", { as: "gerant@washpilot.ci" })).status, 200)
+  assert.equal((await api("/api/v1/backup/summary", { as: "gerant@washpilot.ci" })).status, 200)
 
   // Retour au droit par défaut du rôle.
+  await api(`/api/v1/access/members/${manager.user_id}/permissions/data:export`, {
+    as: "demo@washpilot.ci",
+    method: "PUT",
+    body: { granted: null },
+  })
+  assert.equal((await api("/api/v1/backup/summary", { as: "gerant@washpilot.ci" })).status, 403)
+})
+
+test("le propriétaire peut retirer à un gérant les dépenses venues du rôle", async () => {
+  // La porte de sortie de la migration : le nouveau défaut n'est pas imposé.
+  // Un propriétaire qui ne souhaite pas que son gérant voie les sorties
+  // d'argent peut les lui retirer nommément, sans changer son rôle.
+  const members = await (await api("/api/v1/access/members", { as: "demo@washpilot.ci" })).json()
+  const manager = members.members.find((m: { role: string }) => m.role === "manager")
+
+  assert.equal((await api("/api/v1/expenses", { as: "gerant@washpilot.ci" })).status, 200)
+
+  const revoked = await api(`/api/v1/access/members/${manager.user_id}/permissions/expense:read`, {
+    as: "demo@washpilot.ci",
+    method: "PUT",
+    body: { granted: false },
+  })
+  assert.equal(revoked.status, 200)
+  assert.equal((await api("/api/v1/expenses", { as: "gerant@washpilot.ci" })).status, 403)
+
+  // Le retrait est ciblé : le reste du rôle est intact.
+  assert.equal((await api("/api/v1/washes", { as: "gerant@washpilot.ci" })).status, 200)
+
   await api(`/api/v1/access/members/${manager.user_id}/permissions/expense:read`, {
     as: "demo@washpilot.ci",
     method: "PUT",
     body: { granted: null },
   })
-  assert.equal((await api("/api/v1/expenses", { as: "gerant@washpilot.ci" })).status, 403)
+  assert.equal((await api("/api/v1/expenses", { as: "gerant@washpilot.ci" })).status, 200)
 })
 
 test("une permission réservée au propriétaire ne peut pas être déléguée", async () => {

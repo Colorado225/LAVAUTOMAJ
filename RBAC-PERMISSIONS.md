@@ -64,11 +64,11 @@ propriétaire · ❌ refusé, non délégable.
 | Consulter les laveurs | `worker:read` | ✅ | ✅ | ✅ | ⚙️ |
 | Ajouter / modifier un laveur | `worker:create` / `worker:update` | ✅ | ✅ | ⚙️ | ⚙️ |
 | Supprimer un laveur | `worker:delete` | ✅ | ⚙️ | ⚙️ | ⚙️ |
-| Consulter les dépenses | `expense:read` | ✅ | ⚙️ | ✅ | ⚙️ |
-| Enregistrer une dépense | `expense:create` | ✅ | ⚙️ | ✅ | ⚙️ |
-| Modifier / supprimer une dépense | `expense:manage` | ✅ | ⚙️ | ⚙️ | ⚙️ |
+| Consulter les dépenses | `expense:read` | ✅ | ✅ | ✅ | ⚙️ |
+| Enregistrer une dépense | `expense:create` | ✅ | ✅ | ✅ | ⚙️ |
+| **Modifier / supprimer une dépense** | `expense:manage` | ✅ | ⚙️ | ⚙️ | ⚙️ |
 | Rapports d'activité | `report:operational` | ✅ | ✅ | ✅ | ⚙️ |
-| **Rapports financiers (marges, dépenses)** | `report:financial` | ✅ | ⚙️ | ⚙️ | ⚙️ |
+| **Rapports financiers (marges, dépenses)** | `report:financial` | ✅ | ✅ | ⚙️ | ⚙️ |
 | Exporter les rapports | `report:export` | ✅ | ⚙️ | ⚙️ | ⚙️ |
 | Consulter l'historique des opérations | `audit:read` | ✅ | ✅ | ⚙️ | ⚙️ |
 | **Gérer les utilisateurs et les droits** | `user:manage` | ✅ | ❌ | ❌ | ❌ |
@@ -78,6 +78,10 @@ propriétaire · ❌ refusé, non délégable.
 
 Les quatre permissions en ❌ ne sont **jamais** délégables : les accorder
 reviendrait à permettre de contourner le système de rôles lui-même.
+
+`expense:manage` est en gras sans être en ❌ : il reste techniquement
+délégable, mais c'est la frontière de la séparation des tâches (section 11).
+L'accorder se décide, ne se subit pas.
 
 ---
 
@@ -310,7 +314,7 @@ Ce que chaque rôle voit aujourd'hui :
 | Nouveau lavage | `wash:read` | ✓ | ✓ | ✓ | ✓ |
 | Encaissements | `payment:read` | ✓ | ✓ | ✓ | — |
 | Caisse | `cash_session:read` | ✓ | ✓ | ✓ | — |
-| Dépenses | `expense:read` | ✓ | — | ✓ | — |
+| Dépenses | `expense:read` | ✓ | ✓ | ✓ | — |
 | Rapports | `report:operational` | ✓ | ✓ | ✓ | — |
 | Historique | `audit:read` | ✓ | ✓ | — | — |
 | Équipe | `worker:read` | ✓ | ✓ | ✓ | — |
@@ -324,13 +328,75 @@ déclarée dans une route, toute entrée de menu pointe vers une route existante
 toute route applicative est atteignable depuis le menu — sauf exceptions
 nommées et motivées — et l'entrée Stations exige bien `settings:manage`.
 
-### Point ouvert : les dépenses échappent au gérant
+---
 
-Le caissier détient `expense:read` et `expense:create` ; le gérant ne détient
-ni l'un ni l'autre. Un caissier peut donc enregistrer une sortie d'argent que
-son responsable direct ne peut pas consulter, alors que la grille tarifaire
-vend au forfait Pro le « suivi des dépenses et marges opérationnelles ».
+## 11. Décisions de privilèges
 
-Ce n'est pas un défaut de câblage mais un arbitrage : élargir le gérant à
-`expense:read` lui ouvre la vue sur les sorties d'argent de la station. La
-matrice n'a pas été modifiée sans décision explicite.
+Un changement de matrice n'est pas un correctif : il déplace un droit d'une
+personne à une autre, chez tous les clients, au déploiement. Chaque
+modification est donc consignée ici — date, constat, décision, portée — avant
+d'être écrite dans `server/permissions.ts`.
+
+### 2026-10-20 — Le gérant supervise les dépenses
+
+**Constat.** Le caissier détenait `expense:read` et `expense:create` ; le
+gérant, ni l'un ni l'autre. La hiérarchie de supervision était donc inversée
+sur le seul domaine où elle compte le plus.
+
+L'enjeu n'était pas le confort d'un écran. Une dépense réglée en espèces
+insère un mouvement `type='exit'`, `source='expense'` dans la session de
+caisse ouverte (`server/operations.ts`). Or le caissier détient
+`cash_session:manage` : il ouvre et clôture lui-même cette session. Le montant
+attendu à la clôture se calcule à partir des mouvements, dépense comprise.
+
+Conséquence : un caissier pouvait sortir 10 000 F du tiroir, les enregistrer
+en dépense, et clôturer avec un **écart nul**. L'opération était régulière en
+apparence, et aucun échelon entre lui et le propriétaire ne pouvait la voir.
+Dans une station où le propriétaire est absent ou gère plusieurs sites, le
+contrôle n'existait pas.
+
+**Décision.** Le rôle `manager` obtient :
+
+| Permission | Motif |
+|---|---|
+| `expense:read` | Referme le trou de supervision. Lecture non destructive, tracée, réversible. |
+| `expense:create` | Sans elle, un gérant qui achète des consommables fait enregistrer la dépense par son caissier, qui en devient l'auteur apparent. Refuser la permission **fabriquait un journal d'audit faux** — pire que de l'accorder. |
+| `report:financial` | Donner le détail des dépenses en retenant leur total ne protège rien : le gérant peut les additionner. Seul l'écran devenait incohérent. |
+
+**Ce qui n'a pas bougé.** `expense:manage` (modifier, supprimer) reste au
+propriétaire. C'est la vraie frontière, et elle était déjà au bon endroit :
+**on délègue l'enregistrement, jamais la réécriture.** Sans cela, qui puise
+dans la caisse pourrait effacer la trace de sa sortie.
+
+**Pourquoi le défaut du rôle et non une exception par membre.** Le
+propriétaire pouvait déjà accorder `expense:read` à son gérant au cas par cas
+(`expense:read` figure dans `GRANTABLE_PERMISSIONS`). Le critère retenu :
+
+> Une permission appartient au rôle quand **tous** les clients feraient la
+> même exception. Elle reste une exception quand elle dépend de la personne.
+
+Aucun propriétaire ne souhaite un gérant aveugle aux sorties d'argent. Le
+défaut était donc faux, et le rattraper client par client revenait à leur
+faire payer un défaut de conception.
+
+**Porte de sortie.** Le nouveau défaut n'est pas imposé. Un propriétaire en
+désaccord retire la permission à un gérant nommé, sans changer son rôle :
+
+```http
+PUT /api/v1/access/members/:userId/permissions/expense:read
+{ "granted": false }
+```
+
+Le retrait est ciblé — le reste du rôle reste intact. Vérifié par le test
+« le propriétaire peut retirer à un gérant les dépenses venues du rôle ».
+
+**Effet de bord assumé.** Le cloisonnement financier n'a pas disparu, il s'est
+déplacé : c'est désormais le **caissier** qui marque la frontière des rapports
+(`financial_access: false`), là où c'était le gérant. L'entrée « Dépenses »
+apparaît dans sa barre latérale.
+
+**Verrouillage.** `tests/permissions.test.ts` fige l'empreinte exacte de
+chaque rôle et vérifie qu'aucun subordonné ne détient sur les dépenses un
+droit que son supérieur n'a pas. Faire échouer ce test n'est pas un incident :
+c'est le signal qu'un droit change de main, et qu'il faut d'abord écrire la
+décision dans cette section.
