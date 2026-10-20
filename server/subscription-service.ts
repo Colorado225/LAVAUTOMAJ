@@ -140,6 +140,16 @@ export async function activateSubscription(
     ],
   )
 
+  // Une nouvelle période s'ouvre : les relances d'échéance de la précédente
+  // n'ont plus de sens et doivent pouvoir repartir. Sans cet effacement, un
+  // client ne recevrait qu'une seule fois dans sa vie l'avertissement J-7 —
+  // et le renouvellement suivant passerait à la trappe. Les relances d'essai
+  // (`trial_%`) sont volontairement conservées : elles, ne se répètent pas.
+  await pool.query(
+    "DELETE FROM subscription_reminders WHERE organization_id = $1::uuid AND kind LIKE 'renewal_%'",
+    [input.organizationId],
+  )
+
   // Le cache d'entitlements vit 10 s : sans cette invalidation, le client
   // continuerait de voir « essai expiré » après avoir payé.
   invalidateSubscriptionCache(input.organizationId)

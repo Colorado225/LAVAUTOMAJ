@@ -146,3 +146,37 @@ export async function declineUpgradeRequest(
     }),
   )
 }
+
+/** Une demande de paiement déclarée par un client, en attente de vérification. */
+export interface AdminPaymentIntent {
+  id: string
+  reference: string
+  organization_id: string
+  organization_name: string
+  plan_code: string
+  months: number
+  amount_cents: number
+  provider: string
+  status: string
+  declared_reference: string | null
+  declared_at: string | null
+  created_at: string
+  requester_email: string | null
+  requester_phone: string | null
+}
+
+/**
+ * Confirmer un paiement déclaré.
+ *
+ * Rien n'est ressaisi : l'intention porte déjà le forfait, la durée et le
+ * montant, donc rien ne peut être saisi de travers. Le serveur refuse un
+ * second appel sur la même référence.
+ */
+export async function confirmPaymentIntent(reference: string, note?: string): Promise<void> {
+  await readJson(
+    await apiFetch(`/api/v1/admin/payment-intents/${reference}/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ note: note || undefined }),
+    }),
+  )
+}

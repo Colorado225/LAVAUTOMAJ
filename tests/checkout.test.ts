@@ -5,6 +5,7 @@ import type { Pool } from "pg"
 import { initDatabaseSchema, getPool, closeDatabase } from "../server/db.ts"
 import { createApiApp } from "../server/app.ts"
 import { invalidateSubscriptionCache } from "../server/entitlements.ts"
+import { planRenewalReminder, runSubscriptionReminders } from "../server/reminders.ts"
 
 // ---------------------------------------------------------------------------
 // Parcours de souscription : intention → paiement → déclaration → validation
@@ -254,4 +255,83 @@ test("une référence mal formée est refusée proprement, pas en erreur serveur
     body: {},
   })
   assert.ok(response.status >= 400 && response.status < 500, `attendu 4xx, reçu ${response.status}`)
+})
+
+// ---------------------------------------------------------------------------
+// Relances de renouvellement
+//
+// Le rail mobile money ne permet pas de prélèvement récurrent fiable : ces
+// relances SONT le mécanisme de renouvellement, pas un rappel de courtoisie.
+// ---------------------------------------------------------------------------
+
+test("la relance de renouvellement suit l'approche de l'échéance", () => {
+  assert.equal(planRenewalReminder(30), null, "rien à 30 jours")
+  assert.equal(planRenewalReminder(8), null, "rien à 8 jours")
+  assert.equal(planRenewalReminder(7), "renewal_j7")
+  assert.equal(planRenewalReminder(3), "renewal_j3")
+  assert.equal(planRenewalReminder(1), "renewal_j1")
+  assert.equal(planRenewalReminder(-2), "renewal_overdue", "l'échéance dépassée est le cas qui coûte")
+})
+
+test("une relance déjà envoyée ne part pas deux fois", () => {
+  assert.equal(planRenewalReminder(7, ["renewal_j7"]), null)
+  // Mais l'étape suivante, si.
+  assert.equal(planRenewalReminder(3, ["renewal_j7"]), "renewal_j3")
+})
+
+test("renouveler efface les relances pour que la période suivante en reçoive", async () => {
+  // Le défaut qu'on éviterait mal autrement : sans effacement, un client ne
+  // reçoit l'avertissement J-7 qu'une seule fois dans sa vie.
+  await resetSubscription("active", "pro", 5)
+  await pool.query(
+    `INSERT INTO subscription_reminders(organization_id, kind)
+     VALUES($1::uuid,'renewal_j7'),($1::uuid,'trial_j3')
+     ON CONFLICT DO NOTHING`,
+    [organizationId],
+  )
+
+  const intent = await (
+    await api("/api/v1/subscription/checkout", {
+      as: "demo@washpilot.ci",
+      method: "POST",
+      body: { plan_code: "pro", months: 1 },
+    })
+  ).json()
+  await api(`/api/v1/subscription/checkout/${intent.reference}/declare`, {
+    as: "demo@washpilot.ci",
+    method: "POST",
+    body: { transaction_reference: "WAVE-55512" },
+  })
+  await api(`/api/v1/admin/payment-intents/${intent.reference}/confirm`, {
+    as: "demo@washpilot.ci",
+    method: "POST",
+    body: {},
+  })
+
+  const kinds = await pool.query(
+    "SELECT kind FROM subscription_reminders WHERE organization_id = $1::uuid",
+    [organizationId],
+  )
+  const remaining = kinds.rows.map((r: { kind: string }) => r.kind)
+  assert.ok(!remaining.includes("renewal_j7"), "les relances de renouvellement repartent à zéro")
+  assert.ok(remaining.includes("trial_j3"), "celles de l'essai ne se répètent pas, on les garde")
+})
+
+test("le planificateur relance un forfait payant proche de l'échéance", async () => {
+  await resetSubscription("active", "pro", 2)
+  await pool.query("DELETE FROM subscription_reminders WHERE organization_id = $1::uuid", [
+    organizationId,
+  ])
+
+  const outcomes = await runSubscriptionReminders(pool)
+  const mine = outcomes.find((o) => o.organization_id === organizationId)
+  assert.ok(mine, "la station reçoit une relance")
+  assert.equal(mine.kind, "renewal_j3")
+
+  // Et une seule : le second passage ne doit rien renvoyer.
+  const second = await runSubscriptionReminders(pool)
+  assert.equal(
+    second.find((o) => o.organization_id === organizationId),
+    undefined,
+  )
 })

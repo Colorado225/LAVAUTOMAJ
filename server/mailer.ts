@@ -188,6 +188,87 @@ export function trialReminderMessage(
   return { to: context.to, subject: copy.subject, text, html }
 }
 
+/**
+ * Relance d'échéance d'un forfait payant.
+ *
+ * Distincte des relances d'essai, et le ton doit l'être aussi : on ne
+ * convainc pas un client qui paie déjà, on lui évite une interruption. Le
+ * rail mobile money ne permet pas de prélèvement récurrent fiable, donc ce
+ * courriel **est** le mécanisme de renouvellement — pas un simple rappel.
+ */
+export function renewalReminderMessage(
+  kind: "renewal_j7" | "renewal_j3" | "renewal_j1" | "renewal_overdue",
+  context: {
+    to: string
+    firstName?: string | null
+    organizationName: string
+    planName: string
+    periodEnd: string | null
+    billingUrl: string
+  },
+): MailMessage {
+  const greeting = context.firstName ? `Bonjour ${context.firstName},` : "Bonjour,"
+  const endDay = formatDay(context.periodEnd)
+
+  const copy = {
+    renewal_j7: {
+      subject: `Votre forfait ${context.planName} arrive à échéance le ${endDay}`,
+      headline: `Votre abonnement se termine le ${endDay}.`,
+      body: `Le forfait ${context.planName} de ${context.organizationName} arrive à échéance dans une semaine. Renouvelez dès maintenant : les jours restants ne sont pas perdus, ils s'ajoutent à la nouvelle période.`,
+      cta: "Renouveler mon forfait",
+    },
+    renewal_j3: {
+      subject: `Plus que 3 jours — forfait ${context.planName}`,
+      headline: `Votre abonnement se termine le ${endDay}.`,
+      body: `Pour que ${context.organizationName} continue sans interruption, renouvelez votre forfait ${context.planName}. Le paiement se fait par mobile money, en quelques minutes.`,
+      cta: "Renouveler maintenant",
+    },
+    renewal_j1: {
+      subject: `Dernier jour — forfait ${context.planName}`,
+      headline: `Votre abonnement se termine demain (${endDay}).`,
+      body: `Renouvelez aujourd'hui pour éviter toute coupure sur ${context.organizationName}. Vos données restent évidemment conservées dans tous les cas.`,
+      cta: "Renouveler aujourd'hui",
+    },
+    renewal_overdue: {
+      subject: `Forfait ${context.planName} : échéance dépassée`,
+      headline: `Votre abonnement a expiré le ${endDay}.`,
+      body: `Votre accès à ${context.organizationName} n'a pas été interrompu, mais votre forfait ${context.planName} n'est plus à jour. Merci de régulariser pour que le service continue.`,
+      cta: "Régulariser mon abonnement",
+    },
+  }[kind]
+
+  const text = [
+    greeting,
+    "",
+    copy.headline,
+    "",
+    copy.body,
+    "",
+    `${copy.cta} : ${context.billingUrl}`,
+    "",
+    "— L'équipe WashPilot CI",
+  ].join("\n")
+
+  const html = `<!doctype html>
+<html lang="fr"><body style="margin:0;background:#f1f5f9;padding:24px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a">
+  <table role="presentation" style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:16px;padding:32px">
+    <tr><td>
+      <p style="margin:0 0 16px;font-size:14px">${greeting}</p>
+      <p style="margin:0 0 12px;font-size:18px;font-weight:700">${copy.headline}</p>
+      <p style="margin:0 0 16px;font-size:14px;line-height:22px">${copy.body}</p>
+      <p style="margin:24px 0">
+        <a href="${context.billingUrl}" style="display:inline-block;background:#123d79;color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:14px 22px;border-radius:12px">${copy.cta}</a>
+      </p>
+      <p style="margin:0;font-size:12px;color:#64748b;line-height:20px">
+        Vos donnees restent conservees et exportables a tout moment depuis Parametres &gt; Donnees et sauvegarde.
+      </p>
+    </td></tr>
+  </table>
+</body></html>`
+
+  return { to: context.to, subject: copy.subject, text, html }
+}
+
 /** Gabarit envoyé à l'assistance quand une station demande un forfait payant. */
 export function upgradeRequestMessage(context: {
   to: string

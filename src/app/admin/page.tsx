@@ -65,6 +65,8 @@ import {
   type AdminPlan,
   type AdminSubscriptionStatus,
   declineUpgradeRequest,
+  confirmPaymentIntent,
+  type AdminPaymentIntent,
   type UpgradeRequest,
 } from "@/lib/admin-api"
 
@@ -130,6 +132,10 @@ export default function AdminPage() {
   const { data: requestData } = useApi<{ requests: UpgradeRequest[] }>(
     `/api/v1/admin/upgrade-requests?k=${refreshKey}`,
   )
+  // La file du matin : qui dit avoir payé, combien, avec quelle référence.
+  const { data: intentData } = useApi<{ intents: AdminPaymentIntent[] }>(
+    `/api/v1/admin/payment-intents?declared=true&k=${refreshKey}`,
+  )
 
   const organizations = useMemo(() => {
     const rows = data?.organizations ?? []
@@ -144,12 +150,14 @@ export default function AdminPage() {
 
   const plans = planData?.plans ?? []
   const requests = requestData?.requests ?? []
+  const intents = intentData?.intents ?? []
 
   // --- Dialogues -----------------------------------------------------------
   const [activating, setActivating] = useState<AdminOrganization | null>(null)
   const [suspending, setSuspending] = useState<AdminOrganization | null>(null)
   const [extending, setExtending] = useState<AdminOrganization | null>(null)
   const [declining, setDeclining] = useState<UpgradeRequest | null>(null)
+  const [confirming, setConfirming] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const [planCode, setPlanCode] = useState("pro")
@@ -209,6 +217,22 @@ export default function AdminPage() {
       toastError("Suspension impossible", e instanceof Error ? e.message : undefined)
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function confirmIntent(intent: AdminPaymentIntent) {
+    setConfirming(intent.reference)
+    try {
+      await confirmPaymentIntent(intent.reference)
+      toastSuccess(
+        "Paiement confirmé",
+        `${intent.organization_name} passe en ${intent.plan_code} pour ${intent.months} mois.`,
+      )
+      refresh()
+    } catch (e) {
+      toastError("Confirmation impossible", e instanceof Error ? e.message : undefined)
+    } finally {
+      setConfirming(null)
     }
   }
 
@@ -326,6 +350,74 @@ export default function AdminPage() {
             tone={metrics && metrics.pending_requests > 0 ? "warn" : undefined}
           />
         </div>
+
+        {/* --- Paiements déclarés, en attente de vérification -------------- */}
+        {intents.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">
+                Paiements déclarés ({intents.length})
+              </CardTitle>
+              <CardDescription>
+                Vérifiez la référence de transaction sur votre relevé Orange Money
+                ou Wave, puis confirmez. Le forfait, la durée et le montant sont
+                déjà portés par la demande : rien n'est ressaisi.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {intents.map((intent) => (
+                <div
+                  key={intent.id}
+                  className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border bg-muted/40 px-3 py-2.5 text-sm"
+                >
+                  <div className="min-w-44">
+                    <p className="font-medium">{intent.organization_name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {intent.requester_email ?? "—"}
+                      {intent.requester_phone ? ` · ${intent.requester_phone}` : ""}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-muted-foreground">Demandé</p>
+                    <p className="font-medium">
+                      {intent.plan_code} · {intent.months} mois
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-muted-foreground">Montant attendu</p>
+                    <p className="font-semibold tabular-nums">
+                      {formatFcfa(intent.amount_cents)}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-muted-foreground">Sa transaction</p>
+                    <p className="font-mono text-xs">{intent.declared_reference ?? "—"}</p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-muted-foreground">Référence</p>
+                    <p className="font-mono text-xs">{intent.reference}</p>
+                  </div>
+
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {formatDate(intent.declared_at)}
+                  </span>
+
+                  <Button
+                    size="sm"
+                    disabled={confirming === intent.reference}
+                    onClick={() => void confirmIntent(intent)}
+                  >
+                    {confirming === intent.reference ? "Confirmation…" : "Confirmer le paiement"}
+                  </Button>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )}
 
         {/* --- Demandes d'activation -------------------------------------- */}
         {requests.length > 0 && (

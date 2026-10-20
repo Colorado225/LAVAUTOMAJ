@@ -128,9 +128,17 @@ J-7, J-3, J-1 avant échéance → e-mail avec un lien de paiement prêt
 Le client clique, paie en 30 secondes, la période se prolonge
 ```
 
-Le planificateur de relances existe déjà (`server/reminders.ts`), mais il ne
-couvre aujourd'hui que les essais. L'étendre aux abonnements payants arrivant
-à échéance est la prochaine étape utile — et elle ne dépend d'aucun contrat.
+C'est fait : `server/reminders.ts` relance désormais aussi les forfaits
+payants, à **J-7, J-3, J-1 et une fois l'échéance dépassée**. Le ton diffère
+de celui des relances d'essai — on ne cherche pas à convaincre un client qui
+paie déjà, on lui évite une interruption.
+
+Un détail qui aurait pu passer inaperçu : les relances d'essai ne partent
+qu'une fois dans la vie d'une station, mais celles de renouvellement doivent
+repartir **à chaque période**. `activateSubscription()` efface donc les
+relances `renewal_%` à chaque activation. Sans cela, un client n'aurait reçu
+son avertissement J-7 qu'une seule fois, et tous les renouvellements suivants
+seraient passés à la trappe.
 
 ### Le flux automatique
 
@@ -181,8 +189,10 @@ le dépôt Git, jamais côté navigateur [7](https://sentur.net/mobile-money-bac
 | `GET /admin/payment-intents?declared=true` — votre file | ✅ |
 | `POST /admin/payment-intents/:ref/confirm` — un clic | ✅ |
 | `activateSubscription()` — **point de passage unique** | ✅ |
+| Écran client (choisir → payer → déclarer) | ✅ |
+| File de validation dans `/admin` | ✅ |
+| Relances d'échéance J-7 / J-3 / J-1 / dépassée | ✅ |
 | Webhook d'agrégateur | ⬜ à brancher quand vous aurez les clés |
-| Relances d'échéance des forfaits payants | ⬜ |
 
 ### Pourquoi `activateSubscription()` est la pièce importante
 
@@ -226,10 +236,9 @@ six mois de webhooks silencieux.
 CinetPay en parallèle. C'est de l'administratif, cela n'attend pas le code,
 et les 3 à 7 jours d'activation passent plus vite si vous les démarrez tôt.
 
-**Avant l'automatisation :** étendez les relances aux abonnements payants
-(J-7, J-3, J-1). C'est ce qui rapporte le plus par heure de travail — un
-client qui oublie de renouveler est perdu pour une raison idiote, et le code
-existe déjà à 80 %.
+**Avant l'automatisation :** rien à faire, les relances sont en place. Elles
+sont ce qui rapporte le plus par heure de travail — un client qui oublie de
+renouveler est perdu pour une raison idiote.
 
 **Vers 30-50 clients :** branchez le webhook. À ce stade la commission de 3 %
 coûte moins cher que votre temps, et le délai de validation devient un motif

@@ -1,6 +1,6 @@
 import type { Pool } from "pg"
 import { env } from "./env.ts"
-import { sendMail, trialReminderMessage } from "./mailer.ts"
+import { sendMail, trialReminderMessage, renewalReminderMessage } from "./mailer.ts"
 import { computeSubscriptionState, TRIAL_WARNING_DAYS, type SubscriptionState } from "./entitlements.ts"
 
 // ---------------------------------------------------------------------------
@@ -17,6 +17,46 @@ import { computeSubscriptionState, TRIAL_WARNING_DAYS, type SubscriptionState } 
 
 export const REMINDER_KINDS = ["trial_j3", "trial_j1", "trial_expired"] as const
 export type ReminderKind = (typeof REMINDER_KINDS)[number]
+
+/**
+ * Relances d'échéance d'un forfait **payant**.
+ *
+ * Elles existent parce que le rail mobile money ne permet pas de prélèvement
+ * récurrent fiable : il n'y a personne pour débiter le client à sa date
+ * anniversaire. Ce courriel est donc le mécanisme de renouvellement lui-même,
+ * pas un simple rappel de courtoisie.
+ *
+ * Contrairement aux relances d'essai, elles se répètent **à chaque période**.
+ * `activateSubscription()` les efface donc à chaque activation : une nouvelle
+ * période ouverte, les relances de la précédente n'ont plus de sens.
+ */
+export const RENEWAL_REMINDER_KINDS = [
+  "renewal_j7",
+  "renewal_j3",
+  "renewal_j1",
+  "renewal_overdue",
+] as const
+export type RenewalReminderKind = (typeof RENEWAL_REMINDER_KINDS)[number]
+
+/**
+ * Décide la relance de renouvellement à envoyer.
+ *
+ * Fonction pure, comme `planReminder` : c'est elle que les tests couvrent.
+ * `daysToExpiry` est négatif quand l'échéance est dépassée — cas qui compte
+ * le plus, puisque c'est là que le revenu se perd.
+ */
+export function planRenewalReminder(
+  daysToExpiry: number,
+  alreadySent: readonly string[] = [],
+): RenewalReminderKind | null {
+  const sent = new Set(alreadySent)
+
+  if (daysToExpiry < 0) return sent.has("renewal_overdue") ? null : "renewal_overdue"
+  if (daysToExpiry <= 1) return sent.has("renewal_j1") ? null : "renewal_j1"
+  if (daysToExpiry <= 3) return sent.has("renewal_j3") ? null : "renewal_j3"
+  if (daysToExpiry <= 7) return sent.has("renewal_j7") ? null : "renewal_j7"
+  return null
+}
 
 /**
  * Décide la relance à envoyer pour un état d'abonnement donné.
@@ -58,7 +98,7 @@ interface ReminderRow {
 
 export interface ReminderOutcome {
   organization_id: string
-  kind: ReminderKind
+  kind: ReminderKind | RenewalReminderKind
   email: string
   delivered: boolean
 }
@@ -90,7 +130,7 @@ export async function runSubscriptionReminders(
        ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END, m.created_at
        LIMIT 1
      ) owner ON true
-     WHERE s.status IN ('trialing','expired')`,
+     WHERE s.status IN ('trialing','expired','active')`,
   )
 
   const outcomes: ReminderOutcome[] = []
@@ -106,8 +146,66 @@ export async function runSubscriptionReminders(
       now,
     })
 
-    const kind = planReminder(state, row.sent_kinds ?? [])
-    if (!kind || !row.owner_email) continue
+    if (!row.owner_email) continue
+    const sentKinds = row.sent_kinds ?? []
+
+    // Un forfait payant suit une autre logique que l'essai : on ne cherche
+    // pas à convaincre, on évite une interruption. Et la relance se répète à
+    // chaque période, là où celle de l'essai n'arrive qu'une fois.
+    if (state.status === "active") {
+      const periodEnd = row.current_period_end ? new Date(row.current_period_end) : null
+      if (!periodEnd) continue
+      const daysToExpiry = Math.ceil(
+        (periodEnd.getTime() - now.getTime()) / 86_400_000,
+      )
+      const renewalKind = planRenewalReminder(daysToExpiry, sentKinds)
+      if (!renewalKind) continue
+
+      const reservedRenewal = await pool.query(
+        `INSERT INTO subscription_reminders(organization_id, kind)
+         VALUES($1::uuid,$2) ON CONFLICT (organization_id, kind) DO NOTHING RETURNING kind`,
+        [row.organization_id, renewalKind],
+      )
+      if (!reservedRenewal.rowCount) continue
+
+      const renewalDelivered = await sendMail(
+        renewalReminderMessage(renewalKind, {
+          to: row.owner_email,
+          firstName: row.owner_first_name,
+          organizationName: row.organization_name,
+          planName: row.plan_name ?? "votre forfait",
+          periodEnd: periodEnd.toISOString(),
+          billingUrl: billingUrl(),
+        }),
+      )
+
+      await pool
+        .query(
+          `INSERT INTO audit_logs(organization_id, action, entity_type, entity_id, metadata)
+           VALUES($1::uuid,'subscription.reminder_sent','subscription',$1::text,$2::jsonb)`,
+          [
+            row.organization_id,
+            JSON.stringify({
+              kind: renewalKind,
+              delivered: renewalDelivered,
+              to: row.owner_email,
+              days_to_expiry: daysToExpiry,
+            }),
+          ],
+        )
+        .catch(() => {})
+
+      outcomes.push({
+        organization_id: row.organization_id,
+        kind: renewalKind,
+        email: row.owner_email,
+        delivered: renewalDelivered,
+      })
+      continue
+    }
+
+    const kind = planReminder(state, sentKinds)
+    if (!kind) continue
 
     // Réservation d'abord : deux instances du serveur ne peuvent pas envoyer
     // la même relance en double.
