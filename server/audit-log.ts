@@ -50,6 +50,15 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "access.denied": "Tentative refusée",
   "onboarding.completed": "Mise en service terminée",
   "backup.exported": "Sauvegarde exportée",
+
+  // Interventions de l'éditeur sur l'abonnement. Elles sont journalisées chez
+  // le client et non dans un registre séparé : une action invisible de celui
+  // qui la subit serait une porte dérobée, pas une administration.
+  "subscription.upgrade_requested": "Activation demandée",
+  "subscription.activated": "Forfait activé",
+  "subscription.suspended": "Abonnement suspendu",
+  "subscription.trial_extended": "Essai prolongé",
+  "subscription.request_declined": "Demande d’activation déclinée",
 }
 
 /** Catégories d'entité, pour filtrer sans connaître les noms de tables. */
@@ -61,6 +70,8 @@ export const AUDIT_ENTITY_LABELS: Record<string, string> = {
   organization_member: "Membre",
   organization: "Station",
   backup: "Sauvegarde",
+  subscription: "Abonnement",
+  plan: "Forfait",
 }
 
 export function auditActionLabel(action: string): string {
@@ -76,7 +87,10 @@ export function auditEntityLabel(entityType: string): string {
  * courante : elle est signalée pour que l'écran puisse la distinguer.
  */
 export function auditSeverity(action: string): "info" | "warning" {
-  return action === "access.denied" ? "warning" : "info"
+  // Une tentative refusée et une suspension d'abonnement méritent toutes deux
+  // d'être repérables d'un coup d'œil : la première signale un accès forcé, la
+  // seconde explique pourquoi la station est soudain passée en lecture seule.
+  return action === "access.denied" || action === "subscription.suspended" ? "warning" : "info"
 }
 
 const querySchema = z.object({

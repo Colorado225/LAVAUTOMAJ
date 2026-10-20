@@ -69,6 +69,9 @@ const NOT_IN_SIDEBAR: Record<string, string> = {
   "/onboarding": "parcours de première configuration, atteint automatiquement",
   "/washes/:washID": "détail d'un lavage, atteint depuis la liste",
   "*": "page 404 de repli",
+  "/admin":
+    "back-office de l'éditeur : vue sur le parc entier, pas un écran de station. " +
+    "Atteint depuis le menu utilisateur, et seulement par un administrateur de plateforme.",
 }
 
 /** Préfixes hors barre latérale par nature. */

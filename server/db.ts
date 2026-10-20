@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS organizations (
  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE users ADD COLUMN IF NOT EXISTS organization_id uuid;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_admin boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS plans (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), code text NOT NULL UNIQUE, name text NOT NULL,
  max_users integer, max_workers integer, max_sites integer, features jsonb NOT NULL DEFAULT '{}'::jsonb
@@ -570,6 +571,57 @@ function createPglitePool(pglite: PGlite): pg.Pool {
   } as unknown as pg.Pool;
 }
 
+
+/**
+ * Aligne le drapeau `platform_admin` sur PLATFORM_ADMIN_EMAILS.
+ *
+ * Idempotent et **réversible** : retirer une adresse de la variable retire le
+ * droit au redémarrage suivant. Un administrateur de plateforme qui quitte
+ * l'équipe disparaît donc de la configuration, sans intervention en base.
+ *
+ * Si la variable est vide, aucun compte n'est touché : on ne retire pas en
+ * masse un droit sur une configuration oubliée, mais on le signale.
+ */
+async function syncPlatformAdmins(
+  query: (text: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount: number | null }>,
+): Promise<void> {
+  const emails = env.PLATFORM_ADMIN_EMAILS;
+  if (emails.length === 0) {
+    const existing = await query("SELECT count(*)::int AS n FROM users WHERE platform_admin");
+    const n = (existing.rows[0] as { n: number } | undefined)?.n ?? 0;
+    if (n === 0) {
+      console.warn(
+        "[admin] PLATFORM_ADMIN_EMAILS n'est pas defini et aucun administrateur de plateforme n'existe : le back-office sera inaccessible.",
+      );
+    }
+    return;
+  }
+
+  const promoted = await query(
+    "UPDATE users SET platform_admin = true, updated_at = now() WHERE lower(email) = ANY($1::text[]) AND NOT platform_admin RETURNING email",
+    [emails],
+  );
+  const revoked = await query(
+    "UPDATE users SET platform_admin = false, updated_at = now() WHERE platform_admin AND lower(email) <> ALL($1::text[]) RETURNING email",
+    [emails],
+  );
+
+  const missing = emails.filter(
+    (email) => !(promoted.rows as { email: string }[]).some((r) => r.email.toLowerCase() === email),
+  );
+  if (promoted.rowCount) console.info(`[admin] Administrateurs de plateforme promus : ${promoted.rowCount}`);
+  if (revoked.rowCount) console.info(`[admin] Droits d'administration retires : ${revoked.rowCount}`);
+  if (missing.length) {
+    const known = await query("SELECT lower(email) AS email FROM users WHERE lower(email) = ANY($1::text[])", [missing]);
+    const absent = missing.filter((e) => !(known.rows as { email: string }[]).some((r) => r.email === e));
+    if (absent.length) {
+      console.warn(
+        `[admin] Adresses sans compte, aucun droit accorde : ${absent.join(", ")}. Le compte doit exister d'abord.`,
+      );
+    }
+  }
+}
+
 export async function initDatabaseSchema(): Promise<boolean> {
   if (env.DATABASE_URL) {
     try {
@@ -584,6 +636,7 @@ export async function initDatabaseSchema(): Promise<boolean> {
       });
       await externalPool.query("SELECT 1");
       await externalPool.query(schemaSql);
+      await syncPlatformAdmins(externalPool.query.bind(externalPool));
       pool = externalPool;
       ready = true;
       console.info("[db] Connecté à PostgreSQL via DATABASE_URL");
@@ -601,6 +654,7 @@ export async function initDatabaseSchema(): Promise<boolean> {
     pool = createPglitePool(pgliteInstance);
     await pool.query(schemaSql);
     await seedDemoData(pool.query.bind(pool));
+    await syncPlatformAdmins(pool.query.bind(pool));
     ready = true;
     console.info("[db] PostgreSQL embarqué (PGlite) initialisé avec les données de démonstration");
     return true;

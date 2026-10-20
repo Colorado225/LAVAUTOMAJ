@@ -25,6 +25,9 @@ export const routes: RouteObject[] = [
   { path: "/reports", lazy: page(() => import("@/app/reports/page")) },
   { path: "/history", lazy: page(() => import("@/app/history/page")) },
   { path: "/sites", lazy: page(() => import("@/app/sites/page")) },
+  // Back-office de l'éditeur. Le serveur répond 404 à tout compte sans
+  // `platform_admin` : la route existe côté client, la porte est au serveur.
+  { path: "/admin", lazy: page(() => import("@/app/admin/page")) },
   { path: "/team", lazy: page(() => import("@/app/team/page")) },
   { path: "/services", lazy: page(() => import("@/app/services/page")) },
   { path: "/service-categories", lazy: page(() => import("@/app/service-categories/page")) },

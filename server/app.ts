@@ -14,6 +14,8 @@ import { createBackupRouter } from "./backup.ts"
 import { createSupportRouter } from "./support.ts"
 import { createAccessRouter } from "./access.ts"
 import { createAuditLogRouter } from "./audit-log.ts"
+import { createAdminRouter } from "./admin.ts"
+import { requirePlatformAdmin } from "./platform-admin.ts"
 import { attachSubscription, blockWritesWhenReadOnly } from "./entitlements.ts"
 
 // ---------------------------------------------------------------------------
@@ -47,6 +49,15 @@ import { attachSubscription, blockWritesWhenReadOnly } from "./entitlements.ts"
 export function mountApi(app: Express) {
   app.use("/api/v1/auth", createAuthRouter())
   app.use("/api/v1", requireSession)
+
+  // Administration de plateforme : montée **avant** `requireTenantContext`.
+  //
+  // L'éditeur n'appartient à aucune station ; le contexte de locataire le
+  // rejetterait avec `organization_required`. Surtout, c'est la seule surface
+  // qui franchit volontairement l'isolation entre clients : la placer ici rend
+  // ce franchissement lisible au montage, plutôt que caché dans une route.
+  app.use("/api/v1/admin", requirePlatformAdmin, createAdminRouter())
+
   app.use("/api/v1", requireTenantContext)
   app.use("/api/v1", attachSubscription)
   app.use("/api/v1", blockWritesWhenReadOnly)

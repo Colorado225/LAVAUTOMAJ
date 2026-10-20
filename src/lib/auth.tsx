@@ -14,6 +14,12 @@ export interface AuthUser {
   lastName: string | null
   phone: string | null
   avatarUrl: string | null
+  /**
+   * Administrateur de plateforme (l'éditeur), et non un rôle de station.
+   * Porté par le compte et non par l'appartenance : un administrateur peut
+   * n'être rattaché à aucune organisation.
+   */
+  platformAdmin: boolean
 }
 
 export interface AuthOrganization {
@@ -57,6 +63,7 @@ interface MePayload {
     last_name: string | null
     phone: string | null
     avatar_url: string | null
+    platform_admin?: boolean
   }
   organization: { id: string; name: string; onboarding_completed: boolean } | null
   role: string | null
@@ -73,6 +80,7 @@ function stateFromPayload(payload: MePayload): AuthState {
       lastName: payload.user.last_name,
       phone: payload.user.phone,
       avatarUrl: payload.user.avatar_url,
+      platformAdmin: Boolean(payload.user.platform_admin),
     },
     organization: payload.organization
       ? {

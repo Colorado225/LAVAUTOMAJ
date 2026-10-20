@@ -30,9 +30,15 @@ Ce qui suit ne remet rien de cela en cause. Ce sont les pièces manquantes.
 
 ---
 
-## 1. Bloquant — Le produit ne peut encaisser aucun abonnement
+## 1. ~~Bloquant~~ — RÉSOLU le 20/10/2026 : le back-office est en place
 
-**C'est le point le plus grave, et il est invisible depuis l'interface.**
+> **Résolu.** Le chemin 1 ci-dessous (activation manuelle assistée) a été
+> implémenté : back-office `/admin`, administrateur de plateforme par
+> `PLATFORM_ADMIN_EMAILS`, routes d'activation, de suspension, de prolongation
+> et de refus de demande. Voir **`BACK-OFFICE.md`**. Le constat d'origine est
+> conservé ci-dessous pour mémoire.
+
+**C'était le point le plus grave, et il était invisible depuis l'interface.**
 
 Trois routes seulement touchent la table `subscriptions` :
 
@@ -76,8 +82,16 @@ Le chemin 1 n'interdit pas le chemin 2 : il le précède. Tant que le volume
 tient dans un tableur, l'activation manuelle est plus sûre qu'une intégration
 mal rodée qui encaisse mal.
 
-> **Conséquence si rien n'est fait :** le 15ᵉ jour, chaque client devient
-> lecture seule et aucun ne peut payer. Le produit est une démonstration.
+> **Conséquence si rien n'avait été fait :** le 15ᵉ jour, chaque client
+> devenait lecture seule et aucun ne pouvait payer. Le produit était une
+> démonstration.
+
+**Ce qui a été livré** (20/10/2026) : `server/platform-admin.ts`,
+`server/admin.ts` (9 routes), colonne `users.platform_admin` posée au
+démarrage depuis `PLATFORM_ADMIN_EMAILS`, écran `/admin` atteint par le menu
+utilisateur, 20 tests dans `tests/platform-admin.test.ts`. Le chemin 2
+(encaissement intégré) reste ouvert et n'est pas contredit : la route
+d'activation deviendra le point d'entrée du webhook.
 
 ---
 
@@ -86,13 +100,13 @@ mal rodée qui encaisse mal.
 | Manque | Constat |
 |---|---|
 | Conteneur / plateforme | Ni `Dockerfile`, ni `Procfile`, ni `fly.toml`, ni `render.yaml` |
-| Intégration continue | Pas de `.github/workflows/` — **les 189 tests ne tournent nulle part automatiquement** |
+| Intégration continue | Pas de `.github/workflows/` — **les 209 tests ne tournent nulle part automatiquement** |
 | Documentation | `README.md` s'arrête aux « Flux métier clés », aucune section de mise en production |
 
 La base supporte bien un PostgreSQL externe (`DATABASE_URL`, `server/db.ts`
 l. 574) avec repli PGlite en développement : ce point-là est sain.
 
-Le reste est à écrire. L'absence de CI est la plus coûteuse : 189 tests qui ne
+Le reste est à écrire. L'absence de CI est la plus coûteuse : 209 tests qui ne
 s'exécutent qu'à la main finissent par ne plus s'exécuter du tout.
 
 ---
@@ -173,7 +187,7 @@ seul le SHA-256 est stocké.
 
 - **`clerk_webhook_events`** : table créée, citée nulle part ailleurs.
   Reliquat d'une authentification Clerk abandonnée. À supprimer.
-- **Aucun test de rendu de composant.** Les 189 tests couvrent le serveur et
+- **Aucun test de rendu de composant.** Les 209 tests couvrent le serveur et
   des contrôles statiques. C'est précisément par là qu'est passé le plantage
   `MenuGroupContext is missing` (commit `dd51140`) : un menu qui ne tombe
   qu'à l'ouverture, invisible pour `tsc` comme pour le build. Sans
@@ -196,13 +210,17 @@ premier franc, puis de garder le premier client.**
 
 | # | Chantier | Pourquoi d'abord | Ordre de grandeur |
 |---|---|---|---|
-| 1 | **Activation manuelle des forfaits** (§1, chemin 1) | Sans elle, aucun revenu n'est possible | Jours |
+| ~~1~~ | ~~**Activation manuelle des forfaits**~~ (§1, chemin 1) | **✅ Livré le 20/10/2026 — voir `BACK-OFFICE.md`** | — |
 | 2 | **Déploiement + CI** (§2) | Sans elle, rien n'arrive chez le client et les tests s'érodent | Jours |
 | 3 | **Mode hors ligne** (§3) | Premier motif d'abandon en conditions réelles | Semaines |
 | 4 | **Client, plaque, reçu** (§4) | Première demande d'un exploitant une fois le quotidien couvert | Semaines |
 | 5 | **Robustesse multi-instance** (§5) | Au moment de passer à deux instances, pas avant | Jours |
 | 6 | **Dette** (§6) | En continu | — |
 
-Les chantiers 1 et 2 sont les seuls qui séparent une démonstration d'un
-produit vendable. Tout le reste peut attendre un premier client réel — et sera
-mieux conçu une fois qu'on l'aura écouté.
+Les chantiers 1 et 2 étaient les seuls qui séparaient une démonstration d'un
+produit vendable. **Le premier est fait.** Le chantier 2 — déploiement et
+intégration continue — devient donc le prochain, et le dernier avant qu'un
+client réel puisse s'inscrire, payer et être servi.
+
+Tout le reste peut attendre ce premier client — et sera mieux conçu une fois
+qu'on l'aura écouté.

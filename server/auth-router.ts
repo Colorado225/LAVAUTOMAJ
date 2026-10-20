@@ -141,6 +141,7 @@ interface MePayload {
     last_name: string | null;
     phone: string | null;
     avatar_url: string | null;
+    platform_admin: boolean;
   };
   organization: {
     id: string;
@@ -159,7 +160,7 @@ async function buildMePayload(userId: string): Promise<MePayload> {
       "Base de données indisponible.",
     );
   const q = await pool.query(
-    `SELECT u.id, u.email, u.first_name, u.last_name, u.phone, u.avatar_url,
+    `SELECT u.id, u.email, u.first_name, u.last_name, u.phone, u.avatar_url, u.platform_admin,
             m.role, o.id AS organization_id, o.name AS organization_name, o.onboarding_completed
      FROM users u
      LEFT JOIN organization_members m ON m.user_id = u.id
@@ -184,6 +185,10 @@ async function buildMePayload(userId: string): Promise<MePayload> {
       last_name: row.last_name,
       phone: row.phone,
       avatar_url: row.avatar_url,
+      // Administrateur de plateforme (l'éditeur). Exposé ici parce que le
+      // back-office vit hors du contexte de station : un administrateur peut
+      // n'appartenir à aucune organisation.
+      platform_admin: Boolean(row.platform_admin),
     },
     organization: row.organization_id
       ? {

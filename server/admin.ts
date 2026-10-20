@@ -1,0 +1,560 @@
+import { Router } from "express"
+import { z } from "zod"
+import { asyncRoute, body, parseId } from "./http.ts"
+import { HttpError } from "./auth.ts"
+import { adminDb, auditPlatformAction } from "./platform-admin.ts"
+import { computeSubscriptionState, invalidateSubscriptionCache } from "./entitlements.ts"
+
+// ---------------------------------------------------------------------------
+// Back-office de l'éditeur
+//
+// Raison d'être : jusqu'ici, aucune route ne pouvait activer un forfait payant
+// en production. `POST /subscription/simulate` est bridée hors production, et
+// les seules autres écritures sur `subscriptions` créent l'essai ou l'expirent.
+// Un client qui voulait payer ne le pouvait pas sans SQL écrit à la main.
+//
+// Le paiement reste encaissé hors application (mobile money, virement), comme
+// cela se pratique. Ce module fournit la marche qui manquait : constater la
+// demande, puis activer.
+//
+// Deux partis pris explicites :
+//
+//   1. **Aucune coupure automatique.** Un abonnement `active` reste actif même
+//      après `current_period_end` (voir `computeSubscriptionState` : seul
+//      `trialing` regarde l'échéance). Couper automatiquement un client dont
+//      le virement n'a pas encore été saisi serait plus grave que de laisser
+//      courir quelques jours. En contrepartie, `GET /admin/metrics` et le
+//      filtre `past_due` rendent les échéances dépassées impossibles à
+//      manquer : la décision revient à un humain, mais elle lui est présentée.
+//
+//   2. **Toute action est journalisée chez le client**, pas dans un registre
+//      séparé (voir `auditPlatformAction`). Le propriétaire voit dans son
+//      propre historique que son forfait a été activé, par qui et quand.
+// ---------------------------------------------------------------------------
+
+/** Durées d'activation proposées, en mois. Bornées pour éviter la faute de frappe. */
+/**
+ * Une demande d'activation cesse d'être « en attente » dès qu'elle a reçu une
+ * réponse — un oui (activation) comme un non (refus). Sans la seconde branche,
+ * une demande qu'on choisit de ne pas honorer resterait affichée pour
+ * toujours, et le compteur du tableau de bord ne retomberait jamais à zéro.
+ *
+ * La règle est écrite une seule fois : le compteur des indicateurs et la liste
+ * des demandes doivent compter la même chose, sinon le bandeau annonce trois
+ * demandes là où la liste n'en montre qu'une.
+ */
+const PENDING_CLAUSE = `NOT EXISTS (
+  SELECT 1 FROM audit_logs b
+  WHERE b.organization_id = a.organization_id
+    AND b.action IN ('subscription.activated', 'subscription.request_declined')
+    AND b.created_at > a.created_at
+)`
+
+const MAX_MONTHS = 36
+
+const ORGANIZATION_SELECT = `
+  o.id,
+  o.name,
+  o.created_at,
+  s.status        AS stored_status,
+  s.current_period_end,
+  s.plan_changed_at,
+  p.code          AS plan_code,
+  p.name          AS plan_name,
+  p.price_cents   AS plan_price_cents,
+  (SELECT count(*)::int FROM organization_members m
+     WHERE m.organization_id = o.id AND m.status = 'active')        AS member_count,
+  (SELECT count(*)::int FROM sites si
+     WHERE si.organization_id = o.id AND si.is_active)              AS site_count,
+  (SELECT u.email FROM organization_members m2
+     JOIN users u ON u.id = m2.user_id
+    WHERE m2.organization_id = o.id AND m2.role = 'owner' AND m2.status = 'active'
+    ORDER BY m2.created_at ASC LIMIT 1)                             AS owner_email,
+  (SELECT u.phone FROM organization_members m3
+     JOIN users u ON u.id = m3.user_id
+    WHERE m3.organization_id = o.id AND m3.role = 'owner' AND m3.status = 'active'
+    ORDER BY m3.created_at ASC LIMIT 1)                             AS owner_phone`
+
+interface OrganizationRow {
+  id: string
+  name: string
+  created_at: string
+  stored_status: string | null
+  current_period_end: string | null
+  plan_changed_at: string | null
+  plan_code: string | null
+  plan_name: string | null
+  plan_price_cents: number | null
+  member_count: number
+  site_count: number
+  owner_email: string | null
+  owner_phone: string | null
+}
+
+/**
+ * Enrichit une ligne de l'état réellement appliqué par l'application.
+ *
+ * On réutilise `computeSubscriptionState` plutôt que de relire le statut
+ * stocké : un essai dont l'échéance est passée vaut « expired » pour
+ * l'application, et le back-office doit montrer la même chose. Deux vérités
+ * divergentes seraient pires que pas de back-office du tout.
+ */
+function describe(row: OrganizationRow, now: Date) {
+  const state = computeSubscriptionState({
+    status: row.stored_status,
+    current_period_end: row.current_period_end,
+    plan_code: row.plan_code,
+    plan_name: row.plan_name,
+    plan_price_cents: row.plan_price_cents,
+    now,
+  })
+
+  const periodEnd = row.current_period_end ? new Date(row.current_period_end) : null
+  // « Échéance dépassée » ne concerne que les forfaits payants actifs : un
+  // essai échu est déjà « expired », ce n'est pas un impayé.
+  const pastDue =
+    state.status === "active" && periodEnd !== null && periodEnd.getTime() <= now.getTime()
+
+  return {
+    id: row.id,
+    name: row.name,
+    created_at: row.created_at,
+    owner_email: row.owner_email,
+    owner_phone: row.owner_phone,
+    member_count: row.member_count,
+    site_count: row.site_count,
+    plan_code: row.plan_code,
+    plan_name: row.plan_name,
+    plan_price_cents: row.plan_price_cents ?? 0,
+    status: state.status,
+    stored_status: row.stored_status,
+    read_only: state.read_only,
+    current_period_end: row.current_period_end,
+    plan_changed_at: row.plan_changed_at,
+    days_remaining: state.days_remaining,
+    past_due: pastDue,
+    days_past_due:
+      pastDue && periodEnd
+        ? Math.floor((now.getTime() - periodEnd.getTime()) / 86_400_000)
+        : 0,
+  }
+}
+
+export function createAdminRouter() {
+  const r = Router()
+
+  // -------------------------------------------------------------------------
+  // GET /api/v1/admin/metrics — l'état du parc en un coup d'œil.
+  // -------------------------------------------------------------------------
+  r.get(
+    "/metrics",
+    asyncRoute(async (_req, res) => {
+      const now = new Date()
+      const q = await adminDb().query<OrganizationRow>(
+        `SELECT ${ORGANIZATION_SELECT}
+         FROM organizations o
+         LEFT JOIN subscriptions s ON s.organization_id = o.id
+         LEFT JOIN plans p ON p.id = s.plan_id`,
+      )
+      const rows = q.rows.map((row) => describe(row, now))
+
+      const pendingQ = await adminDb().query<{ n: number }>(
+        `SELECT count(*)::int AS n
+         FROM audit_logs a
+         WHERE a.action = 'subscription.upgrade_requested'
+           AND ${PENDING_CLAUSE}`,
+      )
+
+      res.json({
+        total: rows.length,
+        trialing: rows.filter((o) => o.status === "trialing").length,
+        active: rows.filter((o) => o.status === "active").length,
+        expired: rows.filter((o) => o.status === "expired").length,
+        cancelled: rows.filter((o) => o.status === "cancelled").length,
+        past_due: rows.filter((o) => o.past_due).length,
+        pending_requests: pendingQ.rows[0]?.n ?? 0,
+        // Revenu mensuel récurrent des seuls forfaits actifs, en centimes.
+        mrr_cents: rows
+          .filter((o) => o.status === "active")
+          .reduce((sum, o) => sum + o.plan_price_cents, 0),
+        server_time: now.toISOString(),
+      })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // GET /api/v1/admin/organizations — le parc, filtrable.
+  // -------------------------------------------------------------------------
+  r.get(
+    "/organizations",
+    asyncRoute(async (req, res) => {
+      const now = new Date()
+      const search = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 80) : ""
+      const status = typeof req.query.status === "string" ? req.query.status : ""
+      const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200)
+      const offset = Math.max(Number(req.query.offset) || 0, 0)
+
+      const conditions: string[] = []
+      const values: unknown[] = []
+      if (search) {
+        values.push(`%${search.toLowerCase()}%`)
+        conditions.push(
+          `(lower(o.name) LIKE $${values.length} OR EXISTS (
+              SELECT 1 FROM organization_members m
+              JOIN users u ON u.id = m.user_id
+              WHERE m.organization_id = o.id AND lower(u.email) LIKE $${values.length}))`,
+        )
+      }
+      const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""
+
+      const q = await adminDb().query<OrganizationRow>(
+        `SELECT ${ORGANIZATION_SELECT}
+         FROM organizations o
+         LEFT JOIN subscriptions s ON s.organization_id = o.id
+         LEFT JOIN plans p ON p.id = s.plan_id
+         ${where}
+         ORDER BY o.created_at DESC`,
+        values,
+      )
+
+      // Le statut est calculé, pas stocké : il se filtre après coup.
+      let rows = q.rows.map((row) => describe(row, now))
+      if (status === "past_due") rows = rows.filter((o) => o.past_due)
+      else if (status) rows = rows.filter((o) => o.status === status)
+
+      res.json({
+        organizations: rows.slice(offset, offset + limit),
+        total: rows.length,
+        limit,
+        offset,
+      })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // GET /api/v1/admin/organizations/:id — fiche détaillée.
+  // -------------------------------------------------------------------------
+  r.get(
+    "/organizations/:id",
+    asyncRoute(async (req, res) => {
+      const id = parseId(req.params.id)
+      const now = new Date()
+
+      const q = await adminDb().query<OrganizationRow>(
+        `SELECT ${ORGANIZATION_SELECT}
+         FROM organizations o
+         LEFT JOIN subscriptions s ON s.organization_id = o.id
+         LEFT JOIN plans p ON p.id = s.plan_id
+         WHERE o.id = $1::uuid`,
+        [id],
+      )
+      if (!q.rowCount) throw new HttpError(404, "organization_not_found", "Station introuvable.")
+
+      const membersQ = await adminDb().query(
+        `SELECT u.email, u.first_name, u.last_name, u.phone, m.role, m.status, m.created_at
+         FROM organization_members m JOIN users u ON u.id = m.user_id
+         WHERE m.organization_id = $1::uuid ORDER BY m.created_at ASC`,
+        [id],
+      )
+
+      const historyQ = await adminDb().query(
+        `SELECT a.action, a.metadata, a.created_at, u.email AS actor_email
+         FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_user_id
+         WHERE a.organization_id = $1::uuid AND a.entity_type IN ('subscription','plan')
+         ORDER BY a.created_at DESC LIMIT 30`,
+        [id],
+      )
+
+      res.json({
+        organization: describe(q.rows[0], now),
+        members: membersQ.rows,
+        subscription_history: historyQ.rows,
+      })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // GET /api/v1/admin/upgrade-requests — les demandes d'activation.
+  // -------------------------------------------------------------------------
+  r.get(
+    "/upgrade-requests",
+    asyncRoute(async (req, res) => {
+      const onlyPending = req.query.pending !== "false"
+      const q = await adminDb().query(
+        `SELECT a.id, a.organization_id, a.created_at, a.metadata,
+                o.name AS organization_name,
+                u.email AS requester_email, u.phone AS requester_phone,
+                ${PENDING_CLAUSE} AS pending
+         FROM audit_logs a
+         JOIN organizations o ON o.id = a.organization_id
+         LEFT JOIN users u ON u.id = a.actor_user_id
+         WHERE a.action = 'subscription.upgrade_requested'
+         ORDER BY a.created_at DESC
+         LIMIT 100`,
+      )
+      const rows = onlyPending ? q.rows.filter((row) => row.pending) : q.rows
+      res.json({ requests: rows, total: rows.length })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // POST /api/v1/admin/upgrade-requests/:id/decline — l'autre réponse possible.
+  //
+  // Valider n'est que la moitié du travail : une demande peut rester sans
+  // suite (paiement jamais reçu, doublon, erreur du client). Sans ce geste,
+  // elle resterait éternellement « en attente » et le tableau de bord
+  // deviendrait un décompte de bruit que plus personne ne regarde.
+  //
+  // Refuser ne touche pas à l'abonnement : la station garde exactement l'état
+  // qu'elle avait. On répond à une demande, on ne sanctionne pas.
+  // -------------------------------------------------------------------------
+  r.post(
+    "/upgrade-requests/:id/decline",
+    asyncRoute(async (req, res) => {
+      const requestId = parseId(req.params.id)
+      const admin = req.platformAdmin!
+      const input = body(
+        z.object({ reason: z.string().trim().min(3).max(300) }).strip(),
+        req.body,
+      )
+
+      const pool = adminDb()
+      const q = await pool.query<{ organization_id: string }>(
+        `SELECT organization_id FROM audit_logs
+          WHERE id = $1::uuid AND action = 'subscription.upgrade_requested'`,
+        [requestId],
+      )
+      if (!q.rowCount) {
+        throw new HttpError(404, "not_found", "Cette demande d'activation n'existe pas.")
+      }
+      const organizationId = q.rows[0].organization_id
+
+      // Le refus est inscrit chez le client, comme l'activation : il doit
+      // pouvoir constater qu'on lui a répondu, et pourquoi.
+      await auditPlatformAction(
+        pool,
+        organizationId,
+        admin.userId,
+        "subscription.request_declined",
+        requestId,
+        { reason: input.reason, admin_email: admin.email },
+      )
+
+      res.json({ request_id: requestId, organization_id: organizationId, pending: false })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // POST /api/v1/admin/organizations/:id/activate — la marche qui manquait.
+  // -------------------------------------------------------------------------
+  r.post(
+    "/organizations/:id/activate",
+    asyncRoute(async (req, res) => {
+      const id = parseId(req.params.id)
+      const admin = req.platformAdmin!
+      const input = body(
+        z
+          .object({
+            plan_code: z.string().trim().min(1).max(40),
+            months: z.number().int().min(1).max(MAX_MONTHS).default(1),
+            /** Référence du paiement encaissé hors application (mobile money, virement). */
+            payment_reference: z.string().trim().max(120).optional(),
+            note: z.string().trim().max(500).optional(),
+          })
+          .strip(),
+        req.body,
+      )
+
+      const pool = adminDb()
+      const planQ = await pool.query("SELECT id, code, name, price_cents FROM plans WHERE code = $1", [
+        input.plan_code,
+      ])
+      if (!planQ.rowCount) throw new HttpError(404, "plan_not_found", "Forfait introuvable.")
+      const plan = planQ.rows[0]
+
+      const orgQ = await pool.query("SELECT id, name FROM organizations WHERE id = $1::uuid", [id])
+      if (!orgQ.rowCount) throw new HttpError(404, "organization_not_found", "Station introuvable.")
+
+      // L'échéance court à partir d'aujourd'hui, ou de l'échéance en cours si
+      // elle est encore devant : un renouvellement anticipé ne doit pas faire
+      // perdre les jours déjà payés.
+      const currentQ = await pool.query(
+        "SELECT current_period_end, status FROM subscriptions WHERE organization_id = $1::uuid",
+        [id],
+      )
+      const current = currentQ.rows[0] as
+        | { current_period_end: string | null; status: string }
+        | undefined
+      const now = new Date()
+      const existingEnd = current?.current_period_end ? new Date(current.current_period_end) : null
+      const base =
+        current?.status === "active" && existingEnd && existingEnd.getTime() > now.getTime()
+          ? existingEnd
+          : now
+      const periodEnd = new Date(base)
+      periodEnd.setMonth(periodEnd.getMonth() + input.months)
+
+      // `plan_changed_at` conditionne le délai de grâce à la rétrogradation
+      // (`server/plan-limits.ts`) : l'oublier priverait le client de ses
+      // 14 jours pour rentrer dans les limites du nouveau forfait.
+      await pool.query(
+        `INSERT INTO subscriptions(organization_id, plan_id, status, current_period_end, plan_changed_at)
+         VALUES($1::uuid, $2::uuid, 'active', $3::timestamptz, now())
+         ON CONFLICT (organization_id) DO UPDATE
+           SET plan_id = EXCLUDED.plan_id,
+               status = 'active',
+               current_period_end = EXCLUDED.current_period_end,
+               plan_changed_at = CASE
+                 WHEN subscriptions.plan_id IS DISTINCT FROM EXCLUDED.plan_id THEN now()
+                 ELSE subscriptions.plan_changed_at
+               END,
+               updated_at = now()`,
+        [id, plan.id, periodEnd.toISOString()],
+      )
+
+      await auditPlatformAction(pool, id, admin.userId, "subscription.activated", plan.id, {
+        plan_code: plan.code,
+        plan_name: plan.name,
+        price_cents: plan.price_cents,
+        months: input.months,
+        period_end: periodEnd.toISOString(),
+        payment_reference: input.payment_reference ?? null,
+        note: input.note ?? null,
+        admin_email: admin.email,
+      })
+      invalidateSubscriptionCache(id)
+
+      res.json({
+        organization_id: id,
+        plan_code: plan.code,
+        status: "active",
+        current_period_end: periodEnd.toISOString(),
+        months: input.months,
+      })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // POST /api/v1/admin/organizations/:id/suspend — impayé ou résiliation.
+  // -------------------------------------------------------------------------
+  r.post(
+    "/organizations/:id/suspend",
+    asyncRoute(async (req, res) => {
+      const id = parseId(req.params.id)
+      const admin = req.platformAdmin!
+      const input = body(
+        z.object({ reason: z.string().trim().min(3).max(300) }).strip(),
+        req.body,
+      )
+
+      const pool = adminDb()
+      const updated = await pool.query(
+        `UPDATE subscriptions SET status = 'cancelled', updated_at = now()
+         WHERE organization_id = $1::uuid RETURNING id`,
+        [id],
+      )
+      if (!updated.rowCount) {
+        throw new HttpError(404, "subscription_not_found", "Cette station n'a aucun abonnement.")
+      }
+
+      await auditPlatformAction(pool, id, admin.userId, "subscription.suspended", id, {
+        reason: input.reason,
+        admin_email: admin.email,
+      })
+      invalidateSubscriptionCache(id)
+
+      // `cancelled` bascule la station en lecture seule : les données restent
+      // consultables et exportables, aucune écriture n'est acceptée.
+      res.json({ organization_id: id, status: "cancelled", read_only: true })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // POST /api/v1/admin/organizations/:id/extend-trial — geste commercial.
+  // -------------------------------------------------------------------------
+  r.post(
+    "/organizations/:id/extend-trial",
+    asyncRoute(async (req, res) => {
+      const id = parseId(req.params.id)
+      const admin = req.platformAdmin!
+      const input = body(
+        z
+          .object({
+            days: z.number().int().min(1).max(90),
+            reason: z.string().trim().min(3).max(300),
+          })
+          .strip(),
+        req.body,
+      )
+
+      const pool = adminDb()
+      const currentQ = await pool.query(
+        "SELECT current_period_end, status FROM subscriptions WHERE organization_id = $1::uuid",
+        [id],
+      )
+      if (!currentQ.rowCount) {
+        throw new HttpError(404, "subscription_not_found", "Cette station n'a aucun abonnement.")
+      }
+      const row = currentQ.rows[0] as { current_period_end: string | null; status: string }
+
+      // Un forfait payant en cours ne se « prolonge » pas : le repasser en
+      // essai effacerait ce que le client a payé. C'est une activation ou une
+      // suspension qu'il faut, pas un geste commercial.
+      if (row.status === "active") {
+        throw new HttpError(
+          409,
+          "subscription_active",
+          "Cette station a un forfait payant en cours. Prolonger l'essai effacerait son abonnement : utilisez l'activation pour le renouveler, ou la suspension.",
+        )
+      }
+
+      // On n'ajoute des jours à l'échéance existante que s'il s'agit d'un essai
+      // encore en cours. Dans tous les autres cas — essai échu, abonnement
+      // résilié — on repart d'aujourd'hui : hériter de l'échéance d'un forfait
+      // payé offrirait des mois d'essai par accident.
+      const existing = row.current_period_end ? new Date(row.current_period_end) : null
+      const now = new Date()
+      const base =
+        row.status === "trialing" && existing && existing.getTime() > now.getTime() ? existing : now
+      const periodEnd = new Date(base.getTime() + input.days * 86_400_000)
+
+      await pool.query(
+        `UPDATE subscriptions
+            SET status = 'trialing', current_period_end = $2::timestamptz, updated_at = now()
+          WHERE organization_id = $1::uuid`,
+        [id, periodEnd.toISOString()],
+      )
+
+      await auditPlatformAction(pool, id, admin.userId, "subscription.trial_extended", id, {
+        days: input.days,
+        reason: input.reason,
+        period_end: periodEnd.toISOString(),
+        admin_email: admin.email,
+      })
+      invalidateSubscriptionCache(id)
+
+      res.json({
+        organization_id: id,
+        status: "trialing",
+        current_period_end: periodEnd.toISOString(),
+        days: input.days,
+      })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // GET /api/v1/admin/plans — le catalogue, pour alimenter le formulaire.
+  // -------------------------------------------------------------------------
+  r.get(
+    "/plans",
+    asyncRoute(async (_req, res) => {
+      const q = await adminDb().query(
+        `SELECT code, name, price_cents, billing_cycle, max_users, max_workers, max_sites
+         FROM plans ORDER BY sort_order ASC, price_cents ASC`,
+      )
+      res.json({ plans: q.rows })
+    }),
+  )
+
+  return r
+}

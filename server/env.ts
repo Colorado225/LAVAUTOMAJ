@@ -25,6 +25,16 @@ const schema = z.object({
     .transform((value) => value === "true"),
   /** Intervalle entre deux passages du planificateur de relances, en minutes. */
   REMINDERS_INTERVAL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
+  /**
+   * Adresses des administrateurs de plateforme (l'éditeur), séparées par des
+   * virgules. Appliquée au démarrage : les comptes existants portant l'une de
+   * ces adresses reçoivent le drapeau, les autres le perdent.
+   *
+   * C'est volontairement la seule façon d'en nommer un. Aucune route n'accorde
+   * ce droit : il traverse l'isolation entre clients, il ne doit donc jamais
+   * pouvoir être obtenu depuis l'application elle-même.
+   */
+  PLATFORM_ADMIN_EMAILS: z.string().trim().optional().default(""),
 })
 
 const parsed = schema.safeParse(process.env)
@@ -34,4 +44,7 @@ if (!parsed.success) {
 export const env = {
   ...parsed.data,
   CORS_ORIGINS: parsed.data.CORS_ORIGINS.split(",").map(v => v.trim()).filter(Boolean),
+  PLATFORM_ADMIN_EMAILS: parsed.data.PLATFORM_ADMIN_EMAILS.split(",")
+    .map(v => v.trim().toLowerCase())
+    .filter(Boolean),
 }

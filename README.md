@@ -47,6 +47,8 @@ Variables d'environnement (voir [`.env.example`](.env.example)) :
 - `APP_URL` — URL publique utilisée pour construire les liens envoyés par e-mail.
 - `PASSWORD_RESET_TTL_MINUTES` — validité d'un lien de réinitialisation (défaut `60`).
 - `RESEND_API_KEY` / `MAIL_FROM` — envoi des e-mails transactionnels via Resend.
+- `PLATFORM_ADMIN_EMAILS` — adresses autorisées à ouvrir le back-office de
+  l'éditeur (`/admin`), séparées par des virgules. **Vide = back-office fermé.**
 
 > L'authentification ne dépend d'aucun service externe : les comptes (mot de passe
 > haché scrypt) et les sessions (cookies httpOnly, table `auth_sessions`) vivent
@@ -120,3 +122,26 @@ tests/               # Tests unitaires (node:test via tsx)
    justification de tout écart.
 4. **Annulation de lavage** : motif obligatoire, paiements marqués `refunded`, contre-passation
    en caisse si la session d'origine est encore ouverte.
+5. **Abonnement** : essai de 14 jours à l'inscription, puis lecture seule à
+   l'expiration. Le client demande l'activation depuis l'application
+   (`POST /support/upgrade-request`) ; l'éditeur encaisse hors application et
+   valide — ou décline — depuis le back-office `/admin`. Voir
+   [`BACK-OFFICE.md`](BACK-OFFICE.md).
+
+## Back-office de l'éditeur
+
+Écran réservé au créateur de l'application, pour suivre le parc et gérer les
+états d'abonnement : valider une demande, décliner, suspendre, prolonger un
+essai.
+
+```bash
+# .env — puis redémarrer le serveur
+PLATFORM_ADMIN_EMAILS=votre.adresse@exemple.ci
+```
+
+L'entrée **« Administration »** apparaît alors dans le menu de l'avatar. Le
+droit ne s'accorde que par cette variable : **aucune route de l'application ne
+peut l'attribuer**, et le serveur répond `404` — et non `403` — à tout compte
+qui n'en dispose pas, pour que l'existence du back-office ne se devine pas.
+
+Détail des décisions, des routes et des tests : [`BACK-OFFICE.md`](BACK-OFFICE.md).
