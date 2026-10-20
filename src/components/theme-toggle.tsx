@@ -8,6 +8,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuGroup,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -98,30 +99,40 @@ export function ThemeMenu() {
         <Icon className="size-4" aria-hidden="true" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel>Apparence</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {THEME_OPTIONS.map((option) => {
-          const OptionIcon = THEME_ICON[option.value]
-          const selected = theme === option.value
-          return (
-            <DropdownMenuItem
-              key={option.value}
-              onClick={() => setTheme(option.value)}
-              className="gap-2"
-            >
-              <OptionIcon className="size-4 shrink-0" aria-hidden="true" />
-              <span className="flex-1">{option.label}</span>
-              {option.value === "system" && (
-                <span className="text-xs text-muted-foreground">
-                  {resolvedTheme === "dark" ? "sombre" : "clair"}
-                </span>
-              )}
-              {selected && (
-                <Check className="size-4 shrink-0" aria-hidden="true" />
-              )}
-            </DropdownMenuItem>
-          )
-        })}
+        {/*
+          Le groupe n'est pas décoratif : `DropdownMenuLabel` est un
+          `Menu.GroupLabel` Base UI, qui enregistre son identifiant auprès du
+          groupe parent pour en devenir l'`aria-labelledby`. Hors d'un groupe,
+          le contexte manque et le menu lève une erreur à l'ouverture.
+          Les options sont dans le même groupe que le libellé, pour qu'un
+          lecteur d'écran annonce bien « Apparence » avant de les énumérer.
+        */}
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Apparence</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {THEME_OPTIONS.map((option) => {
+            const OptionIcon = THEME_ICON[option.value]
+            const selected = theme === option.value
+            return (
+              <DropdownMenuItem
+                key={option.value}
+                onClick={() => setTheme(option.value)}
+                className="gap-2"
+              >
+                <OptionIcon className="size-4 shrink-0" aria-hidden="true" />
+                <span className="flex-1">{option.label}</span>
+                {option.value === "system" && (
+                  <span className="text-xs text-muted-foreground">
+                    {resolvedTheme === "dark" ? "sombre" : "clair"}
+                  </span>
+                )}
+                {selected && (
+                  <Check className="size-4 shrink-0" aria-hidden="true" />
+                )}
+              </DropdownMenuItem>
+            )
+          })}
+        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   )
