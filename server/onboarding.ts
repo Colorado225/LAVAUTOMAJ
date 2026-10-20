@@ -4,6 +4,7 @@ import type { Pool } from "pg"
 import { getPool } from "./db.ts"
 import { asyncRoute, body, tenant, requireRole } from "./http.ts"
 import { HttpError } from "./auth.ts"
+import { TRIAL_DAYS, invalidateSubscriptionCache } from "./entitlements.ts"
 
 /** Wizard stages, in order. "review" is the confirmation screen. */
 export const ONBOARDING_STAGES = ["station", "services", "workers", "plan", "review"] as const
@@ -369,15 +370,18 @@ export function createOnboardingRouter() {
           }
         }
 
-        // 4. Subscription — free plans get a 14-day trial from onboarding validation.
+        // 4. Abonnement — le forfait Gratuit ouvre un essai de TRIAL_DAYS jours
+        // à compter de la validation de l'onboarding. Passé ce délai, l'espace
+        // passe en lecture seule (voir server/entitlements.ts).
         const isFree = Number(plan.price_cents) === 0
         const subscriptionStatus = isFree ? "trialing" : "pending"
         await client.query(
           `INSERT INTO subscriptions(organization_id, plan_id, status, current_period_end)
-           VALUES($1,$2,$3, CASE WHEN $4 THEN now() + interval '14 days' ELSE NULL END)
+           VALUES($1,$2,$3, CASE WHEN $4 THEN now() + ($5 || ' days')::interval ELSE NULL END)
            ON CONFLICT (organization_id) DO UPDATE SET plan_id=EXCLUDED.plan_id, status=EXCLUDED.status, current_period_end=EXCLUDED.current_period_end, updated_at=now()`,
-          [t.organizationId, plan.id, subscriptionStatus, isFree],
+          [t.organizationId, plan.id, subscriptionStatus, isFree, String(TRIAL_DAYS)],
         )
+        invalidateSubscriptionCache(t.organizationId)
 
         // 5. Mark onboarding complete.
         await client.query(

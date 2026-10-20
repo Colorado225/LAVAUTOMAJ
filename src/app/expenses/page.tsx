@@ -2,6 +2,7 @@
 
 import { useRef, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
+import { useCapability } from "@/lib/subscription"
 import { apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import {
@@ -35,7 +36,7 @@ import { TableSkeleton } from "@/components/ui/table-skeleton"
 import { SubmitButton } from "@/components/ui/submit-button"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useSuccessFlash } from "@/hooks/use-success-flash"
-import { Plus, Receipt, X } from "lucide-react"
+import { Lock, Plus, Receipt, X } from "lucide-react"
 
 interface Site {
   id: string
@@ -112,6 +113,7 @@ interface CreateExpenseRequest {
 }
 
 export default function ExpensesPage() {
+  const manageExpenses = useCapability("expenses.manage")
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<Expense[]>(`/api/v1/expenses?refresh=${refreshKey}`)
   const expenses = data ?? []
@@ -245,8 +247,20 @@ export default function ExpensesPage() {
             </p>
           </div>
           <Dialog open={open} onOpenChange={handleOpenChange}>
-            <DialogTrigger render={<Button />}>
-              <Plus className="mr-2 h-4 w-4" /> Nouvelle dépense
+            <DialogTrigger
+              render={
+                <Button
+                  disabled={!manageExpenses.allowed}
+                  title={manageExpenses.reason ?? undefined}
+                />
+              }
+            >
+              {manageExpenses.allowed ? (
+                <Plus className="mr-2 h-4 w-4" />
+              ) : (
+                <Lock className="mr-2 h-4 w-4" />
+              )}{" "}
+              Nouvelle dépense
             </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>

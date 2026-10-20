@@ -4,6 +4,8 @@ import * as React from "react"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { SubscriptionProvider } from "@/lib/subscription"
+import { TrialBanner } from "@/components/trial/trial-banner"
 
 interface BaseLayoutProps {
   children: React.ReactNode
@@ -13,6 +15,7 @@ interface BaseLayoutProps {
 
 export function BaseLayout({ children, title, description }: BaseLayoutProps) {
   return (
+    <SubscriptionProvider>
     <SidebarProvider
       style={
         {
@@ -28,6 +31,7 @@ export function BaseLayout({ children, title, description }: BaseLayoutProps) {
         <div className="flex flex-1 flex-col">
           <div className="@container/main flex flex-1 flex-col gap-2">
             <div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6">
+              <TrialBanner className="mx-4 lg:mx-6" />
               {title && (
                 <div className="px-4 lg:px-6">
                   <div className="flex flex-col gap-2">
@@ -44,5 +48,6 @@ export function BaseLayout({ children, title, description }: BaseLayoutProps) {
         </div>
       </SidebarInset>
     </SidebarProvider>
+    </SubscriptionProvider>
   )
 }

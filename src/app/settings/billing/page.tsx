@@ -13,6 +13,8 @@ import {
 } from "@/components/ui/card"
 import { useApi } from "@/lib/api"
 import type { OnboardingSummary } from "@/lib/onboarding-api"
+import { TrialStatusCard } from "@/components/trial/trial-status-card"
+import { TrialSimulator } from "@/components/trial/trial-simulator"
 
 const statusLabels: Record<string, string> = {
   active: "Actif",
@@ -59,6 +61,8 @@ export default function BillingSettings() {
             Consultez le forfait réellement associé à votre organisation.
           </p>
         </div>
+
+        <TrialStatusCard />
 
         {loading ? (
           <Card role="status" aria-busy="true" aria-label="Chargement du forfait">
@@ -144,6 +148,8 @@ export default function BillingSettings() {
             </CardContent>
           </Card>
         )}
+
+        <TrialSimulator />
       </div>
     </BaseLayout>
   )

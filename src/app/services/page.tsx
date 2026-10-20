@@ -3,6 +3,7 @@
 import type * as React from "react"
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
+import { useCapability } from "@/lib/subscription"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -93,6 +94,7 @@ function formatXof(cents: number) {
 }
 
 export default function ServicesPage() {
+  const manageCatalog = useCapability("catalog.manage")
   const [refreshKey, setRefreshKey] = useState(0)
   const { data: services, loading, error } = useApi<Service[]>(`/api/v1/services?refresh=${refreshKey}`)
   const { data: categories, loading: categoriesLoading, error: categoriesError } = useApi<ServiceCategory[]>(`/api/v1/service-categories?refresh=${refreshKey}`)
@@ -226,7 +228,7 @@ export default function ServicesPage() {
           <div>
             <p className="text-sm text-muted-foreground">Les modifications sont enregistrées dans l’organisation active. Les prix historiques restent figés sur chaque lavage.</p>
           </div>
-          {canManage && <Button onClick={openCreateDialog}><Plus className="mr-2 size-4" />Nouvelle prestation</Button>}
+          {canManage && <Button onClick={openCreateDialog} disabled={!manageCatalog.allowed} title={manageCatalog.reason ?? undefined}><Plus className="mr-2 size-4" />Nouvelle prestation</Button>}
         </div>
 
         {mutationSuccess && <p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">{mutationSuccess}</p>}
@@ -281,7 +283,7 @@ export default function ServicesPage() {
                         <TableCell>{service.duration_minutes ? `${service.duration_minutes} min` : "—"}</TableCell>
                         <TableCell className="text-right">{formatXof(service.price_cents)}</TableCell>
                         <TableCell><Badge variant={service.is_active ? "secondary" : "outline"}>{service.is_active ? "Active" : "Inactive"}</Badge></TableCell>
-                        {canManage && <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" aria-label={`Modifier ${service.name}`} onClick={() => openEditDialog(service)}><Pencil className="size-4" /></Button><Button variant="ghost" size="icon" disabled={busyServiceId === service.id} aria-label={service.is_active ? `Désactiver ${service.name}` : `Réactiver ${service.name}`} onClick={() => void toggleService(service)}>{busyServiceId === service.id ? <RefreshCw className="size-4 animate-spin" /> : service.is_active ? <ToggleLeft className="size-4" /> : <ToggleRight className="size-4" />}</Button></div></TableCell>}
+                        {canManage && <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" disabled={!manageCatalog.allowed} title={manageCatalog.reason ?? undefined} aria-label={`Modifier ${service.name}`} onClick={() => openEditDialog(service)}><Pencil className="size-4" /></Button><Button variant="ghost" size="icon" title={manageCatalog.reason ?? undefined} disabled={!manageCatalog.allowed || busyServiceId === service.id} aria-label={service.is_active ? `Désactiver ${service.name}` : `Réactiver ${service.name}`} onClick={() => void toggleService(service)}>{busyServiceId === service.id ? <RefreshCw className="size-4 animate-spin" /> : service.is_active ? <ToggleLeft className="size-4" /> : <ToggleRight className="size-4" />}</Button></div></TableCell>}
                       </TableRow>
                     ))}
                   </TableBody>

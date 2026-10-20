@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
+import { useCapability } from "@/lib/subscription"
 import { useApi, apiFetch } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import {
@@ -25,7 +26,7 @@ import {
 import { AnimatedNumber } from "@/components/ui/animated-number"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
-import { ArrowDownToLine, ArrowUpFromLine, Plus, WalletCards } from "lucide-react"
+import { ArrowDownToLine, ArrowUpFromLine, Lock, Plus, WalletCards } from "lucide-react"
 
 interface Site {
   id: string
@@ -63,6 +64,7 @@ function xofToCents(value: string, requirePositive = false): number | null {
 }
 
 export default function CashDrawerPage() {
+  const manageCash = useCapability("cash.manage")
   const { data: sites, loading: sitesLoading, error: sitesError } = useApi<Site[]>("/api/v1/sites")
   const [selectedSiteId, setSelectedSiteId] = React.useState("")
   const siteId = selectedSiteId || sites?.[0]?.id || ""
@@ -251,9 +253,14 @@ export default function CashDrawerPage() {
                 setMutationError(null)
                 setOpenDialog(true)
               }}
-              disabled={!siteId || !!session || loading || sitesLoading}
+              disabled={!siteId || !!session || loading || sitesLoading || !manageCash.allowed}
+              title={manageCash.reason ?? undefined}
             >
-              <Plus className="mr-2 size-4" />
+              {manageCash.allowed ? (
+                <Plus className="mr-2 size-4" />
+              ) : (
+                <Lock className="mr-2 size-4" />
+              )}
               {session ? "Session ouverte" : "Nouvelle session"}
             </Button>
           </div>
@@ -344,6 +351,8 @@ export default function CashDrawerPage() {
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="outline"
+                    disabled={!manageCash.allowed}
+                    title={manageCash.reason ?? undefined}
                     onClick={() => {
                       setMovementType("entry")
                       setMutationError(null)
@@ -354,6 +363,8 @@ export default function CashDrawerPage() {
                   </Button>
                   <Button
                     variant="outline"
+                    disabled={!manageCash.allowed}
+                    title={manageCash.reason ?? undefined}
                     onClick={() => {
                       setMovementType("exit")
                       setMutationError(null)
@@ -363,6 +374,8 @@ export default function CashDrawerPage() {
                     <ArrowUpFromLine className="mr-2 size-4" /> Sortie
                   </Button>
                   <Button
+                    disabled={!manageCash.allowed}
+                    title={manageCash.reason ?? undefined}
                     onClick={() => {
                       setCountedAmount("")
                       setDiscrepancyReason("")

@@ -33,8 +33,17 @@ export interface ExpenseCategoryReportRow {
   amount_cents: number
 }
 
+/** Période tronquée par le serveur (essai gratuit terminé). */
+export interface ReportRestriction {
+  reason: string
+  requested_from: string
+  window_days: number
+  message: string
+}
+
 export interface ReportResponse {
   period: { from: string; to: string }
+  restriction?: ReportRestriction | null
   summary: ReportSummary
   daily: DailyReportRow[]
   top_services: ServiceReportRow[]

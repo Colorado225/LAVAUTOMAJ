@@ -3,7 +3,7 @@
 import type * as React from "react"
 import { useState } from "react"
 import { Link, useParams } from "react-router-dom"
-import { ArrowLeft, Ban, RefreshCw } from "lucide-react"
+import { ArrowLeft, Ban, Lock, RefreshCw } from "lucide-react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { apiFetch, useApi } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
+import { useCapability } from "@/lib/subscription"
 
 interface Wash {
   id: string
@@ -95,6 +96,7 @@ function paymentStatusLabel(status: string): string {
 }
 
 export default function WashDetailPage() {
+  const cancelCapability = useCapability("washes.cancel")
   const { washID } = useParams<{ washID: string }>()
   const [refreshKey, setRefreshKey] = useState(0)
   const path = washID ? `/api/v1/washes/${encodeURIComponent(washID)}?refresh=${refreshKey}` : ""
@@ -299,13 +301,19 @@ export default function WashDetailPage() {
                   </div>
                   <Button
                     variant="destructive"
-                    disabled={hasVerifiedPayment}
+                    disabled={hasVerifiedPayment || !cancelCapability.allowed}
+                    title={cancelCapability.reason ?? undefined}
                     onClick={() => {
                       setMutationError(null)
                       setCancelOpen((open) => !open)
                     }}
                   >
-                    <Ban className="mr-2 size-4" /> Annuler le lavage
+                    {cancelCapability.allowed ? (
+                      <Ban className="mr-2 size-4" />
+                    ) : (
+                      <Lock className="mr-2 size-4" />
+                    )}{" "}
+                    Annuler le lavage
                   </Button>
                 </div>
                 {cancelOpen && (

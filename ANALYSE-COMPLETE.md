@@ -482,4 +482,12 @@ Test de bout en bout exécuté sur l'API (PGlite) : lien généré → jeton val
 
 ---
 
+## 12. Essai gratuit de 14 jours (20 octobre 2026)
+
+Le forfait Gratuit ouvre désormais un **essai de 14 jours** matérialisé par un compte à rebours, puis bascule l'organisation en **lecture seule** : écritures refusées (`402 trial_expired`), export et rapports avancés coupés, historique ramené aux 7 derniers jours, consultation intégrale conservée. Moteur de droits dans `server/entitlements.ts` (fonction pure testée + middlewares globaux), état exposé par `GET /api/v1/subscription`, interface dans `src/lib/subscription.tsx` et `src/components/trial/*`.
+
+→ Détail complet, contrat d'API et procédure de test : **`ESSAI-GRATUIT.md`**.
+
+---
+
 *Généré automatiquement par analyse statique du dépôt `Colorado225/LAVAUTO` — `server.ts`, `server/*.ts`, `src/**/*`, `tests/*`, `package.json`, `vite.config.ts`, `tsconfig.json`. Section 11 ajoutée après application des correctifs.*

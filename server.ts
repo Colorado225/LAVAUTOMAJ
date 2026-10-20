@@ -15,6 +15,8 @@ import { createApiRouter } from "./server/api.ts"
 import { createOperationsRouter } from "./server/operations.ts"
 import { createTeamRouter } from "./server/team.ts"
 import { createReportsRouter } from "./server/reports.ts"
+import { createSubscriptionRouter } from "./server/subscription.ts"
+import { attachSubscription, blockWritesWhenReadOnly } from "./server/entitlements.ts"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -73,6 +75,11 @@ app.use("/api/v1", (_req, res, next) => {
 app.use("/api/v1/auth", createAuthRouter())
 app.use("/api/v1", requireSession)
 app.use("/api/v1", requireTenantContext)
+// État d'abonnement (essai gratuit de 14 jours) : attaché à chaque requête,
+// puis filet de sécurité qui refuse les écritures une fois l'essai terminé.
+app.use("/api/v1", attachSubscription)
+app.use("/api/v1", blockWritesWhenReadOnly)
+app.use("/api/v1", createSubscriptionRouter())
 app.use("/api/v1", createOnboardingRouter())
 app.use("/api/v1", createApiRouter())
 app.use("/api/v1", createTeamRouter())

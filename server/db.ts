@@ -280,12 +280,15 @@ async function seedDemoData(
     [orgId, userId]
   );
 
-  const proPlanRes = await queryFn("SELECT id FROM plans WHERE code = 'pro'");
-  if (proPlanRes.rows.length > 0) {
+  // Démonstration : la station est sur le forfait Gratuit, en cours d'essai.
+  // L'essai de 14 jours a démarré il y a 3 jours → il reste 11 jours, ce qui
+  // rend le compte à rebours visible dès la première connexion.
+  const freePlanRes = await queryFn("SELECT id FROM plans WHERE code = 'free'");
+  if (freePlanRes.rows.length > 0) {
     await queryFn(
-      `INSERT INTO subscriptions (organization_id, plan_id, status)
-       VALUES ($1, $2, 'active')`,
-      [orgId, proPlanRes.rows[0].id]
+      `INSERT INTO subscriptions (organization_id, plan_id, status, current_period_end)
+       VALUES ($1, $2, 'trialing', NOW() + interval '11 days')`,
+      [orgId, freePlanRes.rows[0].id]
     );
   }
 
@@ -426,7 +429,7 @@ async function seedDemoData(
 
   await queryFn(
     `INSERT INTO onboarding_progress (organization_id, current_stage, completed_at, plan_code)
-     VALUES ($1, 'completed', NOW(), 'pro')
+     VALUES ($1, 'completed', NOW(), 'free')
      ON CONFLICT (organization_id) DO UPDATE SET current_stage = 'completed', completed_at = NOW()`,
     [orgId]
   );

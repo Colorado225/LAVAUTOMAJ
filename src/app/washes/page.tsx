@@ -3,6 +3,7 @@
 import { useMemo, useState, type FormEvent } from "react"
 import { Link, useViewTransitionState } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
+import { useCapability } from "@/lib/subscription"
 import { apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { Button } from "@/components/ui/button"
@@ -13,7 +14,7 @@ import { SubmitButton } from "@/components/ui/submit-button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useSuccessFlash } from "@/hooks/use-success-flash"
-import { ArrowRight, Check, Droplets, Plus } from "lucide-react"
+import { ArrowRight, Check, Droplets, Lock, Plus } from "lucide-react"
 
 interface Site {
   id: string
@@ -112,6 +113,7 @@ function WashReference({ washId, reference }: { washId: string; reference: strin
 }
 
 export default function WashesPage() {
+  const createWash = useCapability("washes.create")
   const [selectedSiteId, setSelectedSiteId] = useState("")
   const sitePath = "/api/v1/sites"
   const { data: sites, loading: sitesLoading, error: sitesError } = useApi<Site[]>(sitePath)
@@ -298,9 +300,15 @@ export default function WashesPage() {
                 setMutationSuccess(null)
                 setFormOpen((open) => !open)
               }}
-              disabled={sitesLoading || activeSites.length === 0}
+              disabled={sitesLoading || activeSites.length === 0 || !createWash.allowed}
+              title={createWash.reason ?? undefined}
             >
-              <Plus className="mr-2 size-4" /> Nouveau lavage
+              {createWash.allowed ? (
+                <Plus className="mr-2 size-4" />
+              ) : (
+                <Lock className="mr-2 size-4" />
+              )}{" "}
+              Nouveau lavage
             </Button>
           </div>
         </div>
@@ -539,6 +547,7 @@ export default function WashesPage() {
                   successLabel="Lavage enregistré"
                   idleIcon={<Check className="size-4" />}
                   disabled={
+                    !createWash.allowed ||
                     !siteId || !vehicleCategoryId || selectedServices.length === 0 ||
                     !amountIsValid || (cashNeedsSession && (cashSessionLoading || !cashSession))
                   }

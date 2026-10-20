@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
+import { useCapability } from "@/lib/subscription"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -66,6 +67,7 @@ function roleLabel(worker: WorkerRecord) {
 }
 
 export default function TeamPage() {
+  const manageTeam = useCapability("team.manage")
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<WorkerRecord[]>(`/api/v1/workers?refresh=${refreshKey}`)
   const { data: accounts, loading: accountsLoading, error: accountsError } = useApi<OrganizationAccount[]>(`/api/v1/users?refresh=${refreshKey}`)
@@ -206,7 +208,14 @@ export default function TeamPage() {
             </p>
           </div>
           {canManage && (
-            <Button onClick={openCreateDialog} disabled={workerLimit !== null && workerLimit !== undefined && activeWorkers.length >= workerLimit}>
+            <Button
+              onClick={openCreateDialog}
+              title={manageTeam.reason ?? undefined}
+              disabled={
+                !manageTeam.allowed ||
+                (workerLimit !== null && workerLimit !== undefined && activeWorkers.length >= workerLimit)
+              }
+            >
               <UserPlus className="mr-2 size-4" /> Ajouter un travailleur
             </Button>
           )}
@@ -327,10 +336,10 @@ export default function TeamPage() {
                         {canManage && (
                           <TableCell>
                             <div className="flex justify-end gap-1">
-                              <Button variant="ghost" size="icon" aria-label={`Modifier ${worker.first_name} ${worker.last_name}`} onClick={() => openEditDialog(worker)}>
+                              <Button variant="ghost" size="icon" disabled={!manageTeam.allowed} title={manageTeam.reason ?? undefined} aria-label={`Modifier ${worker.first_name} ${worker.last_name}`} onClick={() => openEditDialog(worker)}>
                                 <Pencil className="size-4" />
                               </Button>
-                              <Button variant="ghost" size="icon" disabled={busyWorkerId === worker.id || (worker.status !== "active" && workerLimit !== null && workerLimit !== undefined && activeWorkers.length >= workerLimit)} aria-label={worker.status === "active" ? `Désactiver ${worker.first_name} ${worker.last_name}` : `Réactiver ${worker.first_name} ${worker.last_name}`} onClick={() => void toggleWorkerStatus(worker)}>
+                              <Button variant="ghost" size="icon" title={manageTeam.reason ?? undefined} disabled={!manageTeam.allowed || busyWorkerId === worker.id || (worker.status !== "active" && workerLimit !== null && workerLimit !== undefined && activeWorkers.length >= workerLimit)} aria-label={worker.status === "active" ? `Désactiver ${worker.first_name} ${worker.last_name}` : `Réactiver ${worker.first_name} ${worker.last_name}`} onClick={() => void toggleWorkerStatus(worker)}>
                                 {busyWorkerId === worker.id ? <RefreshCw className="size-4 animate-spin" /> : worker.status === "active" ? <UserRoundX className="size-4" /> : <UserRoundCheck className="size-4" />}
                               </Button>
                             </div>

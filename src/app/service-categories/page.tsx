@@ -4,6 +4,7 @@ import type * as React from "react"
 
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
+import { useCapability } from "@/lib/subscription"
 import { Badge } from "@/components/ui/badge"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
 import { Button } from "@/components/ui/button"
@@ -44,6 +45,7 @@ interface ServiceCategory {
 }
 
 export default function ServiceCategoriesPage() {
+  const manageCatalog = useCapability("catalog.manage")
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<ServiceCategory[]>(`/api/v1/service-categories?refresh=${refreshKey}`)
   const { data: member } = useApi<CurrentMember>(`/api/v1/auth/me?refresh=${refreshKey}`)
@@ -143,7 +145,7 @@ export default function ServiceCategoriesPage() {
       <div className="space-y-6 p-4">
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
           <p className="max-w-2xl text-sm text-muted-foreground">Les catégories permettent de classer les prestations. La désactivation les retire des nouvelles sélections sans supprimer l’historique.</p>
-          {canManage && <Button onClick={openCreateDialog}><Plus className="mr-2 size-4" />Nouvelle catégorie</Button>}
+          {canManage && <Button onClick={openCreateDialog} disabled={!manageCatalog.allowed} title={manageCatalog.reason ?? undefined}><Plus className="mr-2 size-4" />Nouvelle catégorie</Button>}
         </div>
         {mutationSuccess && <p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">{mutationSuccess}</p>}
         {mutationError && !dialogOpen && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{mutationError}</p>}
@@ -165,7 +167,7 @@ export default function ServiceCategoriesPage() {
                       <TableRow key={category.id} className="row-in" style={{ "--row": Math.min(index, 10) } as React.CSSProperties}>
                         <TableCell className="font-medium">{category.name}</TableCell>
                         <TableCell><Badge variant={category.is_active ? "secondary" : "outline"}>{category.is_active ? "Active" : "Inactive"}</Badge></TableCell>
-                        {canManage && <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" aria-label={`Modifier ${category.name}`} onClick={() => openEditDialog(category)}><Pencil className="size-4" /></Button><Button variant="ghost" size="icon" disabled={busyCategoryId === category.id} aria-label={category.is_active ? `Désactiver ${category.name}` : `Réactiver ${category.name}`} onClick={() => void toggleCategory(category)}>{busyCategoryId === category.id ? <RefreshCw className="size-4 animate-spin" /> : category.is_active ? <ToggleLeft className="size-4" /> : <ToggleRight className="size-4" />}</Button></div></TableCell>}
+                        {canManage && <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" disabled={!manageCatalog.allowed} title={manageCatalog.reason ?? undefined} aria-label={`Modifier ${category.name}`} onClick={() => openEditDialog(category)}><Pencil className="size-4" /></Button><Button variant="ghost" size="icon" title={manageCatalog.reason ?? undefined} disabled={!manageCatalog.allowed || busyCategoryId === category.id} aria-label={category.is_active ? `Désactiver ${category.name}` : `Réactiver ${category.name}`} onClick={() => void toggleCategory(category)}>{busyCategoryId === category.id ? <RefreshCw className="size-4 animate-spin" /> : category.is_active ? <ToggleLeft className="size-4" /> : <ToggleRight className="size-4" />}</Button></div></TableCell>}
                       </TableRow>
                     ))}
                   </TableBody>

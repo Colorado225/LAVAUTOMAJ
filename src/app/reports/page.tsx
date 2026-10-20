@@ -25,6 +25,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useApi } from "@/lib/api"
+import { useCapability } from "@/lib/subscription"
 import type { ChartConfig } from "@/components/ui/chart"
 import type { ReportResponse } from "@/lib/reporting-api"
 import {
@@ -36,7 +37,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import { BarChart3, Download, Wallet, CarFront, Receipt, TrendingUp } from "lucide-react"
+import { BarChart3, Download, Lock, Wallet, CarFront, Receipt, TrendingUp, History } from "lucide-react"
 
 const chartConfig = {
   revenue: { label: "Encaissements", color: "#2563eb" },
@@ -139,6 +140,7 @@ function downloadReport(report: ReportResponse) {
 }
 
 export default function ReportsPage() {
+  const exportReports = useCapability("reports.export")
   const today = useMemo(() => dateInAbidjan(), [])
   const [from, setFrom] = useState(() => shiftDate(dateInAbidjan(), -29))
   const [to, setTo] = useState(today)
@@ -186,12 +188,36 @@ export default function ReportsPage() {
               Au
               <Input type="date" value={to} min={from || undefined} max={today} onChange={(event) => setTo(event.target.value)} className="w-full sm:w-40" />
             </label>
-            <Button type="button" variant="outline" disabled={!data || loading} onClick={() => data && downloadReport(data)}>
-              <Download className="mr-2 size-4" /> Exporter CSV
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!data || loading || !exportReports.allowed}
+              title={exportReports.reason ?? undefined}
+              onClick={() => data && exportReports.allowed && downloadReport(data)}
+            >
+              {exportReports.allowed ? (
+                <Download className="mr-2 size-4" />
+              ) : (
+                <Lock className="mr-2 size-4" />
+              )}{" "}
+              Exporter CSV
             </Button>
           </div>
         </div>
 
+        {data?.restriction && (
+          <p
+            role="status"
+            className="row-in flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm"
+          >
+            <History className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+            <span>
+              {data.restriction.message} Période affichée : du{" "}
+              {new Date(data.period.from).toLocaleDateString("fr-CI")} au{" "}
+              {new Date(data.period.to).toLocaleDateString("fr-CI")}.
+            </span>
+          </p>
+        )}
         {!hasValidRange && <p role="alert" className="text-sm text-destructive">La date de début doit être antérieure ou égale à la date de fin.</p>}
         {error && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</p>}
 

@@ -4,6 +4,7 @@ import type { Pool } from "pg"
 import { getPool } from "./db.ts"
 import { asyncRoute, tenant } from "./http.ts"
 import { HttpError } from "./auth.ts"
+import { clampReportRange, EXPIRED_REPORT_WINDOW_DAYS } from "./entitlements.ts"
 
 /** Validate ?from/?to (ISO dates, chronological, at most ~1 year). */
 export function parseReportRange(query: { from?: unknown; to?: unknown }) {
@@ -109,7 +110,12 @@ export function createReportsRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const today = new Date().toISOString().slice(0, 10)
-      const range = parseReportRange({ from: req.query.from || today, to: req.query.to || today })
+      const requested = parseReportRange({ from: req.query.from || today, to: req.query.to || today })
+      // Essai terminé : l'historique consultable est ramené à 7 jours. On
+      // tronque la période au lieu de refuser la requête, pour que l'écran
+      // reste utilisable et que la limite soit visible plutôt que bloquante.
+      const windowDays = req.subscription?.report_window_days ?? null
+      const { clamped, ...range } = clampReportRange(requested, windowDays)
       const pool = db()
       const args = [t.organizationId, range.from, range.to]
 
@@ -185,6 +191,15 @@ export function createReportsRouter() {
 
       res.json({
         period: { from: range.from, to: range.to },
+        // Informe l'interface que la période affichée a été réduite.
+        restriction: clamped
+          ? {
+              reason: "trial_expired",
+              requested_from: requested.from,
+              window_days: windowDays ?? EXPIRED_REPORT_WINDOW_DAYS,
+              message: `Essai terminé : l’historique est limité aux ${windowDays ?? EXPIRED_REPORT_WINDOW_DAYS} derniers jours.`,
+            }
+          : null,
         summary: {
           total_washes: summary.total_washes,
           completed_washes: summary.completed_washes,
