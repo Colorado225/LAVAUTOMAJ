@@ -16,7 +16,7 @@ import {
   Building2,
 } from "lucide-react"
 import { Link } from "react-router-dom"
-import { Logo } from "@/components/logo"
+import { BrandBadge } from "@/components/brand"
 import { useOnboardingStatus } from "@/lib/onboarding-api"
 import { TrialCountdown } from "@/components/trial/trial-countdown"
 import { usePermissions, type Permission } from "@/lib/permissions"
@@ -186,9 +186,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" render={<Link to="/dashboard" viewTransition />}>
-              <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <Logo size={24} className="text-current" />
-              </div>
+              <BrandBadge height={32} />
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">{stationName}</span>
                 <span className="truncate text-xs">

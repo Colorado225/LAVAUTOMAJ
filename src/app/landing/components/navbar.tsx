@@ -2,7 +2,7 @@ import { useState } from "react"
 import { AnimatePresence, motion, useMotionValueEvent, useReducedMotion, useScroll } from "framer-motion"
 import { ArrowRight, Menu, X } from "lucide-react"
 import { Link } from "react-router-dom"
-import { Logo } from "@/components/logo"
+import { BrandMark } from "@/components/brand"
 
 const navigationItems = [
   { name: "Les enjeux", href: "#enjeux" },
@@ -36,13 +36,11 @@ export function LandingNavbar() {
         }`}
       >
         <Link to="/landing" className="flex shrink-0 items-center gap-3 rounded-xl outline-none focus-visible:ring-4 focus-visible:ring-blue-200">
-          <span
-            className={`grid place-items-center rounded-2xl bg-[#0c2852] text-white shadow-md shadow-blue-950/15 transition-all duration-300 ${
-              compact ? "size-9" : "size-10"
-            }`}
-          >
-            <Logo size={25} />
-          </span>
+          <BrandMark
+            height={compact ? 34 : 40}
+            tone="light"
+            className="transition-all duration-300"
+          />
           <span className="flex flex-col gap-1">
             <span className="text-[16px] font-extrabold leading-none tracking-[-0.04em] text-[#102342]">
               WashPilot <span className="text-blue-600">CI</span>

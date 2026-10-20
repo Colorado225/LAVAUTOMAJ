@@ -2,13 +2,20 @@
 <html lang="fr-CI">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" href="favicon.png" type="image/x-icon" />
+    <!--
+      Favicons. La variante sombre existe parce que l'emblème contient des
+      traits argentés : sur l'onglet d'un navigateur en thème sombre, la
+      version claire se réduirait à une tache illisible.
+    -->
+    <link rel="icon" href="/brand/icon-32.png" type="image/png" sizes="32x32" />
     <link
       rel="icon"
-      href="favicon-dark.png"
+      href="/brand/icon-32-dark.png"
       type="image/png"
+      sizes="32x32"
       media="(prefers-color-scheme: dark)"
     />
+    <link rel="apple-touch-icon" href="/brand/icon-180.png" sizes="180x180" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#ffffff" />
 
@@ -51,7 +58,7 @@
     />
 
     <!-- Canonical (points to the main template URL) -->
-    <link rel="canonical" href="https://shadcnstore.com/" />
+    <link rel="canonical" href="https://washpilot.ci/" />
 
     <!-- Open Graph / Facebook / LinkedIn -->
     <meta property="og:type" content="website" />

@@ -36,3 +36,6 @@ qa-signup.mjs
 # Sauvegardes locales produites par scripts/db-backup.sh
 backups/
 *.dump
+
+# Outil de génération des visuels de marque (Python)
+__pycache__/
