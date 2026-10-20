@@ -274,6 +274,52 @@ CREATE TABLE IF NOT EXISTS payment_intents (
 CREATE INDEX IF NOT EXISTS payment_intents_org_idx ON payment_intents(organization_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS payment_intents_status_idx ON payment_intents(status, created_at DESC);
 
+-- Registre des encaissements d'abonnement : la seule source de verite du
+-- chiffre d'affaires. Toute activation y ecrit une ligne, quel que soit son
+-- chemin -- parcours client, saisie console, futur webhook -- parce que
+-- 'activateSubscription()' est le point de passage unique.
+--
+-- Pourquoi une table a part plutot que 'payment_intents' : une intention est
+-- une *demande de payer*, qui peut echouer ou rester en attente. Le registre
+-- n'accueille que de l'argent recu. Les compter ensemble ferait apparaitre
+-- dans le chiffre d'affaires des paiements jamais arrives.
+--
+-- 'organization_id' est volontairement sans cle etrangere et nullable :
+-- l'ecriture comptable doit survivre a la suppression de la station, sinon
+-- purger un client ferait disparaitre le chiffre d'affaires deja encaisse.
+-- 'organization_name' en conserve une copie lisible.
+CREATE TABLE IF NOT EXISTS subscription_payments (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ organization_id uuid,
+ organization_name text NOT NULL,
+ plan_code text NOT NULL,
+ plan_name text NOT NULL,
+ -- Negatif pour une annulation : on contrepasse, on ne supprime pas.
+ amount_cents bigint NOT NULL,
+ months integer NOT NULL,
+ -- Periode couverte par l'encaissement : c'est elle qui permet d'etaler le
+ -- revenu reconnu mois par mois, independamment de la date d'encaissement.
+ period_start timestamptz NOT NULL,
+ period_end timestamptz NOT NULL,
+ channel text NOT NULL DEFAULT 'other',
+ payment_reference text,
+ payment_intent_id uuid,
+ source text NOT NULL,
+ operator_email text,
+ actor_user_id uuid,
+ note text,
+ -- Contrepassation : 'reverses_id' pointe la ligne annulee.
+ reverses_id uuid REFERENCES subscription_payments(id) ON DELETE SET NULL,
+ occurred_at timestamptz NOT NULL DEFAULT now(),
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS subscription_payments_when_idx ON subscription_payments(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS subscription_payments_org_idx ON subscription_payments(organization_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS subscription_payments_period_idx ON subscription_payments(period_start, period_end);
+-- Une ligne ne peut etre contrepassee qu'une fois.
+CREATE UNIQUE INDEX IF NOT EXISTS subscription_payments_reverses_idx
+ ON subscription_payments(reverses_id) WHERE reverses_id IS NOT NULL;
+
 -- ---------------------------------------------------------------------------
 -- Console de l'éditeur
 --
@@ -662,6 +708,53 @@ function createPglitePool(pglite: PGlite): pg.Pool {
 
 
 
+// ---------------------------------------------------------------------------
+// Verse au registre les activations anterieures a son existence.
+//
+// Avant la table subscription_payments, une activation ne laissait qu'une
+// ligne d'audit chez le client, le montant enfoui dans du JSON. Sans ce
+// rattrapage la courbe de revenu demarrerait a zero le jour de la mise a
+// jour, et tout l'historique deja encaisse serait invisible.
+//
+// Idempotent : la cle est le couple (station, instant). Relancer au
+// demarrage est sans effet.
+// ---------------------------------------------------------------------------
+async function backfillRevenueLedger(
+  query: (text: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount: number | null }>,
+): Promise<void> {
+  const inserted = await query(
+    `INSERT INTO subscription_payments(
+       organization_id, organization_name, plan_code, plan_name, amount_cents, months,
+       period_start, period_end, channel, payment_reference, source, note, occurred_at)
+     SELECT a.organization_id,
+            COALESCE(o.name, 'Station supprimee'),
+            COALESCE(a.metadata->>'plan_code', 'inconnu'),
+            COALESCE(a.metadata->>'plan_name', 'Forfait'),
+            COALESCE((a.metadata->>'price_cents')::bigint, 0)
+              * COALESCE((a.metadata->>'months')::int, 1),
+            COALESCE((a.metadata->>'months')::int, 1),
+            COALESCE((a.metadata->>'period_end')::timestamptz, a.created_at)
+              - (COALESCE((a.metadata->>'months')::int, 1) || ' months')::interval,
+            COALESCE((a.metadata->>'period_end')::timestamptz, a.created_at),
+            'other',
+            a.metadata->>'payment_reference',
+            'backfill',
+            'Reprise automatique depuis le journal d audit',
+            a.created_at
+       FROM audit_logs a
+       LEFT JOIN organizations o ON o.id = a.organization_id
+      WHERE a.action = 'subscription.activated'
+        AND a.organization_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM subscription_payments sp
+           WHERE sp.organization_id = a.organization_id
+             AND sp.occurred_at = a.created_at)
+     RETURNING id`,
+  )
+  const n = inserted.rowCount ?? 0
+  if (n) console.log(`[revenu] ${n} encaissement(s) repris depuis le journal d'audit.`)
+}
+
 export async function initDatabaseSchema(): Promise<boolean> {
   if (env.DATABASE_URL) {
     try {
@@ -678,6 +771,7 @@ export async function initDatabaseSchema(): Promise<boolean> {
       await externalPool.query(schemaSql);
       await migrateLegacyPlatformAdmins(externalPool.query.bind(externalPool));
       await syncPlatformOperators(externalPool.query.bind(externalPool));
+      await backfillRevenueLedger(externalPool.query.bind(externalPool));
       pool = externalPool;
       ready = true;
       console.info("[db] Connecté à PostgreSQL via DATABASE_URL");
@@ -697,6 +791,7 @@ export async function initDatabaseSchema(): Promise<boolean> {
     await seedDemoData(pool.query.bind(pool));
     await migrateLegacyPlatformAdmins(pool.query.bind(pool));
     await syncPlatformOperators(pool.query.bind(pool));
+    await backfillRevenueLedger(pool.query.bind(pool));
     ready = true;
     console.info("[db] PostgreSQL embarqué (PGlite) initialisé avec les données de démonstration");
     return true;

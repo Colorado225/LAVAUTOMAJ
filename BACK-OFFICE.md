@@ -30,6 +30,9 @@ Indicateurs du parc — stations, essais en cours, actifs, expirés, résiliés,
 encaissements : intentions de paiement déclarées par les clients et en attente
 de confirmation, demandes de forfait supérieur.
 
+Et, sous **Revenus**, le registre complet : courbe sur douze mois, impayés,
+produits constatés d'avance, exports comptables. Voir le §5.
+
 ### 1.2 Dépanner un client au téléphone
 
 Fiche d'une station : forfait, échéance, jours restants, membres avec leur
@@ -217,7 +220,114 @@ C'est le garde-fou qui évite qu'une purge laisse des orphelins six mois après.
 
 ---
 
-## 5. Les routes
+## 5. Les revenus
+
+### 5.1 Un registre, parce qu'il n'y en avait pas
+
+Avant cette version, **aucune table ne contenait l'argent encaissé**. Les
+paiements passés par le parcours client vivaient dans `payment_intents` ;
+ceux saisis directement dans la console — un virement, des espèces — ne
+laissaient qu'une ligne d'audit, le montant enfoui dans du JSON. Toute courbe
+bâtie là-dessus aurait sous-estimé les recettes sans prévenir.
+
+`subscription_payments` est désormais la seule source de vérité du chiffre
+d'affaires, et elle est écrite **à un seul endroit** :
+`activateSubscription()`. C'est le même point de passage unique que pour
+l'activation, et pour la même raison — le jour où un webhook d'agrégateur
+activera des forfaits, il alimentera le registre sans qu'on y pense.
+
+Une intention de paiement n'y entre pas : elle peut échouer ou rester en
+attente. **Déclarer n'est pas payer.**
+
+### 5.2 Deux lectures du même argent
+
+Un client qui règle six mois d'avance verse tout en une fois. Le lire comme
+un seul mois donne une pointe suivie de cinq mois morts ; on en conclut que
+l'activité s'effondre. La console affiche donc les deux ensemble :
+
+| Lecture | Ce qu'elle répond | Sur le graphique |
+|---|---|---|
+| **Encaissement** | de quoi je paie mes factures | les barres |
+| **Revenu reconnu** | est-ce que ça croît vraiment | la ligne |
+
+L'étalement se fait **au prorata des jours**, pas par mois entier : une
+période du 15 mars au 15 juin couvre quatre mois civils, et un découpage en
+tiers décalerait la courbe d'une quinzaine. Le dernier mois absorbe
+l'arrondi, de sorte que la somme des parts égale toujours le montant exact.
+Un test de propriété le vérifie sur deux mille montants — quelques cas
+choisis à la main passent même avec un arrondi faux, c'est l'erreur qui a
+d'abord échappé à la suite.
+
+S'y ajoute une troisième grandeur, **l'encaissé d'avance** : la part des
+périodes qui courent encore. Ce n'est pas du bénéfice, c'est une dette — si
+le client part demain, elle lui est due.
+
+### 5.3 Impayés
+
+Deux natures, délibérément séparées :
+
+- **à risque** — des stations `active` dont l'échéance est passée. Elles
+  travaillent toujours, puisque rien n'est coupé automatiquement, mais ne
+  paient plus. Une station programmée pour suppression en sort : on ne lui
+  réclamera rien.
+- **en attente** — le client affirme avoir payé, l'éditeur n'a pas vérifié.
+
+### 5.4 Exports
+
+Deux formats, même registre, exportant **tout** l'historique et non la page
+affichée. CSV à point-virgule avec BOM UTF-8, faute de quoi Excel en français
+affiche « StÃ©phane ».
+
+**Détaillé** — une ligne par encaissement, avec les dates de début et de fin
+de période.
+
+**Journal SYSCOHADA** — écritures équilibrées, sur la base de l'encaissement
+(celle du Système Minimal de Trésorerie, que retiennent la plupart des très
+petites entités). Un cabinet tenant une comptabilité d'engagement voudra en
+plus constater les produits d'avance : l'export détaillé porte pour cela les
+périodes que le journal n'exprime pas.
+
+| Canal | Compte débité |
+|---|---|
+| Espèces | **571** Caisse siège social |
+| Virement | **521** Banques locales |
+| Orange Money, MTN, Moov, Wave | **552** Monnaie électronique, téléphone portable |
+| *(contrepartie)* | **7065** Services vendus sur internet |
+
+Le compte 552 n'est pas un détail. Le SYSCOHADA révisé a créé la classe 55
+précisément pour que le mobile money cesse d'être rangé en caisse ou en
+banque par approximation : un encaissement Wave n'est ni l'un ni l'autre, et
+tout mettre en 571 rendrait le rapprochement du portefeuille impossible.
+
+Les comptes sont regroupés dans `SYSCOHADA_ACCOUNTS`
+(`server/revenue.ts`) : un cabinet qui tient un plan différent n'a qu'un seul
+endroit à corriger. `VAT_RATE` vaut `0` — l'éditeur n'est pas assujetti à ce
+stade — et le compte **4431** est déjà déclaré pour le jour où il le sera.
+
+### 5.5 Corriger une erreur
+
+Une ligne de registre ne se modifie ni ne se supprime : on écrit son
+inverse, avec un motif. C'est la règle « annulation tracée plutôt que
+suppression », qui n'est plus ici une préférence mais une obligation — un
+journal dont on peut retirer une ligne ne prouve rien. Dans l'export, une
+contrepassation s'écrit en **sens inversé** et non en montant négatif : un
+journal ne contient pas de nombres négatifs.
+
+Elle touche l'argent, **pas le droit d'accès** : l'abonnement reste actif.
+Si l'activation était une erreur, il faut aussi suspendre, et c'est un geste
+distinct.
+
+### 5.6 Le registre survit à la suppression du client
+
+`subscription_payments` figure dans `PURGE_EXEMPT`. Purger une station
+efface ses données mais pas le chiffre d'affaires qu'elle a payé : l'argent
+a bien été reçu, il reste au bilan. La ligne est conservée, son
+`organization_id` passé à `null`, et le nom recopié à l'écriture la garde
+lisible dans un export.
+
+---
+
+## 6. Les routes
 
 Toutes sous `/api/v1/console`, toutes derrière `requireOperator`.
 
@@ -226,7 +336,8 @@ Toutes sous `/api/v1/console`, toutes derrière `requireOperator`.
 **Lecture** — `GET /metrics` · `GET /organizations?q=&status=&limit=&offset=` ·
 `GET /organizations/:id` · `GET /organizations/:id/members` ·
 `GET /upgrade-requests?pending=` · `GET /plans` ·
-`GET /payment-intents?status=&declared=` · `GET /audit?organization_id=&limit=`
+`GET /payment-intents?status=&declared=` · `GET /audit?organization_id=&limit=` ·
+`GET /revenue?months=` · `GET /revenue/export?format=detail|journal&from=&to=`
 
 **Écriture** — `POST /organizations/:id/activate {plan_code, months≤36,
 payment_reference?, note?}` · `/suspend {reason}` · `/extend-trial {days≤90,
@@ -234,7 +345,8 @@ reason}` · `/schedule-deletion {reason≥10, grace_days?}` · `/cancel-deletion
 `/purge {confirm_name}` · `POST /members/:userId/reset-password` ·
 `POST /members/:userId/status {status, reason}` ·
 `POST /upgrade-requests/:id/decline {reason 3-300}` ·
-`POST /payment-intents/:reference/confirm {note?}`
+`POST /payment-intents/:reference/confirm {note?, channel?}` ·
+`POST /revenue/:id/reverse {reason≥10}`
 
 ### Deux subtilités qui comptent
 
@@ -251,7 +363,7 @@ l'adresse de l'opérateur.
 
 ---
 
-## 6. Ce que la console ne fait pas, volontairement
+## 7. Ce que la console ne fait pas, volontairement
 
 - **Pas d'usurpation d'identité.** Aucun « se connecter en tant que ». Voir
   les données d'un client est une chose, agir en son nom une autre.
@@ -266,15 +378,16 @@ l'adresse de l'opérateur.
 
 ---
 
-## 7. Vérification
+## 8. Vérification
 
 ```bash
-# Suite complète (242 tests)
+# Suite complète (265 tests)
 NODE_ENV=test npm test
 
 # Ciblé
 NODE_ENV=test npx tsx --test tests/platform-admin.test.ts    # 26 tests
 NODE_ENV=test npx tsx --test tests/console-deletion.test.ts  # 12 tests
+NODE_ENV=test npx tsx --test tests/revenue.test.ts           # 23 tests
 ```
 
 Parcours manuel utile, serveur lancé :
@@ -299,13 +412,14 @@ protégeant les comptes multi-stations font chacun échouer la suite.
 
 ---
 
-## 8. Prochaines marches
+## 9. Prochaines marches
 
 1. **Brancher un agrégateur** (CinetPay couvre Wave, Orange, MTN et Moov en
    une intégration) : le webhook appellera `activateSubscription()`, la file de
    confirmation deviendra le mode dégradé plutôt que le mode normal.
-2. **Export comptable** des encaissements confirmés, au format attendu par un
-   cabinet ivoirien.
+2. **Réconciliation** entre le registre et le relevé de l'agrégateur, une fois
+   celui-ci branché : comparer chaque jour ce qu'on croit avoir encaissé et ce
+   que le prestataire a réellement versé.
 3. **Second opérateur avec droits restreints** — lecture seule pour une
    personne au support, écriture réservée au créateur. Aujourd'hui tous les
    opérateurs sont égaux ; il faudrait ajouter une colonne `role` à

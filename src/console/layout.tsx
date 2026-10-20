@@ -1,6 +1,13 @@
 import * as React from "react"
 import { NavLink, Outlet } from "react-router-dom"
-import { Building2, FileClock, LayoutDashboard, LogOut, Wallet } from "lucide-react"
+import {
+  Building2,
+  FileClock,
+  LayoutDashboard,
+  LogOut,
+  TrendingUp,
+  Wallet,
+} from "lucide-react"
 
 import { BrandMark } from "@/components/brand"
 import { Button } from "@/components/ui/button"
@@ -21,6 +28,7 @@ import { useConsoleAuth } from "./auth"
 const NAV = [
   { to: "/console", end: true, label: "Vue d'ensemble", icon: LayoutDashboard },
   { to: "/console/stations", end: false, label: "Stations", icon: Building2 },
+  { to: "/console/revenus", end: false, label: "Revenus", icon: TrendingUp },
   { to: "/console/paiements", end: false, label: "Paiements", icon: Wallet },
   { to: "/console/journal", end: false, label: "Journal", icon: FileClock },
 ]

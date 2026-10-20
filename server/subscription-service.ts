@@ -23,6 +23,7 @@
 import type { Pool, PoolClient } from "pg"
 import { HttpError } from "./http.ts"
 import { invalidateSubscriptionCache } from "./entitlements.ts"
+import type { RevenueChannel } from "./revenue.ts"
 
 type Queryable = Pick<Pool | PoolClient, "query">
 
@@ -42,6 +43,23 @@ export interface ActivateSubscriptionInput {
   note?: string | null
   /** Métadonnées supplémentaires à conserver dans le journal du client. */
   extra?: Record<string, unknown>
+  /**
+   * Canal par lequel l'argent est arrivé. Détermine le compte de trésorerie
+   * débité dans le journal comptable (caisse, banque ou monnaie
+   * électronique) : sans lui, l'export mettrait du Wave en caisse.
+   */
+  channel?: RevenueChannel
+  /** Opérateur de console à l'origine du geste, s'il y en a un. */
+  operatorEmail?: string | null
+  /** Intention de paiement d'origine, quand l'activation vient du parcours client. */
+  paymentIntentId?: string | null
+  /**
+   * Montant réellement encaissé, en centimes. Par défaut `prix du forfait ×
+   * mois`. À renseigner quand le client a payé autre chose : remise
+   * commerciale, arrondi, ou tarif négocié. Le registre doit refléter la
+   * banque, pas le tarif affiché.
+   */
+  amountCents?: number
   now?: Date
 }
 
@@ -137,6 +155,43 @@ export async function activateSubscription(
         note: input.note ?? null,
         renewed,
       }),
+    ],
+  )
+
+  // Le registre des encaissements. Il est écrit ici, et nulle part ailleurs :
+  // c'est ce qui garantit qu'aucune activation — parcours client, saisie
+  // console, futur webhook — ne produise de l'argent invisible au chiffre
+  // d'affaires. Le nom de la station est recopié car la ligne doit rester
+  // lisible après la suppression de celle-ci.
+  const amountCents = input.amountCents ?? plan.price_cents * input.months
+  const nameQ = await pool.query("SELECT name FROM organizations WHERE id = $1::uuid", [
+    input.organizationId,
+  ])
+  await pool.query(
+    `INSERT INTO subscription_payments(
+       organization_id, organization_name, plan_code, plan_name, amount_cents, months,
+       period_start, period_end, channel, payment_reference, payment_intent_id,
+       source, operator_email, actor_user_id, note, occurred_at)
+     VALUES($1::uuid, $2, $3, $4, $5::bigint, $6::int,
+            $7::timestamptz, $8::timestamptz, $9, $10, $11::uuid,
+            $12, $13, $14::uuid, $15, $16::timestamptz)`,
+    [
+      input.organizationId,
+      (nameQ.rows[0] as { name: string } | undefined)?.name ?? "Station supprimée",
+      plan.code,
+      plan.name,
+      amountCents,
+      input.months,
+      base.toISOString(),
+      periodEnd.toISOString(),
+      input.channel ?? "other",
+      input.paymentReference ?? null,
+      input.paymentIntentId ?? null,
+      input.source,
+      input.operatorEmail ?? null,
+      input.actorUserId ?? null,
+      input.note ?? null,
+      now.toISOString(),
     ],
   )
 

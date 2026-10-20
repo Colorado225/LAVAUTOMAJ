@@ -5,6 +5,16 @@ import { HttpError } from "./auth.ts"
 import { adminDb, auditPlatformAction } from "./platform-admin.ts"
 import { computeSubscriptionState, invalidateSubscriptionCache } from "./entitlements.ts"
 import { activateSubscription } from "./subscription-service.ts"
+import {
+  REVENUE_CHANNELS,
+  REVENUE_CHANNEL_LABELS,
+  detailedCsv,
+  journalCsv,
+  listRevenue,
+  deferredRevenue,
+  monthlyRevenue,
+  revenueAtRisk,
+} from "./revenue.ts"
 import { logConsoleAction } from "./console-auth.ts"
 import {
   DEFAULT_GRACE_DAYS,
@@ -382,7 +392,12 @@ export function createAdminRouter() {
         throw new HttpError(400, "invalid_reference", "Référence de paiement invalide.")
       }
       const input = body(
-        z.object({ note: z.string().trim().max(500).optional() }).strip(),
+        z
+          .object({
+            note: z.string().trim().max(500).optional(),
+            channel: z.enum(REVENUE_CHANNELS).default("other"),
+          })
+          .strip(),
         req.body,
       )
 
@@ -417,6 +432,13 @@ export function createAdminRouter() {
         paymentReference: intent.declared_reference ?? reference,
         actorUserId: null,
         note: input.note ?? null,
+        channel: input.channel,
+        operatorEmail: operator.email,
+        // Le montant vient de l'intention, pas du tarif courant : le devis a
+        // figé un prix, et c'est celui-là que le client a réglé. Recalculer
+        // ferait diverger le registre du relevé bancaire le jour d'un
+        // changement de tarif.
+        amountCents: intent.amount_cents,
         extra: {
           operator_email: operator.email,
           intent_reference: reference,
@@ -496,6 +518,14 @@ export function createAdminRouter() {
             months: z.number().int().min(1).max(MAX_MONTHS).default(1),
             /** Référence du paiement encaissé hors application (mobile money, virement). */
             payment_reference: z.string().trim().max(120).optional(),
+            /** Par où l'argent est arrivé : détermine le compte débité à l'export. */
+            channel: z.enum(REVENUE_CHANNELS).default("other"),
+            /**
+             * Montant réellement reçu, en francs. Omis, on retient le tarif du
+             * forfait. Renseigné quand le client a payé autre chose : remise,
+             * arrondi, tarif négocié. Le registre doit refléter la banque.
+             */
+            amount: z.number().int().min(0).max(100_000_000).optional(),
             note: z.string().trim().max(500).optional(),
           })
           .strip(),
@@ -516,6 +546,9 @@ export function createAdminRouter() {
         paymentReference: input.payment_reference ?? null,
         actorUserId: null,
         note: input.note ?? null,
+        channel: input.channel,
+        operatorEmail: operator.email,
+        amountCents: input.amount === undefined ? undefined : input.amount * 100,
         extra: { operator_email: operator.email },
       })
 
@@ -919,6 +952,201 @@ export function createAdminRouter() {
          FROM plans ORDER BY sort_order ASC, price_cents ASC`,
       )
       res.json({ plans: q.rows })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // GET /api/v1/console/revenue — les deux lectures de l'argent.
+  //
+  // `months` fenêtre la série (12 par défaut). Les encaissements qui
+  // débordent la fenêtre sont tout de même lus : un paiement de janvier
+  // couvrant juin doit alimenter le revenu reconnu de juin.
+  // -------------------------------------------------------------------------
+  r.get(
+    "/revenue",
+    asyncRoute(async (req, res) => {
+      const now = new Date()
+      const months = Math.min(Math.max(Number(req.query.months) || 12, 1), 36)
+      // Fenêtre alignée sur les mois civils : commencer au 1er évite une
+      // première barre tronquée qu'on lirait comme une chute d'activité.
+      const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1))
+      const from = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() - months, 1))
+
+      const pool = adminDb()
+      const [series, risk, recent] = await Promise.all([
+        monthlyRevenue(pool, from, to),
+        revenueAtRisk(pool, now),
+        listRevenue(pool, { limit: 50 }),
+      ])
+
+      const collected = series.reduce((sum, m) => sum + m.collected_cents, 0)
+      const currentMonth = series[series.length - 1]
+
+      res.json({
+        from: from.toISOString(),
+        to: to.toISOString(),
+        series,
+        recent,
+        at_risk: risk.at_risk,
+        pending: risk.pending,
+        totals: {
+          collected_cents: collected,
+          // Argent encaissé pour des périodes qui courent encore : déjà
+          // reçu, pas encore gagné. C'est une dette envers le client, pas
+          // un bénéfice — s'il part demain, elle est à rendre.
+          deferred_cents: await deferredRevenue(pool, now),
+          at_risk_cents: risk.at_risk.reduce((sum, o) => sum + o.price_cents, 0),
+          pending_cents: risk.pending.reduce((sum, p) => sum + p.amount_cents, 0),
+          month_collected_cents: currentMonth?.collected_cents ?? 0,
+          month_recognized_cents: currentMonth?.recognized_cents ?? 0,
+        },
+        channels: REVENUE_CHANNELS.map((code) => ({
+          code,
+          label: REVENUE_CHANNEL_LABELS[code],
+        })),
+        server_time: now.toISOString(),
+      })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // GET /api/v1/console/revenue/export — le tableur, ou le journal.
+  //
+  // `format=journal` produit les écritures SYSCOHADA, `format=detail` (par
+  // défaut) une ligne par encaissement. L'export part du registre complet et
+  // non de ce qui est affiché : un tableau paginé exporterait une page.
+  // -------------------------------------------------------------------------
+  r.get(
+    "/revenue/export",
+    asyncRoute(async (req, res) => {
+      const format = req.query.format === "journal" ? "journal" : "detail"
+      const parseDay = (value: unknown): Date | undefined => {
+        if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined
+        const d = new Date(`${value}T00:00:00.000Z`)
+        return Number.isNaN(d.getTime()) ? undefined : d
+      }
+      const from = parseDay(req.query.from)
+      const to = parseDay(req.query.to)
+      // La borne haute est exclusive côté SQL : sans ce décalage d'un jour,
+      // demander « jusqu'au 31 » amputerait le 31.
+      const toExclusive = to ? new Date(to.getTime() + 86_400_000) : undefined
+
+      const rows = await listRevenue(adminDb(), { from, to: toExclusive, limit: 20000 })
+      const body = format === "journal" ? journalCsv(rows) : detailedCsv(rows)
+      const span = `${from ? from.toISOString().slice(0, 10) : "debut"}_${
+        to ? to.toISOString().slice(0, 10) : "ce-jour"
+      }`
+
+      await logConsoleAction(adminDb(), req.operator!, `revenue.export.${format}`, null, null, {
+        rows: rows.length,
+        from: from?.toISOString() ?? null,
+        to: to?.toISOString() ?? null,
+      })
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8")
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="washpilot-${format === "journal" ? "journal" : "encaissements"}-${span}.csv"`,
+      )
+      res.send(body)
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // POST /api/v1/console/revenue/:id/reverse — contrepasser une erreur.
+  //
+  // Une ligne de registre ne se modifie ni ne se supprime : on écrit son
+  // inverse. C'est la règle « annulation tracée plutôt que suppression »
+  // appliquée à la comptabilité, où elle n'est pas une préférence mais une
+  // obligation — un journal dont on peut retirer une ligne ne prouve rien.
+  //
+  // La contrepassation touche l'argent, pas le droit d'accès : elle ne
+  // résilie pas l'abonnement. Si l'activation était une erreur, il faut
+  // aussi suspendre, et c'est un geste délibérément distinct.
+  // -------------------------------------------------------------------------
+  r.post(
+    "/revenue/:id/reverse",
+    asyncRoute(async (req, res) => {
+      const id = parseId(req.params.id)
+      const operator = req.operator!
+      const input = body(
+        z
+          .object({
+            reason: z
+              .string()
+              .trim()
+              .min(10, "Expliquez en quelques mots pourquoi cette ligne est annulée.")
+              .max(300),
+          })
+          .strip(),
+        req.body,
+      )
+
+      const pool = adminDb()
+      const q = await pool.query(
+        `SELECT id, organization_id, organization_name, plan_code, plan_name,
+                amount_cents::bigint AS amount_cents, months, period_start, period_end,
+                channel, payment_reference, reverses_id
+           FROM subscription_payments WHERE id = $1::uuid`,
+        [id],
+      )
+      if (!q.rowCount) throw new HttpError(404, "not_found", "Encaissement introuvable.")
+      const row = q.rows[0] as Record<string, unknown>
+      if (row.reverses_id) {
+        throw new HttpError(
+          409,
+          "already_a_reversal",
+          "Cette ligne est déjà une contrepassation.",
+        )
+      }
+
+      const already = await pool.query(
+        "SELECT 1 FROM subscription_payments WHERE reverses_id = $1::uuid",
+        [id],
+      )
+      if (already.rowCount) {
+        throw new HttpError(409, "already_reversed", "Cet encaissement a déjà été contrepassé.")
+      }
+
+      const inserted = await pool.query(
+        `INSERT INTO subscription_payments(
+           organization_id, organization_name, plan_code, plan_name, amount_cents, months,
+           period_start, period_end, channel, payment_reference, source, operator_email,
+           note, reverses_id)
+         VALUES($1::uuid, $2, $3, $4, $5::bigint, $6::int, $7::timestamptz, $8::timestamptz,
+                $9, $10, 'reversal', $11, $12, $13::uuid)
+         RETURNING id`,
+        [
+          row.organization_id,
+          row.organization_name,
+          row.plan_code,
+          row.plan_name,
+          -Number(row.amount_cents),
+          row.months,
+          row.period_start,
+          row.period_end,
+          row.channel,
+          row.payment_reference,
+          operator.email,
+          input.reason,
+          id,
+        ],
+      )
+
+      await logConsoleAction(
+        pool,
+        operator,
+        "revenue.reversed",
+        (row.organization_id as string | null) ?? null,
+        row.organization_name as string,
+        { reversed_id: id, amount_cents: Number(row.amount_cents), reason: input.reason },
+      )
+
+      res.json({
+        reversed_id: id,
+        reversal_id: (inserted.rows[0] as { id: string }).id,
+        amount_cents: -Number(row.amount_cents),
+      })
     }),
   )
 

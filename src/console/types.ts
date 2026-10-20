@@ -118,3 +118,76 @@ export const ACTION_LABELS: Record<string, string> = {
   "subscription.trial_extended": "Essai prolongé",
   "subscription.request_declined": "Demande déclinée",
 }
+
+// ---------------------------------------------------------------------------
+// Revenus — formes renvoyées par GET /console/revenue
+//
+// Vérifiées contre le serveur en marche : un type n'est qu'une déclaration
+// d'intention tant que personne n'a comparé les clés au JSON réel.
+// ---------------------------------------------------------------------------
+
+export interface RevenueMonth {
+  month: string
+  collected_cents: number
+  recognized_cents: number
+  payments: number
+}
+
+export interface RevenueEntry {
+  id: string
+  organization_id: string | null
+  organization_name: string
+  plan_code: string
+  plan_name: string
+  amount_cents: number
+  months: number
+  period_start: string
+  period_end: string
+  channel: string
+  payment_reference: string | null
+  source: string
+  operator_email: string | null
+  note: string | null
+  reverses_id: string | null
+  occurred_at: string
+}
+
+export interface RevenueAtRisk {
+  organization_id: string
+  organization_name: string
+  plan_code: string
+  plan_name: string
+  price_cents: number
+  current_period_end: string
+  days_overdue: number
+}
+
+export interface RevenuePending {
+  reference: string
+  organization_id: string
+  organization_name: string
+  plan_code: string
+  months: number
+  amount_cents: number
+  declared_at: string | null
+  created_at: string
+}
+
+export interface RevenueResponse {
+  from: string
+  to: string
+  series: RevenueMonth[]
+  recent: RevenueEntry[]
+  at_risk: RevenueAtRisk[]
+  pending: RevenuePending[]
+  totals: {
+    collected_cents: number
+    deferred_cents: number
+    at_risk_cents: number
+    pending_cents: number
+    month_collected_cents: number
+    month_recognized_cents: number
+  }
+  channels: Array<{ code: string; label: string }>
+  server_time: string
+}

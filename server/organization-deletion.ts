@@ -66,6 +66,12 @@ export const PURGE_EXEMPT = new Set([
   // Les comptes sont traités à part : un utilisateur peut appartenir à une
   // autre station, auquel cas il survit (voir `purgeOrganization`).
   "users",
+  // Le registre des encaissements. Supprimer une station ne doit pas
+  // supprimer le chiffre d'affaires qu'elle a payé : l'argent a bien été
+  // reçu, il reste dû au fisc et au bilan. La ligne est conservée, son
+  // `organization_id` est effacé, et le nom recopié à l'écriture la garde
+  // lisible (voir `purgeOrganization`).
+  "subscription_payments",
 ])
 
 export function purgeTables(): string[] {
@@ -190,6 +196,14 @@ export async function purgeOrganization(
       const removed = await client.query("DELETE FROM users WHERE id = ANY($1::uuid[])", [userIds])
       usersDeleted = removed.rowCount ?? 0
     }
+
+    // Le registre comptable survit, mais cesse de pointer une station qui
+    // n'existe plus. Le nom déjà recopié sur chaque ligne suffit à
+    // l'identifier dans un export.
+    await client.query(
+      "UPDATE subscription_payments SET organization_id = NULL WHERE organization_id = $1::uuid",
+      [organizationId],
+    )
 
     await client.query("DELETE FROM organizations WHERE id = $1::uuid", [organizationId])
     await client.query("COMMIT")
