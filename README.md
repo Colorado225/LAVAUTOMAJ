@@ -150,3 +150,19 @@ configurée atterrit directement sur son back-office au lieu d'être renvoyé
 vers l'assistant de mise en service.
 
 Détail des décisions, des routes et des tests : [`BACK-OFFICE.md`](BACK-OFFICE.md).
+
+### Encaisser un abonnement
+
+Le client ouvre une **intention de paiement** depuis son tableau de bord
+(`POST /subscription/checkout`), reçoit une référence courte à mentionner lors
+du transfert mobile money, paie, puis déclare sa transaction. Une déclaration
+n'active rien : vous validez en un clic depuis `/admin`, l'intention portant
+déjà le forfait, la durée et le montant.
+
+Les trois déclencheurs d'activation prévus — validation manuelle, webhook
+d'agrégateur, rattrapage — convergent tous sur `activateSubscription()`
+(`server/subscription-service.ts`). Brancher CinetPay ou PayDunya revient donc
+à écrire un adaptateur, sans rien réécrire.
+
+Workflow complet, pièges d'intégration et ordre recommandé :
+[`WORKFLOW-PAIEMENT.md`](WORKFLOW-PAIEMENT.md).

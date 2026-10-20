@@ -14,6 +14,13 @@ const schema = z.object({
   RESEND_API_KEY: z.string().trim().optional().default(""),
   MAIL_FROM: z.string().trim().optional().default("WashPilot CI <onboarding@resend.dev>"),
   /** Numéro WhatsApp de l'assistance, au format international (ex. +2250700000000). */
+  // --- Encaissement des abonnements ---------------------------------------
+  // `manual` : aucun contrat marchand, l'editeur valide depuis le back-office.
+  // Un code d'agregateur (ex. `cinetpay`) bascule l'activation en automatique.
+  PAYMENT_PROVIDER: z.string().trim().toLowerCase().default("manual"),
+  // Numero marchand mobile money affiche au client en mode manuel.
+  PAYMENT_MERCHANT_NUMBER: z.string().trim().optional().default(""),
+  PAYMENT_MERCHANT_NAME: z.string().trim().optional().default(""),
   SUPPORT_WHATSAPP: z.string().trim().optional().default(""),
   /** Adresse e-mail de l'assistance, affichée en second recours. */
   SUPPORT_EMAIL: z.string().trim().optional().default("support@washpilot.ci"),

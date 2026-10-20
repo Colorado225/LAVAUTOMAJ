@@ -241,6 +241,37 @@ CREATE TABLE IF NOT EXISTS subscription_reminders (
  sent_at timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY (organization_id, kind)
 );
+-- Intentions de paiement d'abonnement.
+--
+-- Une ligne est creee des que le client declare vouloir payer, AVANT tout
+-- encaissement. Elle sert de point de rendez-vous entre trois acteurs qui ne
+-- se parlent pas : le client qui paie sur son telephone, l'agregateur qui
+-- confirme par webhook, et l'editeur qui valide a la main quand il n'y a pas
+-- d'agregateur.
+--
+-- La colonne reference est UNIQUE : c'est elle qui rend l'encaissement
+-- idempotent. Un
+-- webhook rejoue deux fois (retransmission reseau, chose courante ici) ne
+-- doit jamais activer deux mois au lieu d'un.
+CREATE TABLE IF NOT EXISTS payment_intents (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+ reference text NOT NULL UNIQUE,
+ plan_code text NOT NULL,
+ months integer NOT NULL DEFAULT 1,
+ amount_cents integer NOT NULL,
+ provider text NOT NULL DEFAULT 'manual',
+ status text NOT NULL DEFAULT 'pending',
+ provider_transaction_id text,
+ declared_reference text,
+ declared_at timestamptz,
+ created_by uuid REFERENCES users(id),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ settled_at timestamptz,
+ metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS payment_intents_org_idx ON payment_intents(organization_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS payment_intents_status_idx ON payment_intents(status, created_at DESC);
 CREATE TABLE IF NOT EXISTS clerk_webhook_events (
  id text PRIMARY KEY, event_type text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
 );

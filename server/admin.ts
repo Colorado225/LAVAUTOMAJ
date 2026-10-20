@@ -4,6 +4,7 @@ import { asyncRoute, body, parseId } from "./http.ts"
 import { HttpError } from "./auth.ts"
 import { adminDb, auditPlatformAction } from "./platform-admin.ts"
 import { computeSubscriptionState, invalidateSubscriptionCache } from "./entitlements.ts"
+import { activateSubscription } from "./subscription-service.ts"
 
 // ---------------------------------------------------------------------------
 // Back-office de l'éditeur
@@ -298,6 +299,110 @@ export function createAdminRouter() {
   )
 
   // -------------------------------------------------------------------------
+  // GET /api/v1/admin/payment-intents — la file de validation.
+  //
+  // Ce que l'éditeur consulte chaque matin : qui dit avoir payé, combien, et
+  // avec quelle référence de transaction. La vérification se réduit alors à
+  // comparer cette référence au relevé Orange Money ou Wave, puis à cliquer.
+  // -------------------------------------------------------------------------
+  r.get(
+    "/payment-intents",
+    asyncRoute(async (req, res) => {
+      const status = typeof req.query.status === "string" ? req.query.status : "pending"
+      const declaredOnly = req.query.declared === "true"
+
+      const q = await adminDb().query(
+        `SELECT i.id, i.reference, i.organization_id, o.name AS organization_name,
+                i.plan_code, i.months, i.amount_cents, i.provider, i.status,
+                i.declared_reference, i.declared_at, i.created_at, i.settled_at,
+                u.email AS requester_email, u.phone AS requester_phone
+           FROM payment_intents i
+           JOIN organizations o ON o.id = i.organization_id
+           LEFT JOIN users u ON u.id = i.created_by
+          WHERE ($1 = 'all' OR i.status = $1)
+            AND ($2::boolean IS NOT TRUE OR i.declared_at IS NOT NULL)
+          ORDER BY i.declared_at DESC NULLS LAST, i.created_at DESC
+          LIMIT 100`,
+        [status, declaredOnly],
+      )
+      res.json({ intents: q.rows, total: q.rowCount ?? 0 })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // POST /api/v1/admin/payment-intents/:reference/confirm — valider en un clic.
+  //
+  // L'éditeur a vu l'argent sur son relevé : il confirme. L'intention porte
+  // déjà le forfait, la durée et le montant, donc rien n'est ressaisi — et
+  // rien ne peut être saisi de travers.
+  //
+  // Le passage de `pending` à `paid` est conditionnel dans la requête SQL
+  // elle-même : deux clics simultanés ne peuvent pas activer deux fois.
+  // -------------------------------------------------------------------------
+  r.post(
+    "/payment-intents/:reference/confirm",
+    asyncRoute(async (req, res) => {
+      const admin = req.platformAdmin!
+      // La référence d'intention n'est pas un UUID (elle se dicte au
+      // téléphone) : parseId la rejetterait. On valide son format propre.
+      const reference = String(req.params.reference ?? "")
+      if (!/^WP-[A-Z2-9]{8}$/.test(reference)) {
+        throw new HttpError(400, "invalid_reference", "Référence de paiement invalide.")
+      }
+      const input = body(
+        z.object({ note: z.string().trim().max(500).optional() }).strip(),
+        req.body,
+      )
+
+      const pool = adminDb()
+      const claimed = await pool.query(
+        `UPDATE payment_intents
+            SET status = 'paid', settled_at = now()
+          WHERE reference = $1 AND status = 'pending'
+          RETURNING organization_id, plan_code, months, amount_cents, declared_reference`,
+        [reference],
+      )
+      if (!claimed.rowCount) {
+        throw new HttpError(
+          404,
+          "payment_intent_not_found",
+          "Aucune demande de paiement en attente ne porte cette référence.",
+        )
+      }
+      const intent = claimed.rows[0] as {
+        organization_id: string
+        plan_code: string
+        months: number
+        amount_cents: number
+        declared_reference: string | null
+      }
+
+      const result = await activateSubscription(pool, {
+        organizationId: intent.organization_id,
+        planCode: intent.plan_code,
+        months: intent.months,
+        source: "platform_admin",
+        paymentReference: intent.declared_reference ?? reference,
+        actorUserId: admin.userId,
+        note: input.note ?? null,
+        extra: {
+          admin_email: admin.email,
+          intent_reference: reference,
+          amount_cents: intent.amount_cents,
+        },
+      })
+
+      res.json({
+        reference,
+        organization_id: intent.organization_id,
+        plan_code: result.planCode,
+        status: "active",
+        current_period_end: result.periodEnd,
+      })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
   // POST /api/v1/admin/upgrade-requests/:id/decline — l'autre réponse possible.
   //
   // Valider n'est que la moitié du travail : une demande peut rester sans
@@ -366,70 +471,29 @@ export function createAdminRouter() {
       )
 
       const pool = adminDb()
-      const planQ = await pool.query("SELECT id, code, name, price_cents FROM plans WHERE code = $1", [
-        input.plan_code,
-      ])
-      if (!planQ.rowCount) throw new HttpError(404, "plan_not_found", "Forfait introuvable.")
-      const plan = planQ.rows[0]
 
-      const orgQ = await pool.query("SELECT id, name FROM organizations WHERE id = $1::uuid", [id])
-      if (!orgQ.rowCount) throw new HttpError(404, "organization_not_found", "Station introuvable.")
-
-      // L'échéance court à partir d'aujourd'hui, ou de l'échéance en cours si
-      // elle est encore devant : un renouvellement anticipé ne doit pas faire
-      // perdre les jours déjà payés.
-      const currentQ = await pool.query(
-        "SELECT current_period_end, status FROM subscriptions WHERE organization_id = $1::uuid",
-        [id],
-      )
-      const current = currentQ.rows[0] as
-        | { current_period_end: string | null; status: string }
-        | undefined
-      const now = new Date()
-      const existingEnd = current?.current_period_end ? new Date(current.current_period_end) : null
-      const base =
-        current?.status === "active" && existingEnd && existingEnd.getTime() > now.getTime()
-          ? existingEnd
-          : now
-      const periodEnd = new Date(base)
-      periodEnd.setMonth(periodEnd.getMonth() + input.months)
-
-      // `plan_changed_at` conditionne le délai de grâce à la rétrogradation
-      // (`server/plan-limits.ts`) : l'oublier priverait le client de ses
-      // 14 jours pour rentrer dans les limites du nouveau forfait.
-      await pool.query(
-        `INSERT INTO subscriptions(organization_id, plan_id, status, current_period_end, plan_changed_at)
-         VALUES($1::uuid, $2::uuid, 'active', $3::timestamptz, now())
-         ON CONFLICT (organization_id) DO UPDATE
-           SET plan_id = EXCLUDED.plan_id,
-               status = 'active',
-               current_period_end = EXCLUDED.current_period_end,
-               plan_changed_at = CASE
-                 WHEN subscriptions.plan_id IS DISTINCT FROM EXCLUDED.plan_id THEN now()
-                 ELSE subscriptions.plan_changed_at
-               END,
-               updated_at = now()`,
-        [id, plan.id, periodEnd.toISOString()],
-      )
-
-      await auditPlatformAction(pool, id, admin.userId, "subscription.activated", plan.id, {
-        plan_code: plan.code,
-        plan_name: plan.name,
-        price_cents: plan.price_cents,
+      // L'activation elle-même vit dans server/subscription-service.ts :
+      // le webhook d'un agrégateur de paiement appellera exactement le même
+      // code. Deux chemins d'activation qui divergent, c'est la panne
+      // classique des systèmes d'abonnement.
+      const result = await activateSubscription(pool, {
+        organizationId: id,
+        planCode: input.plan_code,
         months: input.months,
-        period_end: periodEnd.toISOString(),
-        payment_reference: input.payment_reference ?? null,
+        source: "platform_admin",
+        paymentReference: input.payment_reference ?? null,
+        actorUserId: admin.userId,
         note: input.note ?? null,
-        admin_email: admin.email,
+        extra: { admin_email: admin.email },
       })
-      invalidateSubscriptionCache(id)
 
       res.json({
         organization_id: id,
-        plan_code: plan.code,
+        plan_code: result.planCode,
         status: "active",
-        current_period_end: periodEnd.toISOString(),
-        months: input.months,
+        current_period_end: result.periodEnd,
+        months: result.months,
+        renewed: result.renewed,
       })
     }),
   )
