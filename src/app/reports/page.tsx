@@ -29,6 +29,7 @@ import { useApi } from "@/lib/api"
 import { useAccess } from "@/lib/permissions"
 import type { ChartConfig } from "@/components/ui/chart"
 import type { ReportGranularity, ReportResponse } from "@/lib/reporting-api"
+import type { SiteRecord } from "@/lib/sites-api"
 import {
   Area,
   AreaChart,
@@ -38,7 +39,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import { BarChart3, Download, Lock, Wallet, CarFront, Receipt, TrendingUp, History, Users, Clock } from "lucide-react"
+import { BarChart3, Download, Lock, Wallet, CarFront, Receipt, TrendingUp, History, Users, Clock, Building2 } from "lucide-react"
 
 const chartConfig = {
   revenue: { label: "Encaissements", color: "#2563eb" },
@@ -138,6 +139,7 @@ function downloadReport(report: ReportResponse) {
     ["WashPilot CI — Rapport d’activité"],
     ["Période", report.period.from, report.period.to],
     ["Granularité", GRANULARITY_OPTIONS.find((o) => o.value === report.granularity)?.label ?? report.granularity],
+    ["Périmètre", report.site ? report.site.name : "Toutes les stations"],
     [],
     ["Synthèse", "Valeur", "Montant (XOF)"],
     ["Lavages enregistrés", report.summary.total_washes, ""],
@@ -176,6 +178,27 @@ function downloadReport(report: ReportResponse) {
     [],
     ["Activité par laveur", "Rôle", "Lavages", "Chiffre d’affaires attribué (XOF)"],
     ...report.top_workers.map((row) => [row.name, ROLE_LABELS[row.role] ?? row.role, row.wash_count, csvAmount(row.amount_cents)]),
+    ...(report.by_site.length > 1
+      ? [
+          [],
+          [
+            "Résultats par station",
+            "Ville",
+            "Lavages",
+            "Encaissements (XOF)",
+            "Dépenses (XOF)",
+            "Solde (XOF)",
+          ],
+          ...report.by_site.map((row) => [
+            row.site_name,
+            row.city,
+            row.wash_count,
+            csvAmount(row.revenue_cents),
+            report.financial_access ? csvAmount(row.expenses_cents ?? 0) : "",
+            report.financial_access ? csvAmount(row.net_cents ?? 0) : "",
+          ]),
+        ]
+      : []),
     ...(report.financial_access
       ? [
           [],
@@ -192,7 +215,10 @@ function downloadReport(report: ReportResponse) {
   const url = URL.createObjectURL(new Blob([content], { type: "text/csv;charset=utf-8" }))
   const link = document.createElement("a")
   link.href = url
-  link.download = `washpilot-rapport-${report.granularity}-${report.period.from}-${report.period.to}.csv`
+  const scope = report.site
+    ? `-${report.site.name.toLocaleLowerCase("fr-CI").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`
+    : ""
+  link.download = `washpilot-rapport${scope}-${report.granularity}-${report.period.from}-${report.period.to}.csv`
   link.click()
   URL.revokeObjectURL(url)
 }
@@ -203,9 +229,15 @@ export default function ReportsPage() {
   const [from, setFrom] = useState(() => shiftDate(dateInAbidjan(), -29))
   const [to, setTo] = useState(today)
   const [granularity, setGranularity] = useState<ReportGranularity>("day")
+  // "" = toutes les stations. Le filtre reste côté serveur : le navigateur
+  // envoie un identifiant, il ne choisit jamais le périmètre tout seul.
+  const [siteId, setSiteId] = useState("")
+  const { data: sites } = useApi<SiteRecord[]>("/api/v1/sites")
   const hasValidRange = Boolean(from && to && from <= to)
   const reportPath = hasValidRange
-    ? `/api/v1/reports/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&granularity=${granularity}`
+    ? `/api/v1/reports/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&granularity=${granularity}${
+        siteId ? `&site_id=${encodeURIComponent(siteId)}` : ""
+      }`
     : ""
   const { data, loading, error } = useApi<ReportResponse>(reportPath)
   // Le serveur renvoie null sur les champs financiers quand le rôle n'y a pas
@@ -222,6 +254,12 @@ export default function ReportsPage() {
     [data],
   )
   const activeGranularity = data?.granularity ?? granularity
+  const selectableSites = useMemo(
+    () => (sites ?? []).filter((site) => site.is_active || site.id === siteId),
+    [sites, siteId],
+  )
+  const multiSite = selectableSites.length > 1
+  const bySite = data?.by_site ?? []
 
   function choosePeriod(days: number) {
     const end = dateInAbidjan()
@@ -301,6 +339,26 @@ export default function ReportsPage() {
               Au
               <Input type="date" value={to} min={from || undefined} max={today} onChange={(event) => setTo(event.target.value)} className="w-full sm:w-40" />
             </label>
+            {/* Affiché seulement en multi-stations : un filtre à une seule
+                valeur n'apporte rien et encombre la barre. */}
+            {multiSite && (
+              <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+                Station
+                <select
+                  value={siteId}
+                  onChange={(event) => setSiteId(event.target.value)}
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm text-foreground sm:w-48"
+                >
+                  <option value="">Toutes les stations</option>
+                  {selectableSites.map((site) => (
+                    <option key={site.id} value={site.id}>
+                      {site.name}
+                      {site.is_active ? "" : " (inactive)"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <Button
               type="button"
               variant="outline"
@@ -328,6 +386,16 @@ export default function ReportsPage() {
               {data.restriction.message} Période affichée : du{" "}
               {new Date(data.period.from).toLocaleDateString("fr-CI")} au{" "}
               {new Date(data.period.to).toLocaleDateString("fr-CI")}.
+            </span>
+          </p>
+        )}
+        {data?.site && (
+          <p role="status" className="flex items-start gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+            <Building2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span>
+              Rapport filtré sur <strong>{data.site.name}</strong>. Le tableau
+              « Résultats par station » ci-dessous reste consolidé sur l’ensemble
+              de l’organisation.
             </span>
           </p>
         )}
@@ -436,6 +504,37 @@ export default function ReportsPage() {
             row.pending_cents > 0 ? formatXof(row.pending_cents) : "—",
           ])}
         />
+
+        {multiSite && (
+          <BreakdownTable
+            title="Résultats par station"
+            description={
+              financialAccess
+                ? "Vue consolidée du propriétaire : chaque station sur la même période, quel que soit le filtre appliqué plus haut."
+                : "Vue consolidée du propriétaire. Les dépenses et la marge sont réservées aux rôles qui y ont droit."
+            }
+            loading={loading}
+            icon={<Building2 className="size-4 text-muted-foreground" />}
+            columns={
+              financialAccess
+                ? ["Station", "Ville", "Lavages", "Encaissements", "Dépenses", "Solde"]
+                : ["Station", "Ville", "Lavages", "Encaissements"]
+            }
+            empty="Aucune station active sur cette période."
+            rows={bySite.map((row) =>
+              financialAccess
+                ? [
+                    row.site_name,
+                    row.city,
+                    row.wash_count,
+                    formatXof(row.revenue_cents),
+                    formatXof(row.expenses_cents ?? 0),
+                    formatXof(row.net_cents ?? 0),
+                  ]
+                : [row.site_name, row.city, row.wash_count, formatXof(row.revenue_cents)],
+            )}
+          />
+        )}
 
         <BreakdownTable
           title="Activité par laveur"

@@ -140,3 +140,56 @@ vérifie qu'un nouveau compte reçoit bien `trialing` et 14 jours.
 noms, positionnements, prix, listes de fonctionnalités et durée d'essai
 annoncée. La section `src/app/landing/components/pricing-section.tsx` ne fait
 que la mettre en forme — aucun prix n'est écrit en dur dans le JSX.
+
+---
+
+## 6. État de couverture des promesses (20 octobre 2026)
+
+Les seize fonctionnalités annoncées sont désormais **toutes construites**, à
+deux exceptions documentées. Elles sont en revanche **accessibles à tout le
+monde** : aucune n'est encore réservée au forfait qui la vend.
+
+| Forfait | Promesse | État |
+| --- | --- | --- |
+| Starter | Enregistrement des lavages et prestations | ✅ |
+| Starter | Catalogue de services et prix | ✅ |
+| Starter | Recettes par mode de paiement | ✅ |
+| Starter | Suivi simple des dépenses | ✅ |
+| Starter | Rapport quotidien | ✅ |
+| Pro | Gestion des équipes et attributions | ✅ |
+| Pro | Suivi des sessions de caisse | ✅ |
+| Pro | Suivi des dépenses et marges opérationnelles | ✅ |
+| Pro | Rapports détaillés et exports | ✅ |
+| Pro | Historique des opérations et traçabilité | ✅ *(ajouté)* |
+| Pro | Assistance prioritaire | ⚠️ à arbitrer |
+| Business | Gestion multi-sites selon les limites du forfait | ✅ *(écran ajouté)* |
+| Business | Vue consolidée du propriétaire | ✅ *(ajouté)* |
+| Business | Permissions avancées | ✅ |
+| Business | Rapports consolidés | ✅ *(ajouté)* |
+| Business | Accompagnement à la mise en service | 🤝 service humain |
+
+**« Assistance prioritaire ».** `server/support.ts` rattache déjà chaque ticket
+au forfait et au statut d'abonnement, mais ne connaît aucune notion de
+priorité. Avant d'écrire une ligne de code, il faut décider ce que le mot
+engage : un délai de première réponse affiché ? un canal distinct ? un simple
+tri de file ? Promettre « prioritaire » sans délai mesurable est une promesse
+que l'on ne peut ni tenir ni démentir. Tant que l'arbitrage n'est pas fait,
+mieux vaut l'absence de code qu'un badge décoratif.
+
+### Ce qu'il reste à faire : les garde-fous
+
+Trois décisions à prendre avant de restreindre, dans cet ordre :
+
+1. **Résoudre l'écart de la section 4.** Les codes de forfait en base
+   (`free` / `pro` / `business`) ne correspondent pas à la vitrine
+   (Starter / Pro / Business). Poser des garde-fous sur des codes que l'on
+   s'apprête à renommer reviendrait à les écrire deux fois.
+2. **Choisir le point de blocage pour chaque fonction.** Masquer l'entrée de
+   menu ne protège rien : la restriction doit vivre côté serveur, comme les
+   permissions. Et la règle de cumul avec le RBAC doit être explicite — un
+   gérant en forfait Starter, que voit-il de l'historique ?
+3. **Décider du sort des données déjà saisies** en cas de rétrogradation. Une
+   organisation Business qui repasse en Pro garde trois stations : lecture
+   seule, blocage des nouveaux enregistrements, ou avertissement ? Couper
+   l'accès à des données déjà saisies est le moyen le plus sûr de perdre un
+   client — c'est une décision commerciale, pas technique.

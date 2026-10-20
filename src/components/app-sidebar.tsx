@@ -12,6 +12,8 @@ import {
   List,
   BadgeCheck,
   ShieldCheck,
+  History,
+  Building2,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { Logo } from "@/components/logo"
@@ -78,6 +80,12 @@ const data = {
           permission: "report:operational" as Permission,
         },
         {
+          title: "Historique",
+          url: "/history",
+          icon: History,
+          permission: "audit:read" as Permission,
+        },
+        {
           title: "Équipe",
           url: "/team",
           icon: Users,
@@ -108,6 +116,12 @@ const data = {
     {
       label: "Configuration",
       items: [
+        {
+          title: "Stations",
+          url: "/sites",
+          icon: Building2,
+          permission: "wash:read" as Permission,
+        },
         {
           title: "Gestion des accès",
           url: "/settings/access",

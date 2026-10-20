@@ -46,6 +46,8 @@ export const PERMISSIONS = [
   "report:operational",
   "report:financial",
   "report:export",
+  // Traçabilité
+  "audit:read",
   // Administration
   "user:manage",
   "settings:manage",
@@ -99,6 +101,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "worker:create",
     "worker:update",
     "report:operational",
+    "audit:read",
   ],
 
   cashier: [
@@ -160,6 +163,7 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "report:operational": "Consulter les rapports d’activité",
   "report:financial": "Consulter les rapports financiers (marges, dépenses)",
   "report:export": "Exporter les rapports",
+  "audit:read": "Consulter l’historique des opérations",
   "user:manage": "Gérer les utilisateurs et leurs droits",
   "settings:manage": "Modifier les paramètres de la station",
   "subscription:manage": "Gérer l’abonnement",

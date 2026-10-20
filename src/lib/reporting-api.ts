@@ -50,6 +50,21 @@ export interface WorkerReportRow {
 
 export type ReportGranularity = "day" | "week" | "month"
 
+/**
+ * Une ligne par station active, toujours calculée même lorsqu'un filtre de
+ * station est posé : c'est la vue consolidée du propriétaire multi-sites.
+ */
+export interface SiteReportRow {
+  site_id: string
+  site_name: string
+  city: string
+  wash_count: number
+  revenue_cents: number
+  /** `null` sans le droit de voir les données financières. */
+  expenses_cents: number | null
+  net_cents: number | null
+}
+
 export interface ExpenseCategoryReportRow {
   category: string
   expense_count: number
@@ -76,4 +91,7 @@ export interface ReportResponse {
   top_workers: WorkerReportRow[]
   payment_methods: PaymentMethodReportRow[]
   expense_categories: ExpenseCategoryReportRow[]
+  /** Station sur laquelle le rapport est filtré, `null` si consolidé. */
+  site: { id: string; name: string } | null
+  by_site: SiteReportRow[]
 }

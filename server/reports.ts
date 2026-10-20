@@ -160,10 +160,43 @@ export function createReportsRouter() {
       const windowDays = req.subscription?.report_window_days ?? null
       const { clamped, ...range } = clampReportRange(requested, windowDays)
       const pool = db()
-      const args = [t.organizationId, range.from, range.to]
+
+      // Filtre par site. Le site demandé est vérifié contre l'organisation du
+      // porteur de session : un identifiant valide appartenant à une autre
+      // station renvoie 404, jamais ses chiffres.
+      const siteId = typeof req.query.site_id === "string" ? req.query.site_id.trim() : ""
+      let site: { id: string; name: string } | null = null
+      if (siteId) {
+        if (!/^[0-9a-f-]{36}$/i.test(siteId)) {
+          throw new HttpError(400, "invalid_site", "Identifiant de site invalide.")
+        }
+        const siteQ = await pool.query<{ id: string; name: string }>(
+          "SELECT id, name FROM sites WHERE id=$1::uuid AND organization_id=$2::uuid",
+          [siteId, t.organizationId],
+        )
+        if (!siteQ.rowCount) throw new HttpError(404, "site_not_found", "Site introuvable.")
+        site = siteQ.rows[0]
+      }
+
+      const args: unknown[] = [t.organizationId, range.from, range.to]
+      if (site) args.push(site.id)
+
+      // `washes` et `expenses` portent `site_id` ; `payments` ne l'a pas et
+      // passe par son lavage. Trois fragments plutôt qu'un, donc.
+      const siteWashes = site ? " AND site_id = $4::uuid" : ""
+      const siteExpenses = site ? " AND site_id = $4::uuid" : ""
+      const sitePayments = site
+        ? " AND EXISTS (SELECT 1 FROM washes sw WHERE sw.id = p.wash_id AND sw.site_id = $4::uuid)"
+        : ""
+      const sitePaymentsBare = site
+        ? " AND EXISTS (SELECT 1 FROM washes sw WHERE sw.id = payments.wash_id AND sw.site_id = $4::uuid)"
+        : ""
+      // Jointure déjà présente sur `washes w` : le filtre y est direct.
+      const siteWashesJoined = site ? " AND w.site_id = $4::uuid" : ""
+
       const step = granularityStep(granularity)
 
-      const [summaryQ, expensesQ, seriesQ, servicesQ, paymentsQ, expenseCategoriesQ, workersQ] =
+      const [summaryQ, expensesQ, seriesQ, servicesQ, paymentsQ, expenseCategoriesQ, workersQ, bySiteQ] =
         await Promise.all([
           pool.query(
             `SELECT COUNT(*)::int AS total_washes,
@@ -172,17 +205,17 @@ export function createReportsRouter() {
                COUNT(*) FILTER (WHERE payment_status IN ('unpaid','partial') AND status <> 'cancelled')::int AS unpaid_washes,
                (SELECT COALESCE(SUM(p.amount_cents),0)::int FROM payments p
                  WHERE p.organization_id=$1::uuid AND p.status <> 'refunded'
-                   AND p.created_at >= $2::date AND p.created_at < ($3::date + interval '1 day')) AS revenue_cents,
+                   AND p.created_at >= $2::date AND p.created_at < ($3::date + interval '1 day')${sitePayments}) AS revenue_cents,
                (SELECT COALESCE(SUM(p.amount_cents),0)::int FROM payments p
                  WHERE p.organization_id=$1::uuid AND p.status = 'pending'
-                   AND p.created_at >= $2::date AND p.created_at < ($3::date + interval '1 day')) AS pending_cents
+                   AND p.created_at >= $2::date AND p.created_at < ($3::date + interval '1 day')${sitePayments}) AS pending_cents
              FROM washes
-             WHERE organization_id=$1::uuid AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')`,
+             WHERE organization_id=$1::uuid AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')${siteWashes}`,
             args,
           ),
           pool.query(
             `SELECT COALESCE(SUM(amount_cents),0)::int AS expenses_cents FROM expenses
-             WHERE organization_id=$1::uuid AND status='completed' AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')`,
+             WHERE organization_id=$1::uuid AND status='completed' AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')${siteExpenses}`,
             args,
           ),
           // Série temporelle : un point par jour, par semaine ou par mois.
@@ -198,15 +231,15 @@ export function createReportsRouter() {
                     interval '${step}') AS d(bucket)
              LEFT JOIN (
                SELECT date_trunc('${granularity}', created_at) AS bucket, COUNT(*)::int AS wash_count FROM washes
-               WHERE organization_id=$1::uuid AND status <> 'cancelled' GROUP BY 1
+               WHERE organization_id=$1::uuid AND status <> 'cancelled'${siteWashes} GROUP BY 1
              ) w ON w.bucket = d.bucket
              LEFT JOIN (
                SELECT date_trunc('${granularity}', created_at) AS bucket, SUM(amount_cents)::int AS revenue_cents FROM payments
-               WHERE organization_id=$1::uuid AND status <> 'refunded' GROUP BY 1
+               WHERE organization_id=$1::uuid AND status <> 'refunded'${sitePaymentsBare} GROUP BY 1
              ) p ON p.bucket = d.bucket
              LEFT JOIN (
                SELECT date_trunc('${granularity}', created_at) AS bucket, SUM(amount_cents)::int AS expenses_cents FROM expenses
-               WHERE organization_id=$1::uuid AND status='completed' GROUP BY 1
+               WHERE organization_id=$1::uuid AND status='completed'${siteExpenses} GROUP BY 1
              ) e ON e.bucket = d.bucket
              ORDER BY d.bucket`,
             args,
@@ -218,7 +251,7 @@ export function createReportsRouter() {
                SUM(i.line_total_cents)::int AS amount_cents
              FROM wash_items i JOIN washes w ON w.id = i.wash_id
              WHERE w.organization_id=$1::uuid AND w.status <> 'cancelled'
-               AND w.created_at >= $2::date AND w.created_at < ($3::date + interval '1 day')
+               AND w.created_at >= $2::date AND w.created_at < ($3::date + interval '1 day')${siteWashesJoined}
              GROUP BY i.service_name ORDER BY amount_cents DESC LIMIT 10`,
             args,
           ),
@@ -230,7 +263,7 @@ export function createReportsRouter() {
                COALESCE(SUM(amount_cents) FILTER (WHERE status='pending'),0)::int AS pending_cents
              FROM payments
              WHERE organization_id=$1::uuid AND status <> 'refunded'
-               AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')
+               AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')${sitePaymentsBare}
              GROUP BY method ORDER BY amount_cents DESC`,
             args,
           ),
@@ -238,7 +271,7 @@ export function createReportsRouter() {
             `SELECT category, COUNT(*)::int AS expense_count, SUM(amount_cents)::int AS amount_cents
              FROM expenses
              WHERE organization_id=$1::uuid AND status='completed'
-               AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')
+               AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')${siteExpenses}
              GROUP BY category ORDER BY amount_cents DESC`,
             args,
           ),
@@ -256,10 +289,45 @@ export function createReportsRouter() {
              JOIN (SELECT wash_id, COUNT(*)::int AS team_size FROM wash_assignments GROUP BY wash_id) a
                ON a.wash_id = wa.wash_id
              WHERE w.organization_id=$1::uuid AND w.status <> 'cancelled'
-               AND w.created_at >= $2::date AND w.created_at < ($3::date + interval '1 day')
+               AND w.created_at >= $2::date AND w.created_at < ($3::date + interval '1 day')${siteWashesJoined}
              GROUP BY wk.id, wk.first_name, wk.last_name, wk.role
              ORDER BY amount_cents DESC LIMIT 20`,
             args,
+          ),
+          // Vue consolidée : une ligne par site, quel que soit le filtre en
+          // cours. Le propriétaire multi-sites compare ses stations d'un
+          // coup d'œil au lieu de changer de filtre trois fois.
+          //
+          // `LEFT JOIN` sur les trois agrégats : un site ouvert mais sans
+          // activité doit apparaître à zéro, pas disparaître du tableau.
+          pool.query(
+            `SELECT s.id AS site_id, s.name AS site_name, s.city,
+               COALESCE(w.wash_count,0)::int AS wash_count,
+               COALESCE(p.revenue_cents,0)::int AS revenue_cents,
+               COALESCE(e.expenses_cents,0)::int AS expenses_cents
+             FROM sites s
+             LEFT JOIN (
+               SELECT site_id, COUNT(*)::int AS wash_count FROM washes
+               WHERE organization_id=$1::uuid AND status <> 'cancelled'
+                 AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')
+               GROUP BY site_id
+             ) w ON w.site_id = s.id
+             LEFT JOIN (
+               SELECT sw.site_id, SUM(pm.amount_cents)::int AS revenue_cents
+               FROM payments pm JOIN washes sw ON sw.id = pm.wash_id
+               WHERE pm.organization_id=$1::uuid AND pm.status <> 'refunded'
+                 AND pm.created_at >= $2::date AND pm.created_at < ($3::date + interval '1 day')
+               GROUP BY sw.site_id
+             ) p ON p.site_id = s.id
+             LEFT JOIN (
+               SELECT site_id, SUM(amount_cents)::int AS expenses_cents FROM expenses
+               WHERE organization_id=$1::uuid AND status='completed'
+                 AND created_at >= $2::date AND created_at < ($3::date + interval '1 day')
+               GROUP BY site_id
+             ) e ON e.site_id = s.id
+             WHERE s.organization_id=$1::uuid AND s.is_active = true
+             ORDER BY revenue_cents DESC, s.name`,
+            [t.organizationId, range.from, range.to],
           ),
         ])
 
@@ -300,6 +368,19 @@ export function createReportsRouter() {
         top_workers: workersQ.rows,
         payment_methods: paymentsQ.rows,
         expense_categories: financial ? expenseCategoriesQ.rows : [],
+        // Site filtré, le cas échéant : l'interface affiche de quoi elle parle.
+        site: site ? { id: site.id, name: site.name } : null,
+        // Ventilation par site. Dépenses et marge suivent la même règle que
+        // le reste : sans `report:financial`, elles valent null.
+        by_site: bySiteQ.rows.map((row) => ({
+          site_id: row.site_id,
+          site_name: row.site_name,
+          city: row.city,
+          wash_count: row.wash_count,
+          revenue_cents: row.revenue_cents,
+          expenses_cents: financial ? row.expenses_cents : null,
+          net_cents: financial ? row.revenue_cents - row.expenses_cents : null,
+        })),
       })
     }),
   )

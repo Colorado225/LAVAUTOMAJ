@@ -34,8 +34,8 @@ outils diffèrent.
 
 | Rôle | Code | Vocation | Permissions |
 |------|------|----------|-------------|
-| Propriétaire | `owner` | Accès complet, y compris finances, droits et abonnement | 27 |
-| Gérant | `manager` | Gestion opérationnelle quotidienne | 14 |
+| Propriétaire | `owner` | Accès complet, y compris finances, droits et abonnement | 28 |
+| Gérant | `manager` | Gestion opérationnelle quotidienne | 15 |
 | Caissier | `cashier` | Tenue de la caisse et encaissements | 12 |
 | Agent de lavage | `washer` | Consultation de son travail | 2 |
 
@@ -70,6 +70,7 @@ propriétaire · ❌ refusé, non délégable.
 | Rapports d'activité | `report:operational` | ✅ | ✅ | ✅ | ⚙️ |
 | **Rapports financiers (marges, dépenses)** | `report:financial` | ✅ | ⚙️ | ⚙️ | ⚙️ |
 | Exporter les rapports | `report:export` | ✅ | ⚙️ | ⚙️ | ⚙️ |
+| Consulter l'historique des opérations | `audit:read` | ✅ | ✅ | ⚙️ | ⚙️ |
 | **Gérer les utilisateurs et les droits** | `user:manage` | ✅ | ❌ | ❌ | ❌ |
 | **Paramètres de la station** | `settings:manage` | ✅ | ❌ | ❌ | ❌ |
 | **Abonnement** | `subscription:manage` | ✅ | ❌ | ❌ | ❌ |

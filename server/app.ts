@@ -13,6 +13,7 @@ import { createPaymentsRouter } from "./payments.ts"
 import { createBackupRouter } from "./backup.ts"
 import { createSupportRouter } from "./support.ts"
 import { createAccessRouter } from "./access.ts"
+import { createAuditLogRouter } from "./audit-log.ts"
 import { attachSubscription, blockWritesWhenReadOnly } from "./entitlements.ts"
 
 // ---------------------------------------------------------------------------
@@ -45,6 +46,7 @@ export function mountApi(app: Express) {
   app.use("/api/v1", createBackupRouter())
   app.use("/api/v1", createSupportRouter())
   app.use("/api/v1", createAccessRouter())
+  app.use("/api/v1", createAuditLogRouter())
   app.use("/api/v1", createTeamRouter())
   app.use("/api/v1", createReportsRouter())
   app.use("/api/v1", createOperationsRouter())

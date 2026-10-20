@@ -302,3 +302,130 @@ bouton d'aide.
 - **Notifications WhatsApp automatiques** (reçu envoyé au client après lavage) :
   nécessite un compte WhatsApp Business API, donc un budget et une validation
   Meta. Le canal d'assistance actuel ne requiert rien.
+
+---
+
+## 12. Mise à niveau sur les services annoncés dans la grille tarifaire
+
+La page tarifaire promet seize fonctionnalités réparties sur trois forfaits.
+L'inventaire ligne à ligne a montré que **douze étaient livrées**, une relève
+de l'accompagnement humain, une reste à arbitrer, et **quatre manquaient**.
+Cette section décrit ce qui a été construit pour combler l'écart. Les
+restrictions par forfait ne sont **pas** encore posées : à ce stade, les
+fonctions existent pour tous, l'étape suivante consistera à les réserver.
+
+### 12.1 Ce qui manquait réellement
+
+| Promesse | Forfait | État avant | Nature du manque |
+| --- | --- | --- | --- |
+| Historique des opérations et traçabilité | Pro | Table `audit_logs` alimentée par dix écritures | Aucune lecture possible : les traces s'accumulaient sans être consultables |
+| Gestion multi-sites | Business | CRUD serveur complet et déjà protégé | Aucun écran : la fonctionnalité était inatteignable |
+| Vue consolidée du propriétaire | Business | — | `server/reports.ts` ne mentionnait pas une seule fois la notion de site |
+| Rapports consolidés | Business | — | Idem |
+
+Trois promesses soupçonnées manquantes se sont révélées présentes : le rapport
+quotidien (`granularity=day`), les marges opérationnelles (`net_cents`) et les
+permissions avancées. L'« assistance prioritaire » n'a aucune notion de
+priorité dans `server/support.ts` : c'est un engagement de délai, à trancher
+commercialement avant d'être codé. L'« accompagnement à la mise en service »
+est un service humain, hors logiciel.
+
+### 12.2 Historique des opérations
+
+**Le choix structurant : l'historique est en lecture seule.** `server/audit-log.ts`
+n'expose aucune route d'écriture, de modification ou de suppression — pas même
+pour le propriétaire. Un historique que l'on peut retoucher ne prouve rien ; il
+perdrait exactement la valeur pour laquelle il est vendu. Une erreur se corrige
+en enregistrant l'opération inverse, qui laisse à son tour sa trace. Un test
+vérifie que `POST`, `PATCH`, `PUT` et `DELETE` sont tous rejetés.
+
+Les traces existaient déjà : annulation de lavage, remboursement, clôture de
+caisse avec écart, dépense créée/modifiée/supprimée, changement de droits,
+refus d'accès, sauvegarde, fin d'intégration. Le travail a consisté à les
+rendre lisibles :
+
+- `GET /api/v1/audit-logs` — filtres `action`, `entity_type`, `actor_user_id`,
+  `from`, `to`, pagination (`limit` plafonné à 200). Tri antichronologique
+  avec départage par identifiant, sans quoi deux écritures de la même
+  transaction s'intervertiraient d'un appel à l'autre.
+- `GET /api/v1/audit-logs/filters` — ne propose que les valeurs **réellement
+  présentes** dans l'organisation. Une liste déroulante remplie d'actions
+  jamais survenues renvoie l'utilisateur vers des écrans vides.
+- Les codes techniques sont traduits côté serveur (`AUDIT_ACTION_LABELS`), pas
+  côté écran : l'export CSV et le tableau disent ainsi exactement la même
+  chose. Une action inconnue retombe sur son code plutôt que de disparaître.
+- Les actions automatiques, sans auteur, sont attribuées à « Système ».
+- Un refus d'accès est marqué « Vigilance » : c'est le seul événement qui
+  mérite d'attirer l'œil dans une liste par ailleurs routinière.
+
+**Nouveau droit `audit:read`** (« Consulter l'historique des opérations »),
+accordé au propriétaire et au gérant, refusé par défaut au caissier et à
+l'agent de lavage, mais délégable au cas par cas. Le total passe à
+28 permissions.
+
+**Écran `/history`** : filtres par période, opération, objet et auteur ; lignes
+dépliables affichant le détail (motif d'un remboursement, écart de caisse) ;
+export CSV de la page affichée, séparateur point-virgule et BOM UTF-8 pour
+qu'Excel en locale française l'ouvre correctement du premier coup.
+
+### 12.3 Gestion multi-sites
+
+Le serveur était déjà complet et correctement protégé — lecture avec
+`wash:read`, écriture avec `settings:manage`. Seul l'écran manquait.
+`/sites` expose la création, la modification, l'activation/désactivation et la
+suppression.
+
+**Désactiver plutôt que supprimer.** Le serveur refuse (409 `site_in_use`) la
+suppression d'une station à laquelle des lavages, caisses, dépenses ou
+travailleurs sont rattachés, et l'écran relaie ce message en orientant vers la
+désactivation. Une station fermée conserve son activité dans les rapports des
+mois précédents ; la supprimer trouerait la comptabilité. La suppression reste
+possible pour une station créée par erreur, jamais encore utilisée.
+
+La limite de stations du forfait (`max_sites`) est affichée à titre indicatif
+et désactive le bouton d'ajout lorsqu'elle est atteinte — c'est une information,
+pas encore un garde-fou serveur.
+
+### 12.4 Vue consolidée et rapports consolidés
+
+`/reports/summary` accepte désormais `site_id` et renvoie deux choses nouvelles.
+
+**Le filtre par station.** L'identifiant est validé (400 `invalid_site`) puis
+vérifié en base contre l'organisation (404 `site_not_found`) avant d'atteindre
+la moindre requête. Répondre 200 avec zéro ligne pour une station étrangère
+révélerait son existence ; on répond comme pour un identifiant inventé. Le
+filtre traverse les huit requêtes du rapport — résumé, dépenses, série
+temporelle, prestations, moyens de paiement, postes de dépense, laveurs. La
+table `payments` ne porte pas de `site_id` : le rattachement passe par
+`wash_id → washes.site_id`.
+
+**La ventilation `by_site`**, qui est la vue du propriétaire proprement dite :
+une ligne par station — lavages, encaissements, dépenses, solde — **toujours
+calculée, même lorsqu'un filtre de station est posé**. C'est l'intérêt de la
+vue : comparer les points de vente sans perdre le détail de celui que l'on est
+en train de regarder, et sans changer de filtre trois fois. Une station ouverte
+mais sans activité apparaît à zéro plutôt que de disparaître du tableau, sans
+quoi on croirait l'avoir fermée.
+
+Les dépenses et la marge suivent la règle déjà en place : sans
+`report:financial`, elles valent `null` par station comme au total, tandis que
+le chiffre d'affaires reste visible. Le tableau et le sélecteur de station
+n'apparaissent qu'à partir de deux stations : un filtre à une seule valeur
+n'apporte rien.
+
+L'export CSV porte la mention du périmètre en tête, intègre le bloc par station
+et nomme le fichier d'après la station filtrée — un rapport détaché de l'écran
+ne doit pas pouvoir être confondu avec le consolidé.
+
+### 12.5 Vérification
+
+29 tests ajoutés, 152 au total.
+
+- `tests/audit-log.test.ts` (17) — libellés, droits par rôle, contenu des
+  entrées, ordre antichronologique, filtres, pagination sans doublon, borne de
+  fin incluse, absence de route d'écriture, cloisonnement entre organisations.
+- `tests/multi-site-reports.test.ts` (12) — rejet d'un identifiant malformé
+  avant le SQL, 404 sur une station étrangère, égalité entre la somme des
+  stations filtrées et le total consolidé, propagation du filtre aux moyens de
+  paiement, postes de dépense et série temporelle, ventilation conservée sous
+  filtre, station vide affichée à zéro, masquage financier par station.

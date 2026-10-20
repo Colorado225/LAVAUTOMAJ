@@ -41,6 +41,7 @@ export type Permission =
   | "report:operational"
   | "report:financial"
   | "report:export"
+  | "audit:read"
   | "user:manage"
   | "settings:manage"
   | "subscription:manage"
