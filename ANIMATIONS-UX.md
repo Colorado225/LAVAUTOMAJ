@@ -528,3 +528,91 @@ qui demande moins d'animation.
 Aucune dépendance ajoutée : `framer-motion` était déjà installé (14.4.0) et
 utilisé par 14 fichiers. Le bundle gagne quelques kilo-octets de CSS ; les
 primitives remplacent plus de code ad hoc qu'elles n'en ajoutent.
+
+---
+
+## 14. Thème clair / sombre (20 octobre 2026)
+
+Une bascule existait déjà dans l'en-tête de l'application. L'audit a montré
+que c'était la façade d'un système incomplet : quatre défauts réels, dont
+deux visibles par tous les utilisateurs.
+
+### 14.1 Ce qui était cassé
+
+| Défaut | Conséquence |
+|---|---|
+| La classe du thème était posée dans un `useEffect` | **Éclair blanc à chaque chargement** pour un utilisateur en thème sombre |
+| La bascule était binaire | Une fois le premier clic donné, **« Système » devenait inatteignable** — l'application cessait définitivement de suivre le téléphone |
+| Aucun abonnement à `prefers-color-scheme` | En mode système, un téléphone qui bascule en sombre au coucher du soleil laissait l'application en clair jusqu'au rechargement |
+| `localStorage` lu sans garde, valeur non validée | Exception en navigation privée ; une valeur corrompue était appliquée telle quelle |
+
+S'y ajoutaient l'absence de `<meta name="theme-color">` (barre du navigateur
+restée blanche sur Android, alors que c'est la cible du projet), l'absence de
+`color-scheme` (contrôles de formulaire natifs restés clairs en thème sombre)
+et une révélation circulaire qui ignorait `prefers-reduced-motion`.
+
+### 14.2 Ce qui a été fait
+
+**`index.html`** — script inline exécuté **avant le premier rendu**, qui lit
+la préférence et pose la classe, `color-scheme` et `theme-color`. Plus
+d'éclair. Le code y est volontairement dupliqué depuis `src/lib/theme.ts` :
+il doit s'exécuter avant tout module, donc il ne peut rien importer.
+
+**`src/lib/theme.ts`** — référence côté React : type `Theme`, clé de
+stockage, lecture protégée, résolution de « system », application au document
+(classe + `color-scheme` + `theme-color`), libellés français.
+
+**`src/components/theme-provider.tsx`** — réécrit : abonnement à
+`prefers-color-scheme`, abonnement à `storage` (deux onglets restent
+cohérents), `resolvedTheme` exposé, `localStorage` protégé. La prop
+`storageKey` a été **supprimée** : la clé doit rester identique à celle du
+script inline, qu'aucune prop ne peut atteindre — la rendre configurable
+offrait un réglage sans effet.
+
+**`src/components/theme-toggle.tsx`** — trois formes pour trois contextes :
+
+| Composant | Où | Pourquoi |
+|---|---|---|
+| `ThemeToggle` | En-tête | Un clic, geste quotidien, avec la révélation circulaire |
+| `ThemeMenu` | En-tête (≥ sm) | Rend « Système » atteignable, et affiche ce qu'il résout |
+| `ThemeSegmentedControl` | Réglages → Mon compte | Choix explicite, `radiogroup` navigable au clavier |
+
+**Couleur de barre du navigateur** — `oklch(0.145 0 0)` converti donne
+**#0a0a0a**, et non le #242424 posé au départ. L'écart était visible : une
+barre d'adresse plus claire que l'application juste en dessous.
+
+### 14.3 La vitrine reste claire — et c'est voulu
+
+La page vitrine et les écrans de connexion comptent **environ 325 couleurs
+codées en dur et zéro variante `dark:`**. Ils n'utilisent aucun jeton de
+thème : ce sont des surfaces de marque à identité fixe, bleu profond sur
+blanc.
+
+Les convertir est une refonte graphique, pas un correctif de thème — et ce
+n'était pas la demande. En revanche, l'état intermédiaire était réellement
+cassé : avec `<html class="dark">`, les variables d'élévation basculaient et
+les contrôles natifs des formulaires de connexion passaient en sombre, sous
+des cartes restées blanches.
+
+D'où la classe **`.light-surface`**, appliquée à la racine de la vitrine et
+des écrans d'authentification : elle réaffirme `color-scheme: light` et les
+valeurs claires d'élévation. Une dizaine de lignes qui suppriment
+l'incohérence sans engager de refonte. Elle disparaîtra le jour où la vitrine
+gagnera une vraie version sombre.
+
+L'application, elle, est **entièrement sur jetons** : zéro couleur claire
+codée en dur dans les écrans et les composants partagés, vérifié. Le thème
+sombre y fonctionne sur toute la surface.
+
+### 14.4 Tests
+
+`tests/theme.test.ts` — 10 cas. La duplication entre `index.html` et
+`src/lib/theme.ts` est volontaire mais fragile : les tests vérifient que la
+clé de stockage et les deux couleurs restent identiques des deux côtés, que
+le script précède bien le bundle, et que la résolution se comporte
+correctement sur six scénarios (choix explicite contre système, absence de
+choix, « system » enregistré, valeur corrompue). Sans ce garde-fou, une
+divergence se manifesterait par un éclair blanc en production, pas par une
+erreur de compilation.
+
+Suite complète : **123 tests**.

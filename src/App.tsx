@@ -36,7 +36,7 @@ function App() {
       {/* reducedMotion="user" : framer-motion neutralise automatiquement les
           animations si le système demande un mouvement réduit. */}
       <MotionConfig reducedMotion="user">
-        <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
+        <ThemeProvider defaultTheme="system">
           <AuthProvider>
             <Toaster>
               <RouterProvider router={router} />

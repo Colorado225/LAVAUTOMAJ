@@ -10,6 +10,37 @@
       media="(prefers-color-scheme: dark)"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#ffffff" />
+
+    <!--
+      Thème appliqué AVANT le premier rendu.
+
+      Sans ce script, React ne pose la classe qu'au premier effet : un
+      utilisateur en thème sombre voit un éclair blanc à chaque chargement.
+      Le code est volontairement dupliqué depuis `src/lib/theme.ts` — il doit
+      s'exécuter avant tout module, donc il ne peut rien importer. La clé de
+      stockage doit rester identique dans les deux fichiers.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = window.localStorage.getItem("vite-ui-theme")
+          var theme = stored === "light" || stored === "dark" ? stored : null
+          var resolved =
+            theme ||
+            (window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light")
+          var root = document.documentElement
+          root.classList.add(resolved)
+          root.style.colorScheme = resolved
+          var meta = document.querySelector('meta[name="theme-color"]')
+          if (meta) meta.content = resolved === "dark" ? "#0a0a0a" : "#ffffff"
+        } catch (error) {
+          /* Stockage indisponible : on garde le thème clair par défaut. */
+        }
+      })()
+    </script>
 
     <!-- Primary Meta Tags -->
     <title>WashPilot CI — Gestion de station de lavage</title>

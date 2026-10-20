@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { ThemeSegmentedControl } from "@/components/theme-toggle"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -90,9 +91,24 @@ export default function AccountSettings() {
         <div>
           <h1 className="text-3xl font-bold">Mon compte</h1>
           <p className="text-muted-foreground">
-            Gérez vos informations personnelles et votre mot de passe.
+            Gérez vos informations personnelles, votre mot de passe et
+            l’apparence de l’interface.
           </p>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Apparence</CardTitle>
+            <CardDescription>
+              Ce réglage est enregistré sur cet appareil. « Système » suit le
+              réglage de votre téléphone ou de votre ordinateur, y compris
+              lorsqu’il bascule automatiquement le soir.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ThemeSegmentedControl />
+          </CardContent>
+        </Card>
 
         <div className="grid gap-6 lg:grid-cols-2">
           <Card>

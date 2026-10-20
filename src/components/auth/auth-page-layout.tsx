@@ -32,7 +32,7 @@ export function AuthPageLayout({
   const year = new Date().getFullYear()
 
   return (
-    <main className="relative min-h-svh w-full overflow-hidden bg-[#f6f8fc] text-[#102342]">
+    <main className="light-surface relative min-h-svh w-full overflow-hidden bg-[#f6f8fc] text-[#102342]">
       <div className="pointer-events-none absolute -left-40 top-36 size-96 rounded-full bg-blue-100/50 blur-3xl lg:hidden" />
       <div className="mx-auto grid min-h-svh w-full max-w-[1720px] grid-cols-1 lg:grid-cols-[minmax(0,1.04fr)_minmax(420px,0.96fr)]">
         <section className="relative z-10 flex min-h-svh flex-col px-5 py-5 sm:px-8 sm:py-7 lg:px-12 lg:py-8 xl:px-16">
