@@ -144,4 +144,9 @@ droit ne s'accorde que par cette variable : **aucune route de l'application ne
 peut l'attribuer**, et le serveur répond `404` — et non `403` — à tout compte
 qui n'en dispose pas, pour que l'existence du back-office ne se devine pas.
 
+Le créateur **n'a pas besoin d'exploiter une station** : les routes `/admin`
+ne réclament aucune organisation, et un administrateur sans station
+configurée atterrit directement sur son back-office au lieu d'être renvoyé
+vers l'assistant de mise en service.
+
 Détail des décisions, des routes et des tests : [`BACK-OFFICE.md`](BACK-OFFICE.md).

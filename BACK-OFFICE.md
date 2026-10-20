@@ -61,6 +61,34 @@ avatar, en haut à droite. Variable vide ⇒ back-office entièrement fermé.
 
 Plusieurs adresses se séparent par des virgules.
 
+Si une adresse listée n'a aucun compte, le serveur le dit au démarrage plutôt
+que d'échouer en silence :
+
+```
+[admin] Adresses sans compte, aucun droit accorde : vous@exemple.ci.
+        Le compte doit exister d'abord.
+```
+
+### Vous n'avez pas besoin d'exploiter une station
+
+Le créateur de l'application n'est pas un client. Trois dispositions le
+garantissent :
+
+- les routes `/api/v1/admin` sont montées **avant** `requireTenantContext` :
+  elles ne réclament aucune organisation ;
+- `OnboardingGate` laisse passer un administrateur de plateforme vers
+  `/admin` sans exiger d'assistant de configuration ;
+- un administrateur sans station configurée **atterrit sur `/admin`** après
+  connexion, au lieu d'être renvoyé dans l'assistant.
+
+Sans ces trois points, le créateur devait inventer un lavage fictif — site,
+services, laveurs, forfait — pour atteindre sa propre administration. Pire :
+il en restait enfermé dehors, l'entrée « Administration » vivant dans un menu
+que l'assistant n'affiche jamais.
+
+L'assistant reste accessible (`/onboarding`) si vous voulez malgré tout
+exploiter une station depuis le même compte.
+
 ---
 
 ## 3. Les cinq décisions structurantes
@@ -186,7 +214,7 @@ comptent la même chose.
 
 ## 6. Vérification
 
-`tests/platform-admin.test.ts` — **20 tests**, le refus d'abord :
+`tests/platform-admin.test.ts` — **22 tests**, le refus d'abord :
 
 - le back-office est invisible pour un gérant et un caissier (404 sur quatre routes) ;
 - un propriétaire ne peut pas s'offrir le forfait Business ;
@@ -201,11 +229,14 @@ comptent la même chose.
 - la liste montre l'état effectif, pas le statut stocké ;
 - une échéance dépassée est signalée sans couper ;
 - le revenu mensuel ignore les essais ;
-- une demande déclinée cesse d'être en attente, sans toucher à l'abonnement.
+- une demande déclinée cesse d'être en attente, sans toucher à l'abonnement ;
+- le back-office répond même si la station de l'éditeur n'est pas configurée ;
+- la garde d'onboarding laisse passer l'éditeur vers `/admin`.
 
 Ces tests ont été vérifiés par mutation : altérer le code de production
 (404 → 403, suppression du garde-fou 409, perte des jours payés, refus qui ne
-clôt pas la demande) les fait échouer à chaque fois.
+clôt pas la demande, retrait de la dérogation d'onboarding) les fait échouer à
+chaque fois.
 
 ```bash
 NODE_ENV=test npx tsx --test tests/platform-admin.test.ts

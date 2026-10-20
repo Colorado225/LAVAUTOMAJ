@@ -449,3 +449,55 @@ test("le refus reste réservé à l'éditeur", async () => {
   assert.equal(response.status, 404)
   assert.equal((await response.json()).error.code, "not_found")
 })
+
+// ---------------------------------------------------------------------------
+// 6. L'éditeur n'est pas un client
+//
+// Le créateur de l'application n'exploite pas forcément de station. Rien ne
+// doit lui imposer d'en configurer une — ni côté serveur, ni côté interface.
+// ---------------------------------------------------------------------------
+
+test("le back-office répond même si la station de l'éditeur n'est pas configurée", async () => {
+  // Les routes /admin sont montées avant requireTenantContext : elles ne
+  // parlent pas d'une station, elles parlent du parc. Une organisation non
+  // configurée ne doit donc rien bloquer.
+  await pool.query("UPDATE organizations SET onboarding_completed = false WHERE id = $1::uuid", [
+    organizationId,
+  ])
+  try {
+    const response = await api("/api/v1/admin/metrics", { as: "demo@washpilot.ci" })
+    assert.equal(response.status, 200)
+    assert.ok(typeof (await response.json()).total === "number")
+  } finally {
+    await pool.query("UPDATE organizations SET onboarding_completed = true WHERE id = $1::uuid", [
+      organizationId,
+    ])
+  }
+})
+
+test("la garde d'onboarding laisse passer l'éditeur vers son back-office", async () => {
+  // Contrôle statique, faute de rendu de composant dans ce dépôt. Sans cette
+  // dérogation, l'éditeur est renvoyé vers l'assistant station/services/
+  // laveurs/forfait et n'atteint jamais /admin — l'entrée « Administration »
+  // vivant dans un menu que l'assistant ne montre pas.
+  const source = await readFile(
+    new URL("../src/components/router/onboarding-gate.tsx", import.meta.url),
+    "utf8",
+  )
+  assert.match(
+    source,
+    /isPlatformAdmin\s*&&\s*location\.pathname\s*===\s*"\/admin"/,
+    "la garde doit exempter /admin pour un administrateur de plateforme",
+  )
+  assert.match(
+    source,
+    /isPlatformAdmin\s*\?\s*"\/admin"\s*:\s*"\/onboarding"/,
+    "un éditeur non configuré doit atterrir sur /admin, pas dans l'assistant",
+  )
+
+  // La dérogation doit précéder la branche de chargement : le back-office
+  // reste joignable quand l'état d'onboarding est indisponible.
+  const exemption = source.indexOf('location.pathname === "/admin"')
+  const loadingBranch = source.indexOf("if (loading)")
+  assert.ok(exemption > 0 && exemption < loadingBranch, "la dérogation doit venir avant if (loading)")
+})

@@ -113,7 +113,10 @@ function formatDate(value: string | null): string {
 }
 
 export default function AdminPage() {
-  const { user } = useAuth()
+  const { user, organization } = useAuth()
+  // Une station réellement configurée, et non la coquille créée à
+  // l'inscription : sans cela, « Mon espace » mène à l'assistant.
+  const hasStation = organization?.onboardingCompleted === true
   const [query, setQuery] = useState("")
   const [filter, setFilter] = useState("all")
   const [refreshKey, setRefreshKey] = useState(0)
@@ -278,14 +281,17 @@ export default function AdminPage() {
               </p>
             </div>
           </div>
+          {/* Le créateur de l'application n'exploite pas forcément de station.
+              Lui proposer « Mon espace » le renverrait vers l'assistant de
+              configuration, boucle dont il ne comprendrait pas la cause. */}
           <Button
             variant="outline"
             size="sm"
             className="ml-auto"
-            render={<Link to="/dashboard" />}
+            render={<Link to={hasStation ? "/dashboard" : "/onboarding"} />}
           >
             <ArrowLeft className="mr-2 size-4" aria-hidden="true" />
-            Mon espace
+            {hasStation ? "Mon espace" : "Configurer une station"}
           </Button>
         </div>
       </header>

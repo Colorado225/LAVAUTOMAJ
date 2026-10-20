@@ -15,7 +15,8 @@ import { useAuth } from "@/lib/auth"
 export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { data, loading, error } = useOnboardingStatus()
   const location = useLocation()
-  const { refresh } = useAuth()
+  const { refresh, user } = useAuth()
+  const isPlatformAdmin = user?.platformAdmin === true
 
   // Si la vérification échoue (ex. session expirée côté serveur), on
   // resynchronise l'état d'authentification : une session réellement invalide
@@ -28,6 +29,22 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
     }, 0)
     return () => window.clearTimeout(timer)
   }, [error, refresh])
+
+  // Le back-office de l'éditeur échappe à cette garde.
+  //
+  // Il ne parle pas d'une station mais du parc entier : exiger du créateur de
+  // l'application qu'il configure un lavage fictif — site, services, laveurs,
+  // forfait — avant d'atteindre sa propre administration n'aurait aucun sens.
+  // Il l'enfermerait même dehors : l'entrée « Administration » vit dans le
+  // menu de l'avatar, que l'assistant ne montre jamais.
+  //
+  // Placé avant les branches de chargement et d'erreur à dessein : le
+  // back-office doit rester joignable même quand l'état d'onboarding d'une
+  // station est indisponible. C'est précisément l'écran qu'on ouvre quand
+  // quelque chose ne va pas.
+  if (isPlatformAdmin && location.pathname === "/admin") {
+    return <>{children}</>
+  }
 
   if (loading) {
     return (
@@ -59,7 +76,11 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
     data.state === "not_started" || data.state === "in_progress"
 
   if (needsOnboarding && location.pathname !== "/onboarding") {
-    return <Navigate to="/onboarding" replace />
+    // L'éditeur n'est pas un client à configurer : sans station à lui, sa
+    // destination par défaut est son back-office. L'assistant lui reste
+    // ouvert s'il veut malgré tout exploiter une station (/onboarding n'est
+    // jamais bloqué), mais il n'y est plus contraint.
+    return <Navigate to={isPlatformAdmin ? "/admin" : "/onboarding"} replace />
   }
 
   if (data.state === "completed" && location.pathname === "/onboarding") {
