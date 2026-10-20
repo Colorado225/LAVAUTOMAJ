@@ -16,7 +16,7 @@ import { createCheckoutRouter } from "./checkout.ts"
 import { createAccessRouter } from "./access.ts"
 import { createAuditLogRouter } from "./audit-log.ts"
 import { createAdminRouter } from "./admin.ts"
-import { requirePlatformAdmin } from "./platform-admin.ts"
+import { createConsoleAuthRouter, requireOperator } from "./console-auth.ts"
 import { attachSubscription, blockWritesWhenReadOnly } from "./entitlements.ts"
 
 // ---------------------------------------------------------------------------
@@ -49,16 +49,26 @@ import { attachSubscription, blockWritesWhenReadOnly } from "./entitlements.ts"
  */
 export function mountApi(app: Express) {
   app.use("/api/v1/auth", createAuthRouter())
-  app.use("/api/v1", requireSession)
 
-  // Administration de plateforme : montée **avant** `requireTenantContext`.
+  // -------------------------------------------------------------------------
+  // Console de l'éditeur — montée AVANT `requireSession`, et c'est le point
+  // central de la séparation.
   //
-  // L'éditeur n'appartient à aucune station ; le contexte de locataire le
-  // rejetterait avec `organization_required`. Surtout, c'est la seule surface
-  // qui franchit volontairement l'isolation entre clients : la placer ici rend
-  // ce franchissement lisible au montage, plutôt que caché dans une route.
-  app.use("/api/v1/admin", requirePlatformAdmin, createAdminRouter())
+  // Rien de ce qui suit ne s'applique ici : ni la session de station, ni le
+  // contexte de locataire, ni l'abonnement. La console a son propre cookie,
+  // ses propres comptes, sa propre table de sessions. Une session de station,
+  // même celle du créateur de l'application, ne franchit pas cette ligne —
+  // `requireOperator` ne lit tout simplement pas ce cookie-là.
+  //
+  // C'est aussi la seule surface qui traverse volontairement l'isolation
+  // entre clients : pour activer le forfait d'un client, il faut écrire chez
+  // lui. La placer ici rend ce franchissement lisible au montage, plutôt que
+  // caché dans une route.
+  // -------------------------------------------------------------------------
+  app.use("/api/v1/console/auth", createConsoleAuthRouter())
+  app.use("/api/v1/console", requireOperator, createAdminRouter())
 
+  app.use("/api/v1", requireSession)
   app.use("/api/v1", requireTenantContext)
   app.use("/api/v1", attachSubscription)
   app.use("/api/v1", blockWritesWhenReadOnly)

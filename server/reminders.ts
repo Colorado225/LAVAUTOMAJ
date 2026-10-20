@@ -1,5 +1,6 @@
 import type { Pool } from "pg"
 import { env } from "./env.ts"
+import { runScheduledPurges } from "./organization-deletion.ts"
 import { sendMail, trialReminderMessage, renewalReminderMessage } from "./mailer.ts"
 import { computeSubscriptionState, TRIAL_WARNING_DAYS, type SubscriptionState } from "./entitlements.ts"
 
@@ -273,6 +274,25 @@ export function startReminderScheduler(pool: Pool): void {
     } catch (error) {
       console.error(
         "[relances] Passage échoué :",
+        error instanceof Error ? error.message : "erreur inconnue",
+      )
+    }
+
+    // Purges arrivées à échéance. Dans le même passage que les relances
+    // plutôt que dans un minuteur séparé : deux planificateurs concurrents
+    // sur la même base doubleraient le risque sans rien gagner.
+    //
+    // Enveloppé dans son propre try : une purge qui échoue ne doit pas
+    // empêcher les relances du passage suivant.
+    try {
+      const { purged, failed } = await runScheduledPurges(pool)
+      if (purged.length) console.info(`[suppression] ${purged.length} station(s) purgée(s).`)
+      for (const failure of failed) {
+        console.error(`[suppression] Purge échouée pour ${failure.id} : ${failure.error}`)
+      }
+    } catch (error) {
+      console.error(
+        "[suppression] Passage échoué :",
         error instanceof Error ? error.message : "erreur inconnue",
       )
     }

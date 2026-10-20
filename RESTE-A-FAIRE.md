@@ -33,7 +33,8 @@ Ce qui suit ne remet rien de cela en cause. Ce sont les pièces manquantes.
 ## 1. ~~Bloquant~~ — RÉSOLU le 20/10/2026 : le back-office est en place
 
 > **Résolu.** Le chemin 1 ci-dessous (activation manuelle assistée) a été
-> implémenté : back-office `/admin`, administrateur de plateforme par
+> implémenté : console `/console` (application séparée depuis le 20/10/2026),
+> opérateurs de plateforme par
 > `PLATFORM_ADMIN_EMAILS`, routes d'activation, de suspension, de prolongation
 > et de refus de demande. Voir **`BACK-OFFICE.md`**. Le constat d'origine est
 > conservé ci-dessous pour mémoire.
@@ -87,7 +88,7 @@ mal rodée qui encaisse mal.
 > démonstration.
 
 **Ce qui a été livré** (20/10/2026) : `server/platform-admin.ts`,
-`server/admin.ts` (9 routes), colonne `users.platform_admin` posée au
+`server/admin.ts` (18 routes), table `platform_operators` amorcée au
 démarrage depuis `PLATFORM_ADMIN_EMAILS`, écran `/admin` atteint par le menu
 utilisateur, 20 tests dans `tests/platform-admin.test.ts`. Le chemin 2
 (encaissement intégré) reste ouvert et n'est pas contredit : la route

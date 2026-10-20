@@ -14,8 +14,10 @@ import { invalidateSubscriptionCache } from "../server/entitlements.ts"
 // entre clients : elle écrit chez autrui. Les tests portent donc d'abord sur
 // le refus, et seulement ensuite sur la fonctionnalité.
 //
-// Le drapeau `platform_admin` est posé directement en base, jamais par une
-// route : aucune n'existe, et c'est précisément ce qu'un des tests vérifie.
+// Depuis la séparation, l'administration n'est plus un drapeau sur un compte
+// de station mais un compte d'opérateur distinct, avec sa propre session et
+// son propre cookie. Les tests vérifient d'abord cette étanchéité : une
+// session de station ne doit jamais ouvrir la console, et réciproquement.
 // ---------------------------------------------------------------------------
 
 let server: Server
@@ -37,6 +39,32 @@ async function api(path: string, options: { as?: string; method?: string; body?:
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   })
+}
+
+const OPERATOR_EMAIL = "ops@washpilot.ci"
+const OPERATOR_PASSWORD = "ConsoleSecret2026!"
+let operatorCookie = ""
+
+/** Appel de la console, authentifié par le cookie d'opérateur. */
+async function console_(path: string, options: { method?: string; body?: unknown; cookie?: string } = {}) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" }
+  const cookie = options.cookie === undefined ? operatorCookie : options.cookie
+  if (cookie) headers.Cookie = cookie
+  return fetch(`${baseUrl}/api/v1/console${path}`, {
+    method: options.method ?? "GET",
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  })
+}
+
+async function loginOperator() {
+  const response = await fetch(`${baseUrl}/api/v1/console/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: OPERATOR_EMAIL, password: OPERATOR_PASSWORD }),
+  })
+  assert.equal(response.status, 200, "connexion de l'opérateur")
+  operatorCookie = response.headers.getSetCookie?.().join("; ") ?? response.headers.get("set-cookie") ?? ""
 }
 
 async function login(email: string) {
@@ -80,14 +108,23 @@ before(async () => {
   const org = await pool.query("SELECT id FROM organizations LIMIT 1")
   organizationId = org.rows[0].id
 
-  // Le propriétaire de démonstration devient administrateur de plateforme :
-  // c'est ce que ferait PLATFORM_ADMIN_EMAILS au démarrage.
-  await pool.query("UPDATE users SET platform_admin = true WHERE email = 'demo@washpilot.ci'")
-  await pool.query("UPDATE users SET platform_admin = false WHERE email <> 'demo@washpilot.ci'")
+  // Un opérateur de console, sans aucune station : c'est ce que ferait
+  // `syncPlatformOperators` au démarrage à partir de PLATFORM_ADMIN_EMAILS.
+  // Noter qu'aucun compte de `users` n'est touché — c'est tout l'objet de la
+  // séparation.
+  const { hashPassword } = await import("../server/auth.ts")
+  await pool.query(
+    `INSERT INTO platform_operators(email, password_hash, full_name, status)
+     VALUES($1, $2, 'Operateur de test', 'active')
+     ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, status = 'active'`,
+    [OPERATOR_EMAIL, await hashPassword(OPERATOR_PASSWORD)],
+  )
+  await pool.query("UPDATE users SET platform_admin = false")
 
   for (const email of ["demo@washpilot.ci", "gerant@washpilot.ci", "caisse@washpilot.ci"]) {
     await login(email)
   }
+  await loginOperator()
 })
 
 after(async () => {
@@ -99,28 +136,50 @@ after(async () => {
 // 1. Le refus d'abord
 // ---------------------------------------------------------------------------
 
-test("le back-office est invisible pour un compte ordinaire", async () => {
+test("la console est invisible depuis n'importe quelle session de station", async () => {
   // 404 et non 403 : un 403 confirmerait qu'il y a quelque chose à cette
-  // adresse. Pour un utilisateur ordinaire, le back-office n'existe pas.
-  for (const path of [
-    "/api/v1/admin/metrics",
-    "/api/v1/admin/organizations",
-    "/api/v1/admin/upgrade-requests",
-    "/api/v1/admin/plans",
-  ]) {
-    for (const who of ["gerant@washpilot.ci", "caisse@washpilot.ci"]) {
-      const response = await api(path, { as: who })
+  // adresse. Pour qui vient d'une station, la console n'existe pas.
+  //
+  // `demo@washpilot.ci` est inclus à dessein : c'est le compte du créateur de
+  // l'application, celui qui PEUT administrer le parc. Sa session de station
+  // ne doit pas plus ouvrir la console que celle d'un caissier — c'est tout
+  // l'objet de la séparation.
+  for (const path of ["/metrics", "/organizations", "/upgrade-requests", "/plans"]) {
+    for (const who of ["demo@washpilot.ci", "gerant@washpilot.ci", "caisse@washpilot.ci"]) {
+      const response = await console_(path, { cookie: sessions.get(who) ?? "" })
       assert.equal(response.status, 404, `${who} sur ${path}`)
       assert.equal((await response.json()).error.code, "not_found")
     }
   }
 })
 
+test("une session de console n'ouvre aucune route de station", async () => {
+  // La réciproque. Un cookie d'opérateur ne doit pas valoir session de
+  // station : sans quoi l'éditeur pourrait enregistrer des lavages chez un
+  // client, et le journal de celui-ci n'y verrait qu'une écriture ordinaire.
+  for (const path of ["/api/v1/subscription", "/api/v1/washes", "/api/v1/reports/summary"]) {
+    const response = await fetch(`${baseUrl}${path}`, { headers: { Cookie: operatorCookie } })
+    assert.equal(response.status, 401, path)
+  }
+})
+
+test("les identifiants d'une station n'ouvrent pas la console", async () => {
+  // Les deux tables de comptes sont disjointes : même le mot de passe du
+  // propriétaire de démonstration ne vaut rien ici.
+  const response = await fetch(`${baseUrl}/api/v1/console/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: "demo@washpilot.ci", password: PASSWORD }),
+  })
+  assert.equal(response.status, 401)
+  assert.equal((await response.json()).error.code, "invalid_credentials")
+})
+
 test("un propriétaire de station ne peut pas activer son propre forfait", async () => {
   // Le scénario qui compte : le client a tout intérêt à s'offrir le forfait
   // Business. `subscription:manage` ne doit rien y changer.
-  const response = await api(`/api/v1/admin/organizations/${organizationId}/activate`, {
-    as: "gerant@washpilot.ci",
+  const response = await console_(`/organizations/${organizationId}/activate`, {
+    cookie: sessions.get("gerant@washpilot.ci") ?? "",
     method: "POST",
     body: { plan_code: "business", months: 12 },
   })
@@ -130,23 +189,25 @@ test("un propriétaire de station ne peut pas activer son propre forfait", async
   assert.notEqual(state.plan_code, "business", "le forfait ne doit pas avoir changé")
 })
 
-test("sans session, le back-office répond 401", async () => {
-  assert.equal((await api("/api/v1/admin/metrics")).status, 401)
+test("sans session, la console répond 404", async () => {
+  // 404 et non 401 : répondre « authentifiez-vous » révélerait qu'il y a
+  // quelque chose à authentifier. Seul /console/auth/login est visible.
+  assert.equal((await console_("/metrics", { cookie: "" })).status, 404)
 })
 
-test("aucune route n'accorde le droit d'administration", async () => {
-  // Le drapeau ne s'obtient que par PLATFORM_ADMIN_EMAILS au démarrage. S'il
-  // devenait délégable depuis l'application, le premier propriétaire curieux
-  // obtiendrait la lecture et l'écriture sur toutes les autres stations.
+test("aucune route n'accorde la qualité d'opérateur", async () => {
+  // Le compte d'opérateur ne s'obtient que par PLATFORM_ADMIN_EMAILS au
+  // démarrage. S'il devenait délégable depuis l'application, le premier
+  // propriétaire curieux obtiendrait la lecture et l'écriture sur toutes les
+  // autres stations.
   //
-  // La garantie se vérifie à la source : une seule fonction écrit cette
-  // colonne, et elle n'est atteignable par aucune requête HTTP.
+  // La garantie se vérifie à la source : un seul module écrit cette table.
   const files = await readdir(new URL("../server/", import.meta.url))
   const writers: string[] = []
   for (const file of files.filter((f) => f.endsWith(".ts"))) {
     const source = await readFile(new URL(`../server/${file}`, import.meta.url), "utf8")
     for (const line of source.split("\n")) {
-      if (/platform_admin/.test(line) && /\b(UPDATE|INSERT|SET)\b/.test(line)) {
+      if (/platform_operators/.test(line) && /\b(UPDATE|INSERT)\b/.test(line)) {
         writers.push(file)
         break
       }
@@ -154,19 +215,33 @@ test("aucune route n'accorde le droit d'administration", async () => {
   }
   assert.deepEqual(
     [...new Set(writers)],
-    ["db.ts"],
-    "seul syncPlatformAdmins() doit écrire platform_admin",
+    ["console-auth.ts"],
+    "seul console-auth.ts doit écrire platform_operators",
   )
 
   // Et à l'exécution : une tentative passée par les routes qui touchent aux
-  // comptes ne doit pas poser le drapeau.
+  // comptes ne doit créer aucun opérateur.
   await api("/api/v1/auth/profile", {
     as: "gerant@washpilot.ci",
     method: "PATCH",
     body: { full_name: "Kofi Mensah", platform_admin: true },
   })
-  const q = await pool.query("SELECT platform_admin FROM users WHERE email = 'gerant@washpilot.ci'")
-  assert.equal(q.rows[0].platform_admin, false)
+  const q = await pool.query("SELECT count(*)::int AS n FROM platform_operators WHERE email = 'gerant@washpilot.ci'")
+  assert.equal(q.rows[0].n, 0)
+})
+
+test("l'ancien drapeau platform_admin n'autorise plus rien", async () => {
+  // Reposé en base comme s'il subsistait d'une version antérieure. Il ne doit
+  // plus rien ouvrir : la console ne lit que `platform_operators`. Sans ce
+  // test, un reliquat en production rouvrirait silencieusement la porte que
+  // la séparation vient de fermer.
+  await pool.query("UPDATE users SET platform_admin = true WHERE email = 'demo@washpilot.ci'")
+  try {
+    const response = await console_("/metrics", { cookie: sessions.get("demo@washpilot.ci") ?? "" })
+    assert.equal(response.status, 404)
+  } finally {
+    await pool.query("UPDATE users SET platform_admin = false")
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -179,9 +254,7 @@ test("l'administrateur active un forfait payant, et la capacité suit", async ()
   // En Starter, l'historique est refusé par le forfait.
   assert.equal((await api("/api/v1/audit-logs", { as: "demo@washpilot.ci" })).status, 402)
 
-  const response = await api(`/api/v1/admin/organizations/${organizationId}/activate`, {
-    as: "demo@washpilot.ci",
-    method: "POST",
+  const response = await console_(`/organizations/${organizationId}/activate`, {method: "POST",
     body: { plan_code: "pro", months: 3, payment_reference: "WAVE-884213" },
   })
   assert.equal(response.status, 200)
@@ -213,18 +286,16 @@ test("l'activation est inscrite au journal de la station, pas ailleurs", async (
 test("un renouvellement anticipé ne fait pas perdre les jours payés", async () => {
   await resetSubscription("active", "pro", 20)
   const before = await (
-    await api(`/api/v1/admin/organizations/${organizationId}`, { as: "demo@washpilot.ci" })
+    await console_(`/organizations/${organizationId}`)
   ).json()
   const previousEnd = new Date(before.organization.current_period_end).getTime()
 
-  await api(`/api/v1/admin/organizations/${organizationId}/activate`, {
-    as: "demo@washpilot.ci",
-    method: "POST",
+  await console_(`/organizations/${organizationId}/activate`, {method: "POST",
     body: { plan_code: "pro", months: 1 },
   })
 
   const after = await (
-    await api(`/api/v1/admin/organizations/${organizationId}`, { as: "demo@washpilot.ci" })
+    await console_(`/organizations/${organizationId}`)
   ).json()
   const newEnd = new Date(after.organization.current_period_end).getTime()
   assert.ok(
@@ -234,9 +305,7 @@ test("un renouvellement anticipé ne fait pas perdre les jours payés", async ()
 })
 
 test("activer un forfait inconnu est refusé", async () => {
-  const response = await api(`/api/v1/admin/organizations/${organizationId}/activate`, {
-    as: "demo@washpilot.ci",
-    method: "POST",
+  const response = await console_(`/organizations/${organizationId}/activate`, {method: "POST",
     body: { plan_code: "platine", months: 1 },
   })
   assert.equal(response.status, 404)
@@ -250,9 +319,7 @@ test("activer un forfait inconnu est refusé", async () => {
 test("la suspension passe la station en lecture seule sans rien détruire", async () => {
   await resetSubscription("active", "pro", 30)
 
-  const response = await api(`/api/v1/admin/organizations/${organizationId}/suspend`, {
-    as: "demo@washpilot.ci",
-    method: "POST",
+  const response = await console_(`/organizations/${organizationId}/suspend`, {method: "POST",
     body: { reason: "Impayé : deux relances sans réponse" },
   })
   assert.equal(response.status, 200)
@@ -267,9 +334,7 @@ test("la suspension passe la station en lecture seule sans rien détruire", asyn
 })
 
 test("un motif est exigé pour suspendre", async () => {
-  const response = await api(`/api/v1/admin/organizations/${organizationId}/suspend`, {
-    as: "demo@washpilot.ci",
-    method: "POST",
+  const response = await console_(`/organizations/${organizationId}/suspend`, {method: "POST",
     body: { reason: "x" },
   })
   assert.equal(response.status, 400)
@@ -278,9 +343,7 @@ test("un motif est exigé pour suspendre", async () => {
 test("prolonger un essai échu repart d'aujourd'hui", async () => {
   await resetSubscription("trialing", "starter", -5)
 
-  const response = await api(`/api/v1/admin/organizations/${organizationId}/extend-trial`, {
-    as: "demo@washpilot.ci",
-    method: "POST",
+  const response = await console_(`/organizations/${organizationId}/extend-trial`, {method: "POST",
     body: { days: 7, reason: "Installation retardée, matériel non livré" },
   })
   assert.equal(response.status, 200)
@@ -299,9 +362,7 @@ test("prolonger l'essai d'un forfait payant est refusé", async () => {
   // Le repasser en essai effacerait ce que le client a payé.
   await resetSubscription("active", "business", 60)
 
-  const response = await api(`/api/v1/admin/organizations/${organizationId}/extend-trial`, {
-    as: "demo@washpilot.ci",
-    method: "POST",
+  const response = await console_(`/organizations/${organizationId}/extend-trial`, {method: "POST",
     body: { days: 30, reason: "Geste commercial" },
   })
   assert.equal(response.status, 409)
@@ -323,7 +384,7 @@ test("la liste du parc montre l'état effectif, pas le statut stocké", async ()
   await resetSubscription("trialing", "starter", -1)
 
   const data = await (
-    await api("/api/v1/admin/organizations", { as: "demo@washpilot.ci" })
+    await console_("/organizations")
   ).json()
   const organization = data.organizations.find(
     (o: { id: string }) => o.id === organizationId,
@@ -336,11 +397,11 @@ test("la liste du parc montre l'état effectif, pas le statut stocké", async ()
 test("une échéance dépassée est signalée, jamais coupée d'office", async () => {
   await resetSubscription("active", "pro", -10)
 
-  const metrics = await (await api("/api/v1/admin/metrics", { as: "demo@washpilot.ci" })).json()
+  const metrics = await (await console_("/metrics")).json()
   assert.ok(metrics.past_due >= 1, "l'échéance dépassée remonte dans les indicateurs")
 
   const data = await (
-    await api("/api/v1/admin/organizations?status=past_due", { as: "demo@washpilot.ci" })
+    await console_("/organizations?status=past_due")
   ).json()
   const organization = data.organizations.find((o: { id: string }) => o.id === organizationId)
   assert.ok(organization, "la station apparaît dans le filtre « échéance dépassée »")
@@ -354,11 +415,11 @@ test("une échéance dépassée est signalée, jamais coupée d'office", async (
 
 test("le revenu mensuel ne compte que les forfaits réellement actifs", async () => {
   await resetSubscription("active", "pro", 30)
-  const active = await (await api("/api/v1/admin/metrics", { as: "demo@washpilot.ci" })).json()
+  const active = await (await console_("/metrics")).json()
   assert.equal(active.mrr_cents, 2_000_000, "Pro à 20 000 F")
 
   await resetSubscription("trialing", "business", 10)
-  const trial = await (await api("/api/v1/admin/metrics", { as: "demo@washpilot.ci" })).json()
+  const trial = await (await console_("/metrics")).json()
   assert.equal(trial.mrr_cents, 0, "un essai ne rapporte rien")
 })
 
@@ -378,27 +439,25 @@ async function requestUpgrade(planCode: string) {
 
 test("une demande déclinée cesse d'être en attente", async () => {
   await resetSubscription("trialing", "starter", 5)
-  const before = await (await api("/api/v1/admin/metrics", { as: "demo@washpilot.ci" })).json()
+  const before = await (await console_("/metrics")).json()
 
   await requestUpgrade("pro")
-  const during = await (await api("/api/v1/admin/metrics", { as: "demo@washpilot.ci" })).json()
+  const during = await (await console_("/metrics")).json()
   assert.equal(during.pending_requests, before.pending_requests + 1)
 
   const list = await (
-    await api("/api/v1/admin/upgrade-requests", { as: "demo@washpilot.ci" })
+    await console_("/upgrade-requests")
   ).json()
   const request = list.requests[0]
 
-  const response = await api(`/api/v1/admin/upgrade-requests/${request.id}/decline`, {
-    as: "demo@washpilot.ci",
-    method: "POST",
+  const response = await console_(`/upgrade-requests/${request.id}/decline`, {method: "POST",
     body: { reason: "Paiement non reçu à ce jour" },
   })
   assert.equal(response.status, 200)
 
   // Le compteur retombe : sans cela, le tableau de bord accumulerait un
   // décompte que plus personne ne regarderait.
-  const after = await (await api("/api/v1/admin/metrics", { as: "demo@washpilot.ci" })).json()
+  const after = await (await console_("/metrics")).json()
   assert.equal(after.pending_requests, before.pending_requests)
 })
 
@@ -406,12 +465,10 @@ test("un refus ne touche pas à l'abonnement de la station", async () => {
   await resetSubscription("trialing", "starter", 9)
   await requestUpgrade("business")
   const list = await (
-    await api("/api/v1/admin/upgrade-requests", { as: "demo@washpilot.ci" })
+    await console_("/upgrade-requests")
   ).json()
 
-  await api(`/api/v1/admin/upgrade-requests/${list.requests[0].id}/decline`, {
-    as: "demo@washpilot.ci",
-    method: "POST",
+  await console_(`/upgrade-requests/${list.requests[0].id}/decline`, {method: "POST",
     body: { reason: "Doublon" },
   })
 
@@ -434,17 +491,15 @@ test("le client voit le refus dans son propre historique", async () => {
 })
 
 test("décliner une demande inexistante répond 404", async () => {
-  const response = await api(
-    "/api/v1/admin/upgrade-requests/00000000-0000-0000-0000-000000000000/decline",
-    { as: "demo@washpilot.ci", method: "POST", body: { reason: "Essai" } },
+  const response = await console_("/upgrade-requests/00000000-0000-0000-0000-000000000000/decline", {method: "POST", body: { reason: "Essai" } },
   )
   assert.equal(response.status, 404)
 })
 
 test("le refus reste réservé à l'éditeur", async () => {
-  const response = await api(
-    "/api/v1/admin/upgrade-requests/00000000-0000-0000-0000-000000000000/decline",
-    { as: "gerant@washpilot.ci", method: "POST", body: { reason: "Essai" } },
+  const response = await console_(
+    "/upgrade-requests/00000000-0000-0000-0000-000000000000/decline",
+    { cookie: sessions.get("gerant@washpilot.ci") ?? "", method: "POST", body: { reason: "Essai" } },
   )
   assert.equal(response.status, 404)
   assert.equal((await response.json()).error.code, "not_found")
@@ -465,7 +520,7 @@ test("le back-office répond même si la station de l'éditeur n'est pas configu
     organizationId,
   ])
   try {
-    const response = await api("/api/v1/admin/metrics", { as: "demo@washpilot.ci" })
+    const response = await console_("/metrics")
     assert.equal(response.status, 200)
     assert.ok(typeof (await response.json()).total === "number")
   } finally {
@@ -475,29 +530,51 @@ test("le back-office répond même si la station de l'éditeur n'est pas configu
   }
 })
 
-test("la garde d'onboarding laisse passer l'éditeur vers son back-office", async () => {
-  // Contrôle statique, faute de rendu de composant dans ce dépôt. Sans cette
-  // dérogation, l'éditeur est renvoyé vers l'assistant station/services/
-  // laveurs/forfait et n'atteint jamais /admin — l'entrée « Administration »
-  // vivant dans un menu que l'assistant ne montre pas.
-  const source = await readFile(
-    new URL("../src/components/router/onboarding-gate.tsx", import.meta.url),
-    "utf8",
-  )
-  assert.match(
-    source,
-    /isPlatformAdmin\s*&&\s*location\.pathname\s*===\s*"\/admin"/,
-    "la garde doit exempter /admin pour un administrateur de plateforme",
-  )
-  assert.match(
-    source,
-    /isPlatformAdmin\s*\?\s*"\/admin"\s*:\s*"\/onboarding"/,
-    "un éditeur non configuré doit atterrir sur /admin, pas dans l'assistant",
-  )
+test("l'application cliente ne mentionne nulle part la console", async () => {
+  // Le contrôle qui compte vraiment pour « le back-office ne doit pas être
+  // accessible via une station » : pas un lien, pas une route, pas une
+  // mention dans tout `src/` hors du dossier de la console.
+  //
+  // Un test statique parce qu'un lien se réintroduit par inadvertance — le
+  // précédent vivait dans le menu de l'avatar, où personne ne pensait à le
+  // chercher.
+  const offenders: string[] = []
+  async function walk(dir: URL, relative: string) {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const child = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, dir)
+      const path = `${relative}${entry.name}`
+      if (relative === "" && entry.name === "console") continue
+      if (entry.isDirectory()) {
+        await walk(child, `${path}/`)
+        continue
+      }
+      if (!/\.(ts|tsx)$/.test(entry.name)) continue
+      const source = await readFile(child, "utf8")
+      if (/["'`]\/console/.test(source) || /platformAdmin/.test(source)) offenders.push(path)
+    }
+  }
+  await walk(new URL("../src/", import.meta.url), "")
 
-  // La dérogation doit précéder la branche de chargement : le back-office
-  // reste joignable quand l'état d'onboarding est indisponible.
-  const exemption = source.indexOf('location.pathname === "/admin"')
-  const loadingBranch = source.indexOf("if (loading)")
-  assert.ok(exemption > 0 && exemption < loadingBranch, "la dérogation doit venir avant if (loading)")
+  // `App.tsx` monte la branche : c'est la seule mention légitime.
+  assert.deepEqual(offenders, ["App.tsx"], "aucun écran de station ne doit désigner la console")
+})
+
+test("la console est montée hors de la racine de l'application cliente", async () => {
+  // Si elle était un enfant de `RootLayout`, elle hériterait de la garde de
+  // session des stations : une session absente renverrait vers
+  // /auth/sign-in, et une session de station laisserait croire à une entrée
+  // légitime.
+  const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8")
+  const consoleBranch = source.indexOf('path: "/console"')
+  const rootBranch = source.indexOf("<RootLayout />")
+  assert.ok(consoleBranch > 0, "la branche /console doit exister")
+  assert.ok(
+    consoleBranch < rootBranch,
+    "la branche /console doit être soeur de RootLayout, déclarée avant lui",
+  )
+  assert.doesNotMatch(
+    source.slice(rootBranch),
+    /console/i,
+    "RootLayout ne doit contenir aucune route de console",
+  )
 })

@@ -47,8 +47,11 @@ Variables d'environnement (voir [`.env.example`](.env.example)) :
 - `APP_URL` — URL publique utilisée pour construire les liens envoyés par e-mail.
 - `PASSWORD_RESET_TTL_MINUTES` — validité d'un lien de réinitialisation (défaut `60`).
 - `RESEND_API_KEY` / `MAIL_FROM` — envoi des e-mails transactionnels via Resend.
-- `PLATFORM_ADMIN_EMAILS` — adresses autorisées à ouvrir le back-office de
-  l'éditeur (`/admin`), séparées par des virgules. **Vide = back-office fermé.**
+- `PLATFORM_ADMIN_EMAILS` — adresses des opérateurs de la console de
+  l'éditeur (`/console`), séparées par des virgules. Les comptes sont créés au
+  démarrage. **Vide = console entièrement fermée.**
+- `PLATFORM_ADMIN_PASSWORD` — mot de passe posé sur les comptes d'opérateur
+  **créés** au démarrage. Ne réécrit jamais un mot de passe existant.
 
 > L'authentification ne dépend d'aucun service externe : les comptes (mot de passe
 > haché scrypt) et les sessions (cookies httpOnly, table `auth_sessions`) vivent
@@ -125,29 +128,35 @@ tests/               # Tests unitaires (node:test via tsx)
 5. **Abonnement** : essai de 14 jours à l'inscription, puis lecture seule à
    l'expiration. Le client demande l'activation depuis l'application
    (`POST /support/upgrade-request`) ; l'éditeur encaisse hors application et
-   valide — ou décline — depuis le back-office `/admin`. Voir
+   valide — ou décline — depuis la console `/console`. Voir
    [`BACK-OFFICE.md`](BACK-OFFICE.md).
 
-## Back-office de l'éditeur
+## Console de l'éditeur
 
-Écran réservé au créateur de l'application, pour suivre le parc et gérer les
-états d'abonnement : valider une demande, décliner, suspendre, prolonger un
-essai.
+Application **séparée** réservée au créateur, servie sous `/console` : suivi du
+parc, confirmation des encaissements, gestion des comptes, suppression d'une
+organisation en deux temps.
 
 ```bash
 # .env — puis redémarrer le serveur
-PLATFORM_ADMIN_EMAILS=votre.adresse@exemple.ci
+PLATFORM_ADMIN_EMAILS=vous@exemple.ci
+PLATFORM_ADMIN_PASSWORD=UnMotDePasseLongEtUnique
 ```
 
-L'entrée **« Administration »** apparaît alors dans le menu de l'avatar. Le
-droit ne s'accorde que par cette variable : **aucune route de l'application ne
-peut l'attribuer**, et le serveur répond `404` — et non `403` — à tout compte
-qui n'en dispose pas, pour que l'existence du back-office ne se devine pas.
+Les comptes sont **créés automatiquement** au démarrage et vivent dans leur
+propre table, `platform_operators`, sans aucun lien avec les comptes de
+station : ni le même mot de passe, ni la même session, ni la même durée (2
+jours contre 30). Retirer une adresse de la liste désactive l'opérateur et
+coupe ses sessions au redémarrage suivant.
 
-Le créateur **n'a pas besoin d'exploiter une station** : les routes `/admin`
-ne réclament aucune organisation, et un administrateur sans station
-configurée atterrit directement sur son back-office au lieu d'être renvoyé
-vers l'assistant de mise en service.
+**Aucune passerelle depuis le produit** : rien dans l'application station ne
+mentionne la console — pas d'entrée de menu, pas de lien, pas de redirection —
+et un test échoue si `/console` apparaît hors de `src/console/`. Le serveur
+répond `404`, et non `403`, à toute requête de console sans opérateur valide :
+pour qui sonde l'application, la console n'existe pas.
+
+Le créateur **n'a pas besoin d'exploiter une station** : la console ne réclame
+ni organisation, ni abonnement, ni parcours de mise en service.
 
 Détail des décisions, des routes et des tests : [`BACK-OFFICE.md`](BACK-OFFICE.md).
 

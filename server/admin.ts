@@ -5,6 +5,14 @@ import { HttpError } from "./auth.ts"
 import { adminDb, auditPlatformAction } from "./platform-admin.ts"
 import { computeSubscriptionState, invalidateSubscriptionCache } from "./entitlements.ts"
 import { activateSubscription } from "./subscription-service.ts"
+import { logConsoleAction } from "./console-auth.ts"
+import {
+  DEFAULT_GRACE_DAYS,
+  cancelDeletion,
+  purgeOrganization,
+  scheduleDeletion,
+} from "./organization-deletion.ts"
+import { createPasswordResetToken } from "./auth.ts"
 
 // ---------------------------------------------------------------------------
 // Back-office de l'éditeur
@@ -74,7 +82,12 @@ const ORGANIZATION_SELECT = `
   (SELECT u.phone FROM organization_members m3
      JOIN users u ON u.id = m3.user_id
     WHERE m3.organization_id = o.id AND m3.role = 'owner' AND m3.status = 'active'
-    ORDER BY m3.created_at ASC LIMIT 1)                             AS owner_phone`
+    ORDER BY m3.created_at ASC LIMIT 1)                             AS owner_phone,
+  o.deletion_requested_at,
+  o.deletion_scheduled_for,
+  o.deletion_reason,
+  (SELECT max(w.created_at) FROM washes w
+     WHERE w.organization_id = o.id)                                AS last_wash_at`
 
 interface OrganizationRow {
   id: string
@@ -90,6 +103,10 @@ interface OrganizationRow {
   site_count: number
   owner_email: string | null
   owner_phone: string | null
+  deletion_requested_at: string | null
+  deletion_scheduled_for: string | null
+  deletion_reason: string | null
+  last_wash_at: string | null
 }
 
 /**
@@ -116,10 +133,25 @@ function describe(row: OrganizationRow, now: Date) {
   const pastDue =
     state.status === "active" && periodEnd !== null && periodEnd.getTime() <= now.getTime()
 
+  // Une station dormante n'est ni en panne ni perdue : elle n'a simplement
+  // rien enregistré depuis longtemps. C'est le signal le plus précoce d'un
+  // client qui s'en va — bien avant l'impayé.
+  const lastWash = row.last_wash_at ? new Date(row.last_wash_at) : null
+  const idleDays = lastWash
+    ? Math.floor((now.getTime() - lastWash.getTime()) / 86_400_000)
+    : null
+
   return {
     id: row.id,
     name: row.name,
     created_at: row.created_at,
+    deletion_requested_at: row.deletion_requested_at,
+    deletion_scheduled_for: row.deletion_scheduled_for,
+    deletion_reason: row.deletion_reason,
+    pending_deletion: row.deletion_requested_at !== null,
+    last_wash_at: row.last_wash_at,
+    idle_days: idleDays,
+    dormant: idleDays === null || idleDays >= 14,
     owner_email: row.owner_email,
     owner_phone: row.owner_phone,
     member_count: row.member_count,
@@ -342,7 +374,7 @@ export function createAdminRouter() {
   r.post(
     "/payment-intents/:reference/confirm",
     asyncRoute(async (req, res) => {
-      const admin = req.platformAdmin!
+      const operator = req.operator!
       // La référence d'intention n'est pas un UUID (elle se dicte au
       // téléphone) : parseId la rejetterait. On valide son format propre.
       const reference = String(req.params.reference ?? "")
@@ -383,10 +415,10 @@ export function createAdminRouter() {
         months: intent.months,
         source: "platform_admin",
         paymentReference: intent.declared_reference ?? reference,
-        actorUserId: admin.userId,
+        actorUserId: null,
         note: input.note ?? null,
         extra: {
-          admin_email: admin.email,
+          operator_email: operator.email,
           intent_reference: reference,
           amount_cents: intent.amount_cents,
         },
@@ -417,7 +449,7 @@ export function createAdminRouter() {
     "/upgrade-requests/:id/decline",
     asyncRoute(async (req, res) => {
       const requestId = parseId(req.params.id)
-      const admin = req.platformAdmin!
+      const operator = req.operator!
       const input = body(
         z.object({ reason: z.string().trim().min(3).max(300) }).strip(),
         req.body,
@@ -439,10 +471,10 @@ export function createAdminRouter() {
       await auditPlatformAction(
         pool,
         organizationId,
-        admin.userId,
+        operator.email,
         "subscription.request_declined",
         requestId,
-        { reason: input.reason, admin_email: admin.email },
+        { reason: input.reason, operator_email: operator.email },
       )
 
       res.json({ request_id: requestId, organization_id: organizationId, pending: false })
@@ -456,7 +488,7 @@ export function createAdminRouter() {
     "/organizations/:id/activate",
     asyncRoute(async (req, res) => {
       const id = parseId(req.params.id)
-      const admin = req.platformAdmin!
+      const operator = req.operator!
       const input = body(
         z
           .object({
@@ -482,9 +514,9 @@ export function createAdminRouter() {
         months: input.months,
         source: "platform_admin",
         paymentReference: input.payment_reference ?? null,
-        actorUserId: admin.userId,
+        actorUserId: null,
         note: input.note ?? null,
-        extra: { admin_email: admin.email },
+        extra: { operator_email: operator.email },
       })
 
       res.json({
@@ -505,7 +537,7 @@ export function createAdminRouter() {
     "/organizations/:id/suspend",
     asyncRoute(async (req, res) => {
       const id = parseId(req.params.id)
-      const admin = req.platformAdmin!
+      const operator = req.operator!
       const input = body(
         z.object({ reason: z.string().trim().min(3).max(300) }).strip(),
         req.body,
@@ -521,9 +553,9 @@ export function createAdminRouter() {
         throw new HttpError(404, "subscription_not_found", "Cette station n'a aucun abonnement.")
       }
 
-      await auditPlatformAction(pool, id, admin.userId, "subscription.suspended", id, {
+      await auditPlatformAction(pool, id, operator.email, "subscription.suspended", id, {
         reason: input.reason,
-        admin_email: admin.email,
+        operator_email: operator.email,
       })
       invalidateSubscriptionCache(id)
 
@@ -540,7 +572,7 @@ export function createAdminRouter() {
     "/organizations/:id/extend-trial",
     asyncRoute(async (req, res) => {
       const id = parseId(req.params.id)
-      const admin = req.platformAdmin!
+      const operator = req.operator!
       const input = body(
         z
           .object({
@@ -589,11 +621,11 @@ export function createAdminRouter() {
         [id, periodEnd.toISOString()],
       )
 
-      await auditPlatformAction(pool, id, admin.userId, "subscription.trial_extended", id, {
+      await auditPlatformAction(pool, id, operator.email, "subscription.trial_extended", id, {
         days: input.days,
         reason: input.reason,
         period_end: periodEnd.toISOString(),
-        admin_email: admin.email,
+        operator_email: operator.email,
       })
       invalidateSubscriptionCache(id)
 
@@ -603,6 +635,276 @@ export function createAdminRouter() {
         current_period_end: periodEnd.toISOString(),
         days: input.days,
       })
+    }),
+  )
+
+
+  // -------------------------------------------------------------------------
+  // Suppression d'une station, en deux temps.
+  //
+  // Voir `server/organization-deletion.ts` pour le raisonnement. Côté API,
+  // trois verbes distincts plutôt qu'un `DELETE` paramétré : programmer,
+  // annuler et purger n'ont ni les mêmes conséquences ni le même public, et
+  // les confondre derrière un seul appel rendrait l'irréversible trop facile
+  // à déclencher par inadvertance.
+  // -------------------------------------------------------------------------
+  r.post(
+    "/organizations/:id/schedule-deletion",
+    asyncRoute(async (req, res) => {
+      const id = parseId(req.params.id)
+      const operator = req.operator!
+      const input = body(
+        z
+          .object({
+            reason: z.string().trim().min(10).max(300),
+            grace_days: z.number().int().min(1).max(90).optional(),
+          })
+          .strip(),
+        req.body,
+      )
+
+      const pool = adminDb()
+      const org = await pool.query("SELECT name, deletion_requested_at FROM organizations WHERE id = $1::uuid", [id])
+      if (!org.rowCount) {
+        throw new HttpError(404, "organization_not_found", "Cette station n'existe pas.")
+      }
+      if ((org.rows[0] as { deletion_requested_at: string | null }).deletion_requested_at) {
+        throw new HttpError(409, "deletion_already_scheduled", "Une suppression est déjà programmée pour cette station.")
+      }
+      const name = (org.rows[0] as { name: string }).name
+      const graceDays = input.grace_days ?? DEFAULT_GRACE_DAYS
+
+      const { scheduled_for } = await scheduleDeletion(pool, id, input.reason, graceDays)
+
+      await auditPlatformAction(pool, id, operator.email, "organization.deletion_scheduled", id, {
+        reason: input.reason,
+        scheduled_for,
+      })
+      await logConsoleAction(pool, operator, "organization.deletion_scheduled", id, name, {
+        reason: input.reason,
+        grace_days: graceDays,
+        scheduled_for,
+      })
+      invalidateSubscriptionCache(id)
+
+      res.json({ organization_id: id, name, scheduled_for, grace_days: graceDays })
+    }),
+  )
+
+  r.post(
+    "/organizations/:id/cancel-deletion",
+    asyncRoute(async (req, res) => {
+      const id = parseId(req.params.id)
+      const operator = req.operator!
+      const pool = adminDb()
+
+      const org = await pool.query("SELECT name FROM organizations WHERE id = $1::uuid", [id])
+      if (!org.rowCount) {
+        throw new HttpError(404, "organization_not_found", "Cette station n'existe pas.")
+      }
+      if (!(await cancelDeletion(pool, id))) {
+        throw new HttpError(409, "no_deletion_scheduled", "Aucune suppression n'est programmée pour cette station.")
+      }
+      const name = (org.rows[0] as { name: string }).name
+
+      await auditPlatformAction(pool, id, operator.email, "organization.deletion_cancelled", id, {})
+      await logConsoleAction(pool, operator, "organization.deletion_cancelled", id, name, {})
+      invalidateSubscriptionCache(id)
+
+      // L'abonnement reste résilié : restaurer l'accès n'est pas offrir un
+      // forfait. À l'opérateur de réactiver explicitement s'il le souhaite.
+      res.json({ organization_id: id, name, restored: true, subscription_status: "cancelled" })
+    }),
+  )
+
+  r.post(
+    "/organizations/:id/purge",
+    asyncRoute(async (req, res) => {
+      const id = parseId(req.params.id)
+      const operator = req.operator!
+      const input = body(z.object({ confirm_name: z.string().trim().min(1).max(200) }).strip(), req.body)
+
+      const pool = adminDb()
+      const org = await pool.query("SELECT name, deletion_requested_at FROM organizations WHERE id = $1::uuid", [id])
+      if (!org.rowCount) {
+        throw new HttpError(404, "organization_not_found", "Cette station n'existe pas.")
+      }
+      const row = org.rows[0] as { name: string; deletion_requested_at: string | null }
+
+      // Deux verrous, parce que l'acte est irréversible.
+      //
+      // Le premier impose d'être passé par la programmation : on ne purge pas
+      // une station croisée par hasard dans une liste. Le second fait retaper
+      // son nom — une confirmation qu'on ne clique pas distraitement, et qui
+      // force à relire laquelle on s'apprête à effacer.
+      if (!row.deletion_requested_at) {
+        throw new HttpError(
+          409,
+          "deletion_not_scheduled",
+          "Programmez d'abord la suppression : la purge immédiate n'est possible que sur une station déjà sortie du service.",
+        )
+      }
+      if (input.confirm_name.trim().toLowerCase() !== row.name.trim().toLowerCase()) {
+        throw new HttpError(400, "confirmation_mismatch", "Le nom saisi ne correspond pas à celui de la station.")
+      }
+
+      const result = await purgeOrganization(pool, id)
+      // Journalisé APRÈS la purge et sans `organization_id` : la ligne doit
+      // survivre à la disparition de la clé étrangère qu'elle désignait.
+      await logConsoleAction(pool, operator, "organization.purged", null, result.name, {
+        trigger: "manual",
+        rows_deleted: result.deleted,
+        users_deleted: result.users_deleted,
+      })
+      invalidateSubscriptionCache(id)
+
+      res.json({ purged: true, name: result.name, rows_deleted: result.deleted, users_deleted: result.users_deleted })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // GET /api/v1/console/organizations/:id/members — qui travaille sur cette
+  // station, et dans quel état sont leurs comptes.
+  // -------------------------------------------------------------------------
+  r.get(
+    "/organizations/:id/members",
+    asyncRoute(async (req, res) => {
+      const id = parseId(req.params.id)
+      const q = await adminDb().query(
+        `SELECT u.id, u.email, u.first_name, u.last_name, u.phone, u.status AS user_status,
+                m.role, m.status AS membership_status, m.created_at,
+                (SELECT max(s.last_used_at) FROM auth_sessions s WHERE s.user_id = u.id) AS last_seen_at
+           FROM organization_members m
+           JOIN users u ON u.id = m.user_id
+          WHERE m.organization_id = $1::uuid
+          ORDER BY (m.role = 'owner') DESC, m.created_at ASC`,
+        [id],
+      )
+      res.json({ members: q.rows })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // POST .../members/:userId/reset-password — dépanner un client enfermé dehors.
+  //
+  // L'opérateur ne CHOISIT pas le mot de passe : il déclenche le même jeton à
+  // usage unique que la procédure « mot de passe oublié ». Un administrateur
+  // qui fixerait lui-même le secret d'un client pourrait ensuite se connecter
+  // à sa place, et le journal du client montrerait une session parfaitement
+  // ordinaire. Ici, seul le client peut terminer la manœuvre.
+  // -------------------------------------------------------------------------
+  r.post(
+    "/organizations/:id/members/:userId/reset-password",
+    asyncRoute(async (req, res) => {
+      const id = parseId(req.params.id)
+      const userId = parseId(req.params.userId)
+      const operator = req.operator!
+      const pool = adminDb()
+
+      const member = await pool.query(
+        `SELECT u.email, o.name AS org_name FROM organization_members m
+           JOIN users u ON u.id = m.user_id
+           JOIN organizations o ON o.id = m.organization_id
+          WHERE m.organization_id = $1::uuid AND m.user_id = $2::uuid`,
+        [id, userId],
+      )
+      if (!member.rowCount) {
+        throw new HttpError(404, "member_not_found", "Ce compte n'appartient pas à cette station.")
+      }
+      const { email, org_name } = member.rows[0] as { email: string; org_name: string }
+
+      const token = await createPasswordResetToken(pool, userId, 60, null)
+
+      await auditPlatformAction(pool, id, operator.email, "user.password_reset_requested", userId, { email })
+      await logConsoleAction(pool, operator, "user.password_reset_requested", id, org_name, { email })
+
+      // Le lien est renvoyé à l'opérateur pour qu'il le transmette lui-même :
+      // c'est souvent au téléphone que la demande arrive, et le client n'a
+      // pas toujours accès à sa boîte mail.
+      res.json({ email, reset_token: token, expires_in_minutes: 60 })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // POST .../members/:userId/status — débloquer ou suspendre un compte.
+  // -------------------------------------------------------------------------
+  r.post(
+    "/organizations/:id/members/:userId/status",
+    asyncRoute(async (req, res) => {
+      const id = parseId(req.params.id)
+      const userId = parseId(req.params.userId)
+      const operator = req.operator!
+      const input = body(
+        z.object({ status: z.enum(["active", "disabled"]), reason: z.string().trim().min(3).max(300) }).strip(),
+        req.body,
+      )
+
+      const pool = adminDb()
+      const member = await pool.query(
+        `SELECT u.email, m.role, o.name AS org_name FROM organization_members m
+           JOIN users u ON u.id = m.user_id
+           JOIN organizations o ON o.id = m.organization_id
+          WHERE m.organization_id = $1::uuid AND m.user_id = $2::uuid`,
+        [id, userId],
+      )
+      if (!member.rowCount) {
+        throw new HttpError(404, "member_not_found", "Ce compte n'appartient pas à cette station.")
+      }
+      const { email, role, org_name } = member.rows[0] as { email: string; role: string; org_name: string }
+
+      // Désactiver le dernier propriétaire rendrait la station ingérable par
+      // son client : plus personne ne pourrait inviter ni facturer. La même
+      // règle protège déjà l'équipe côté client (`last_owner`).
+      if (input.status === "disabled" && role === "owner") {
+        const owners = await pool.query(
+          `SELECT count(*)::int AS n FROM organization_members
+            WHERE organization_id = $1::uuid AND role = 'owner' AND status = 'active' AND user_id <> $2::uuid`,
+          [id, userId],
+        )
+        if (((owners.rows[0] as { n: number }).n ?? 0) === 0) {
+          throw new HttpError(409, "last_owner", "C'est le dernier propriétaire actif : la station deviendrait ingérable.")
+        }
+      }
+
+      await pool.query("UPDATE organization_members SET status = $2, updated_at = now() WHERE organization_id = $1::uuid AND user_id = $3::uuid", [id, input.status, userId])
+      await pool.query("UPDATE users SET status = $2, updated_at = now() WHERE id = $1::uuid", [userId, input.status])
+      if (input.status === "disabled") {
+        await pool.query("DELETE FROM auth_sessions WHERE user_id = $1::uuid", [userId])
+      }
+
+      const action = input.status === "active" ? "user.enabled" : "user.disabled"
+      await auditPlatformAction(pool, id, operator.email, action, userId, { email, reason: input.reason })
+      await logConsoleAction(pool, operator, action, id, org_name, { email, reason: input.reason })
+
+      res.json({ user_id: userId, email, status: input.status })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // GET /api/v1/console/audit — le journal de l'éditeur.
+  //
+  // Distinct de celui des clients : il répond à « qu'avons-NOUS fait », pas à
+  // « que s'est-il passé chez ce client ». Il survit à la purge, ce qui en
+  // fait la seule trace qu'une station supprimée a existé.
+  // -------------------------------------------------------------------------
+  r.get(
+    "/audit",
+    asyncRoute(async (req, res) => {
+      const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 300)
+      const organizationId = typeof req.query.organization_id === "string" ? req.query.organization_id : null
+      const values: unknown[] = [limit]
+      let where = ""
+      if (organizationId && /^[0-9a-f-]{36}$/i.test(organizationId)) {
+        values.push(organizationId)
+        where = `WHERE organization_id = $${values.length}::uuid`
+      }
+      const q = await adminDb().query(
+        `SELECT id, operator_email, action, organization_id, organization_name, metadata, created_at
+           FROM platform_audit_logs ${where}
+          ORDER BY created_at DESC LIMIT $1`,
+        values,
+      )
+      res.json({ entries: q.rows })
     }),
   )
 

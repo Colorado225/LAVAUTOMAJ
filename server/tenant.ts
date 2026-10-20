@@ -8,6 +8,7 @@ interface TenantRow {
   organization_id: string
   role: string
   status: string
+  deletion_requested_at: string | null
 }
 
 /**
@@ -28,8 +29,9 @@ export async function requireTenantContext(req: Request, _res: Response, next: N
     if (!pool) throw new HttpError(503, "database_not_configured", "La base de données n'est pas configurée.")
 
     const q = await pool.query(
-      `SELECT m.organization_id, m.role, m.status
+      `SELECT m.organization_id, m.role, m.status, o.deletion_requested_at
        FROM organization_members m
+       JOIN organizations o ON o.id = m.organization_id
        WHERE m.user_id = $1::uuid
        ORDER BY (m.status = 'active') DESC, m.created_at ASC
        LIMIT 1`,
@@ -44,6 +46,20 @@ export async function requireTenantContext(req: Request, _res: Response, next: N
         403,
         "membership_disabled",
         "Votre accès à cette station a été désactivé. Contactez le propriétaire.",
+      )
+    }
+
+    // Suppression programmée : l'accès est coupé dès la décision, pas à
+    // l'échéance. Le délai de grâce protège les données contre une erreur de
+    // l'éditeur ; il n'est pas un sursis d'exploitation accordé au client.
+    //
+    // Contrôlé ici plutôt que route par route : c'est le seul endroit que
+    // toute requête de station traverse obligatoirement.
+    if (row.deletion_requested_at) {
+      throw new HttpError(
+        403,
+        "organization_deleted",
+        "Cette station a été fermée. Contactez WashPilot CI si vous pensez qu'il s'agit d'une erreur.",
       )
     }
 

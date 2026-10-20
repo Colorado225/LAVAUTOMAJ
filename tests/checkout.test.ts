@@ -23,6 +23,22 @@ let organizationId: string
 const PASSWORD = "WashPilot2026!"
 const sessions = new Map<string, string>()
 
+const OPERATOR_EMAIL = "ops@washpilot.ci"
+const OPERATOR_PASSWORD = "ConsoleSecret2026!"
+let operatorCookie = ""
+
+/** Appel de la console, authentifié par le cookie d'opérateur. */
+async function console_(path: string, options: { method?: string; body?: unknown; cookie?: string } = {}) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" }
+  const cookie = options.cookie === undefined ? operatorCookie : options.cookie
+  if (cookie) headers.Cookie = cookie
+  return fetch(`${baseUrl}/api/v1/console${path}`, {
+    method: options.method ?? "GET",
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  })
+}
+
 async function api(path: string, options: { as?: string; method?: string; body?: unknown } = {}) {
   const headers: Record<string, string> = { "Content-Type": "application/json" }
   if (options.as) {
@@ -71,7 +87,23 @@ before(async () => {
   baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`
 
   organizationId = (await pool.query("SELECT id FROM organizations LIMIT 1")).rows[0].id
-  await pool.query("UPDATE users SET platform_admin = (email = 'demo@washpilot.ci')")
+  // La validation passe par la console, dont les comptes sont disjoints de
+  // ceux des stations (voir server/console-auth.ts).
+  const { hashPassword } = await import("../server/auth.ts")
+  await pool.query("UPDATE users SET platform_admin = false")
+  await pool.query(
+    `INSERT INTO platform_operators(email, password_hash, full_name, status)
+     VALUES($1, $2, 'Operateur de test', 'active')
+     ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, status = 'active'`,
+    [OPERATOR_EMAIL, await hashPassword(OPERATOR_PASSWORD)],
+  )
+  const loggedIn = await fetch(`${baseUrl}/api/v1/console/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: OPERATOR_EMAIL, password: OPERATOR_PASSWORD }),
+  })
+  assert.equal(loggedIn.status, 200, "connexion de l'opérateur")
+  operatorCookie = loggedIn.headers.getSetCookie?.().join("; ") ?? loggedIn.headers.get("set-cookie") ?? ""
 
   for (const email of ["demo@washpilot.ci", "gerant@washpilot.ci", "caisse@washpilot.ci"]) {
     await login(email)
@@ -154,16 +186,14 @@ test("déclarer un paiement n'active rien", async () => {
 
 test("l'éditeur voit la déclaration dans sa file, et valide en un clic", async () => {
   const file = await (
-    await api("/api/v1/admin/payment-intents?declared=true", { as: "demo@washpilot.ci" })
+    await console_("/payment-intents?declared=true")
   ).json()
   const intent = file.intents[0]
   assert.equal(intent.declared_reference, "OM-77412093")
   assert.equal(intent.organization_name.length > 0, true)
   assert.equal(intent.plan_code, "pro")
 
-  const confirmed = await api(`/api/v1/admin/payment-intents/${intent.reference}/confirm`, {
-    as: "demo@washpilot.ci",
-    method: "POST",
+  const confirmed = await console_(`/payment-intents/${intent.reference}/confirm`, {method: "POST",
     body: {},
   })
   assert.equal(confirmed.status, 200)
@@ -177,13 +207,11 @@ test("l'éditeur voit la déclaration dans sa file, et valide en un clic", async
 
 test("une validation déjà faite ne se rejoue pas", async () => {
   const file = await (
-    await api("/api/v1/admin/payment-intents?status=paid", { as: "demo@washpilot.ci" })
+    await console_("/payment-intents?status=paid")
   ).json()
   const reference = file.intents[0].reference
 
-  const replay = await api(`/api/v1/admin/payment-intents/${reference}/confirm`, {
-    as: "demo@washpilot.ci",
-    method: "POST",
+  const replay = await console_(`/payment-intents/${reference}/confirm`, {method: "POST",
     body: {},
   })
   assert.equal(replay.status, 404, "le second appel ne doit pas activer un mois de plus")
@@ -202,14 +230,10 @@ test("deux validations simultanées n'activent qu'un seul mois", async () => {
   ).json()
 
   const [a, b] = await Promise.all([
-    api(`/api/v1/admin/payment-intents/${intent.reference}/confirm`, {
-      as: "demo@washpilot.ci",
-      method: "POST",
+    console_(`/payment-intents/${intent.reference}/confirm`, {method: "POST",
       body: {},
     }),
-    api(`/api/v1/admin/payment-intents/${intent.reference}/confirm`, {
-      as: "demo@washpilot.ci",
-      method: "POST",
+    console_(`/payment-intents/${intent.reference}/confirm`, {method: "POST",
       body: {},
     }),
   ])
@@ -245,13 +269,11 @@ test("une station ne voit pas l'intention d'une autre", async () => {
 })
 
 test("la file de validation reste fermée aux clients", async () => {
-  assert.equal((await api("/api/v1/admin/payment-intents", { as: "gerant@washpilot.ci" })).status, 404)
+  assert.equal((await console_("/payment-intents", { cookie: sessions.get("gerant@washpilot.ci") ?? "" })).status, 404)
 })
 
 test("une référence mal formée est refusée proprement, pas en erreur serveur", async () => {
-  const response = await api("/api/v1/admin/payment-intents/pas-une-reference/confirm", {
-    as: "demo@washpilot.ci",
-    method: "POST",
+  const response = await console_("/payment-intents/pas-une-reference/confirm", {method: "POST",
     body: {},
   })
   assert.ok(response.status >= 400 && response.status < 500, `attendu 4xx, reçu ${response.status}`)
@@ -302,9 +324,7 @@ test("renouveler efface les relances pour que la période suivante en reçoive",
     method: "POST",
     body: { transaction_reference: "WAVE-55512" },
   })
-  await api(`/api/v1/admin/payment-intents/${intent.reference}/confirm`, {
-    as: "demo@washpilot.ci",
-    method: "POST",
+  await console_(`/payment-intents/${intent.reference}/confirm`, {method: "POST",
     body: {},
   })
 

@@ -5,7 +5,6 @@ import {
   EllipsisVertical,
   LogOut,
   CircleUser,
-  ShieldCheck,
 } from "lucide-react"
 import { Link, useNavigate } from "react-router-dom"
 import { useAuth } from "@/lib/auth"
@@ -114,26 +113,6 @@ export function NavUser({
                 Abonnement
               </DropdownMenuItem>
             </DropdownMenuGroup>
-            {/*
-              Accès au back-office de l'éditeur. Absent de la barre latérale à
-              dessein : ce n'est pas un écran de station mais une vue sur le
-              parc entier. Le serveur protège la route (404 sans le drapeau) ;
-              cette condition n'est qu'un confort d'affichage.
-            */}
-            {user?.platformAdmin && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  <DropdownMenuItem
-                    className="cursor-pointer"
-                    render={<Link to="/admin" viewTransition />}
-                  >
-                    <ShieldCheck className="size-4 mr-2" />
-                    Administration
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>
-              </>
-            )}
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
               <DropdownMenuItem

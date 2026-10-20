@@ -42,6 +42,16 @@ const schema = z.object({
    * pouvoir être obtenu depuis l'application elle-même.
    */
   PLATFORM_ADMIN_EMAILS: z.string().trim().optional().default(""),
+
+  /**
+   * Mot de passe initial des comptes de la console.
+   *
+   * N'est lu qu'à la création d'un opérateur : changer cette variable ne
+   * réécrit jamais un mot de passe existant. Si elle est vide, un secret
+   * aléatoire est tiré et affiché une seule fois dans les journaux de
+   * démarrage.
+   */
+  PLATFORM_ADMIN_PASSWORD: z.string().optional().default(""),
 })
 
 const parsed = schema.safeParse(process.env)

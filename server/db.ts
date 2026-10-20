@@ -1,6 +1,7 @@
 import pg from "pg";
 import { PGlite } from "@electric-sql/pglite";
 import { env } from "./env.ts";
+import { migrateLegacyPlatformAdmins, syncPlatformOperators } from "./console-auth.ts";
 import { hashPassword } from "./auth.ts";
 
 const { Pool } = pg;
@@ -272,6 +273,63 @@ CREATE TABLE IF NOT EXISTS payment_intents (
 );
 CREATE INDEX IF NOT EXISTS payment_intents_org_idx ON payment_intents(organization_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS payment_intents_status_idx ON payment_intents(status, created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Console de l'éditeur
+--
+-- Les comptes d'administration ne sont PAS des lignes de 'users'. C'était le
+-- cas avant : un drapeau 'platform_admin' posé sur un compte de station. Ce
+-- modèle liait l'administration du parc à l'exploitation d'un lavage — une
+-- session de station ouvrait le back-office, et le compte de l'éditeur
+-- traînait dans la liste des membres d'une organisation.
+--
+-- Deux tables séparées, donc, avec leurs propres sessions : aucune session de
+-- station ne peut ouvrir la console, et aucune session de console ne peut
+-- écrire dans une station par les routes ordinaires.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS platform_operators (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ email text NOT NULL UNIQUE, password_hash text, full_name text NOT NULL DEFAULT '',
+ status text NOT NULL DEFAULT 'active',
+ last_login_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(),
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS platform_operator_sessions (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ operator_id uuid NOT NULL REFERENCES platform_operators(id) ON DELETE CASCADE,
+ token_hash text NOT NULL UNIQUE, expires_at timestamptz NOT NULL,
+ last_used_at timestamptz, created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS platform_operator_sessions_op_idx ON platform_operator_sessions(operator_id);
+
+-- Journal de la console. Distinct de 'audit_logs', qui appartient au client.
+--
+-- Les deux sont alimentés : le client doit voir chez lui qu'on a touché à son
+-- forfait (pas de porte dérobée), et l'éditeur doit pouvoir relire ses propres
+-- actions sans parcourir les journaux de trois cents stations. Celui-ci
+-- survit à la purge d'une organisation : c'est la trace qu'elle a existé.
+CREATE TABLE IF NOT EXISTS platform_audit_logs (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ operator_id uuid REFERENCES platform_operators(id) ON DELETE SET NULL,
+ operator_email text NOT NULL, action text NOT NULL,
+ organization_id uuid, organization_name text,
+ metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS platform_audit_logs_created_idx ON platform_audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS platform_audit_logs_org_idx ON platform_audit_logs(organization_id, created_at DESC);
+
+-- Suppression en deux temps.
+--
+-- 'deletion_requested_at' coupe l'accès immédiatement ; l'effacement physique
+-- n'a lieu qu'à 'deletion_scheduled_for'. Entre les deux, le client est
+-- restaurable d'un clic. Une suppression décidée sur un malentendu — un
+-- paiement cru perdu, un homonyme — reste rattrapable.
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS deletion_requested_at timestamptz;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS deletion_scheduled_for timestamptz;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS deletion_reason text;
+CREATE INDEX IF NOT EXISTS organizations_deletion_idx ON organizations(deletion_scheduled_for)
+ WHERE deletion_scheduled_for IS NOT NULL;
 CREATE TABLE IF NOT EXISTS clerk_webhook_events (
  id text PRIMARY KEY, event_type text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -603,55 +661,6 @@ function createPglitePool(pglite: PGlite): pg.Pool {
 }
 
 
-/**
- * Aligne le drapeau `platform_admin` sur PLATFORM_ADMIN_EMAILS.
- *
- * Idempotent et **réversible** : retirer une adresse de la variable retire le
- * droit au redémarrage suivant. Un administrateur de plateforme qui quitte
- * l'équipe disparaît donc de la configuration, sans intervention en base.
- *
- * Si la variable est vide, aucun compte n'est touché : on ne retire pas en
- * masse un droit sur une configuration oubliée, mais on le signale.
- */
-async function syncPlatformAdmins(
-  query: (text: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount: number | null }>,
-): Promise<void> {
-  const emails = env.PLATFORM_ADMIN_EMAILS;
-  if (emails.length === 0) {
-    const existing = await query("SELECT count(*)::int AS n FROM users WHERE platform_admin");
-    const n = (existing.rows[0] as { n: number } | undefined)?.n ?? 0;
-    if (n === 0) {
-      console.warn(
-        "[admin] PLATFORM_ADMIN_EMAILS n'est pas defini et aucun administrateur de plateforme n'existe : le back-office sera inaccessible.",
-      );
-    }
-    return;
-  }
-
-  const promoted = await query(
-    "UPDATE users SET platform_admin = true, updated_at = now() WHERE lower(email) = ANY($1::text[]) AND NOT platform_admin RETURNING email",
-    [emails],
-  );
-  const revoked = await query(
-    "UPDATE users SET platform_admin = false, updated_at = now() WHERE platform_admin AND lower(email) <> ALL($1::text[]) RETURNING email",
-    [emails],
-  );
-
-  const missing = emails.filter(
-    (email) => !(promoted.rows as { email: string }[]).some((r) => r.email.toLowerCase() === email),
-  );
-  if (promoted.rowCount) console.info(`[admin] Administrateurs de plateforme promus : ${promoted.rowCount}`);
-  if (revoked.rowCount) console.info(`[admin] Droits d'administration retires : ${revoked.rowCount}`);
-  if (missing.length) {
-    const known = await query("SELECT lower(email) AS email FROM users WHERE lower(email) = ANY($1::text[])", [missing]);
-    const absent = missing.filter((e) => !(known.rows as { email: string }[]).some((r) => r.email === e));
-    if (absent.length) {
-      console.warn(
-        `[admin] Adresses sans compte, aucun droit accorde : ${absent.join(", ")}. Le compte doit exister d'abord.`,
-      );
-    }
-  }
-}
 
 export async function initDatabaseSchema(): Promise<boolean> {
   if (env.DATABASE_URL) {
@@ -667,7 +676,8 @@ export async function initDatabaseSchema(): Promise<boolean> {
       });
       await externalPool.query("SELECT 1");
       await externalPool.query(schemaSql);
-      await syncPlatformAdmins(externalPool.query.bind(externalPool));
+      await migrateLegacyPlatformAdmins(externalPool.query.bind(externalPool));
+      await syncPlatformOperators(externalPool.query.bind(externalPool));
       pool = externalPool;
       ready = true;
       console.info("[db] Connecté à PostgreSQL via DATABASE_URL");
@@ -685,7 +695,8 @@ export async function initDatabaseSchema(): Promise<boolean> {
     pool = createPglitePool(pgliteInstance);
     await pool.query(schemaSql);
     await seedDemoData(pool.query.bind(pool));
-    await syncPlatformAdmins(pool.query.bind(pool));
+    await migrateLegacyPlatformAdmins(pool.query.bind(pool));
+    await syncPlatformOperators(pool.query.bind(pool));
     ready = true;
     console.info("[db] PostgreSQL embarqué (PGlite) initialisé avec les données de démonstration");
     return true;

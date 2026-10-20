@@ -1,257 +1,312 @@
-# Back-office de l'éditeur
+# Console de l'éditeur
 
 **Date : 20 octobre 2026 · Statut : livré**
 
-Ce document décrit l'écran d'administration réservé au créateur de
-l'application, les décisions qui l'ont façonné, et la façon de l'activer.
+Ce document décrit la console réservée au créateur de l'application : ce
+qu'elle permet, pourquoi elle est **une application séparée** et non un écran
+de plus dans le produit, et comment l'activer.
 
-Il répond au constat n°1 de `RESTE-A-FAIRE.md` : *« il n'existe aucun
-back-office, aucun super-administrateur, aucune route d'activation »*. Un
-client qui voulait payer ne le pouvait pas — la dernière marche du parcours
-n'existait pas, et seul un `UPDATE` SQL manuel pouvait activer un forfait.
+Elle répond d'abord au constat n°1 de `RESTE-A-FAIRE.md` — *« il n'existe
+aucun back-office, aucun super-administrateur, aucune route d'activation »* —
+puis à une exigence venue ensuite : **qu'aucune passerelle ne relie la console
+à une station**, ni visible dans un menu, ni atteignable en devinant une URL.
+
+> **Si vous ne lisez qu'un paragraphe.** La console vit sous `/console`, avec
+> sa propre page de connexion, ses propres comptes et son propre cookie. Un
+> compte de station ne peut pas y entrer ; un compte de console ne peut pas
+> entrer dans une station. Ce ne sont pas deux rôles du même système, ce sont
+> deux systèmes.
 
 ---
 
-## 1. Ce que l'écran permet
+## 1. Ce que la console permet
 
-Deux gestes, exactement ceux demandés : **valider** et **exclure**.
+Quatre familles, correspondant aux quatre raisons d'ouvrir cet écran.
+
+### 1.1 Savoir où en est l'argent
+
+Indicateurs du parc — stations, essais en cours, actifs, expirés, résiliés,
+**échéances dépassées**, revenu mensuel récurrent — puis la file des
+encaissements : intentions de paiement déclarées par les clients et en attente
+de confirmation, demandes de forfait supérieur.
+
+### 1.2 Dépanner un client au téléphone
+
+Fiche d'une station : forfait, échéance, jours restants, membres avec leur
+dernière connexion, historique d'abonnement. De quoi répondre à « depuis quand
+suis-je bloqué ? » sans ouvrir la base.
 
 | Geste | Effet | Réversible |
 |---|---|---|
-| **Valider** une demande / activer un forfait | la station passe en `active` pour N mois | oui (suspension) |
-| **Décliner** une demande | clôt la demande, **ne touche pas** à l'abonnement | oui (nouvelle demande) |
-| **Suspendre** une station | passage en lecture seule (`cancelled`) | oui (réactivation) |
+| **Confirmer** un encaissement déclaré | active le forfait pour N mois | oui (suspension) |
+| **Activer** un forfait directement | la station passe en `active` | oui |
+| **Décliner** une demande | clôt la demande, **ne touche pas** à l'abonnement | oui |
 | **Prolonger** un essai | repousse l'échéance d'un essai en cours | oui |
+| **Réinitialiser** un mot de passe | produit un jeton de 60 min à dicter | sans objet |
 
-Et de quoi décider : indicateurs du parc (stations, essais, actifs, expirés,
-échéances dépassées, revenu mensuel), liste filtrable et recherche par nom ou
-e-mail du propriétaire, fiche détaillée avec membres et historique.
+### 1.3 Gérer finement les comptes
 
-### Le modèle économique qu'il suppose
+Suspendre ou réactiver un membre d'une station sans toucher aux autres ;
+suspendre la station entière (lecture seule) ; et, nouveauté de cette version,
+**supprimer une organisation** — en deux temps, décrits au §4.
 
-**Activation manuelle assistée.** Le paiement est encaissé hors application
-— mobile money, virement, espèces — puis l'activation est saisie ici avec sa
-référence de paiement. Aucun agrégateur de paiement n'est intégré à ce stade,
-et c'est volontaire : brancher Wave ou Orange Money demande un contrat
-marchand, une vérification d'identité d'entreprise et des semaines de
-validation. Le back-office permet de vendre **dès maintenant**, et de brancher
-un agrégateur plus tard sans rien jeter — la route d'activation restera le
-point d'entrée, qu'elle soit appelée par un humain ou par un webhook.
+### 1.4 Surveiller
+
+Journal de toutes les interventions de l'éditeur, filtrable par station, et
+détection des stations **dormantes** (aucun lavage depuis 14 jours) — le
+meilleur signal avancé d'un client qui s'en va.
+
+### Le modèle économique que cela suppose
+
+**Activation manuelle assistée.** Le paiement est encaissé hors application —
+mobile money, virement, espèces — puis confirmé ici avec sa référence. Aucun
+agrégateur n'est intégré à ce stade, et c'est volontaire : un contrat marchand
+CinetPay ou Wave demande RCCM, CNI, IBAN ivoirien et trois à sept jours de
+validation, et **le prélèvement récurrent sur mobile money reste l'exception**
+en Afrique de l'Ouest (voir `WORKFLOW-PAIEMENT.md`). La console permet de
+vendre dès maintenant sans rien jeter plus tard : `activateSubscription()`
+restera le point d'entrée unique, qu'un humain l'appelle ou un webhook.
 
 ---
 
-## 2. Activer le back-office
+## 2. Activer la console
 
 ```bash
 # .env
-PLATFORM_ADMIN_EMAILS=votre.adresse@exemple.ci
+PLATFORM_ADMIN_EMAILS=vous@exemple.ci
+PLATFORM_ADMIN_PASSWORD=UnMotDePasseLongEtUnique
 ```
 
-Puis redémarrer le serveur. Au démarrage, `syncPlatformAdmins()` pose le
-drapeau `platform_admin` sur les comptes listés et le **retire de tous les
-autres**. Le journal l'indique :
+Puis redémarrer. Au démarrage, `syncPlatformOperators()` **crée** les comptes
+manquants, réactive ceux qui reviennent, et **désactive** tout opérateur absent
+de la liste en supprimant ses sessions. Le journal l'indique :
 
 ```
-[admin] Administrateurs de plateforme promus : 1
+[console] Operateur cree : vous@exemple.ci
 ```
 
-Le compte doit déjà exister (inscrivez-vous normalement d'abord). Une fois
-connecté, l'entrée **« Administration »** apparaît dans le menu de votre
-avatar, en haut à droite. Variable vide ⇒ back-office entièrement fermé.
+Rendez-vous ensuite sur **`/console`** et connectez-vous. Variable vide ⇒
+console entièrement fermée, y compris sa page de connexion.
 
-Plusieurs adresses se séparent par des virgules.
+### Ces comptes n'ont rien à voir avec les comptes de station
 
-Si une adresse listée n'a aucun compte, le serveur le dit au démarrage plutôt
-que d'échouer en silence :
+C'est le changement de fond de cette version. Auparavant, le droit
+d'administration était un drapeau `platform_admin` posé sur un compte
+ordinaire : la même personne, le même mot de passe, la même session servaient à
+exploiter une station et à administrer la plateforme. Désormais les opérateurs
+vivent dans leur propre table, `platform_operators`, sans lien avec `users`.
 
-```
-[admin] Adresses sans compte, aucun droit accorde : vous@exemple.ci.
-        Le compte doit exister d'abord.
-```
+`PLATFORM_ADMIN_PASSWORD` ne sert **qu'à l'amorçage** : il pose le mot de passe
+des comptes créés au démarrage. Il ne réécrit jamais un mot de passe existant,
+et peut être retiré du fichier une fois les comptes en place.
+
+Les installations antérieures sont reprises automatiquement :
+`migrateLegacyPlatformAdmins()` recopie les anciens porteurs du drapeau dans la
+nouvelle table, conserve leur mot de passe, puis éteint la colonne. Personne ne
+perd son accès, mais plus personne ne l'obtient par ce chemin.
 
 ### Vous n'avez pas besoin d'exploiter une station
 
-Le créateur de l'application n'est pas un client. Trois dispositions le
-garantissent :
-
-- les routes `/api/v1/admin` sont montées **avant** `requireTenantContext` :
-  elles ne réclament aucune organisation ;
-- `OnboardingGate` laisse passer un administrateur de plateforme vers
-  `/admin` sans exiger d'assistant de configuration ;
-- un administrateur sans station configurée **atterrit sur `/admin`** après
-  connexion, au lieu d'être renvoyé dans l'assistant.
-
-Sans ces trois points, le créateur devait inventer un lavage fictif — site,
-services, laveurs, forfait — pour atteindre sa propre administration. Pire :
-il en restait enfermé dehors, l'entrée « Administration » vivant dans un menu
-que l'assistant n'affiche jamais.
-
-L'assistant reste accessible (`/onboarding`) si vous voulez malgré tout
-exploiter une station depuis le même compte.
+La console ne demande ni organisation, ni abonnement, ni parcours de mise en
+service. Elle est montée **avant** la garde de session des stations dans
+`server/app.ts`, et déclarée comme branche sœur de `RootLayout` dans
+`App.tsx` — l'imbriquer dedans lui aurait imposé cette garde.
 
 ---
 
-## 3. Les cinq décisions structurantes
+## 3. Les décisions structurantes
 
-### 3.1 Le droit ne s'accorde que par variable d'environnement
+### 3.1 Deux applications, pas deux rôles
 
-Aucune route n'attribue `platform_admin` — ni `/access`, ni `/auth/profile`,
-ni le back-office lui-même. Le droit vient du fichier `.env`, au démarrage.
+Pile complète et distincte à chaque étage :
 
-La raison : ce drapeau est le seul du système qui **franchit l'isolation entre
-clients**. S'il devenait délégable depuis l'interface, le premier propriétaire
-curieux qui trouverait la faille lirait les chiffres d'affaires de tous les
-autres lavages de la ville. Un droit pareil n'a pas sa place dans une matrice
-de permissions ; il appartient à la configuration du serveur.
-
-C'est aussi pourquoi `platform_admin` **ne figure pas dans
-`server/permissions.ts`** : il n'est pas un rôle de locataire, il est hors du
-modèle de locataire.
-
-Un test vérifie cette garantie à la source : une seule fonction écrit cette
-colonne, et aucune requête HTTP ne l'atteint.
-
-### 3.2 Le refus est un 404, jamais un 403
-
-Un `403 forbidden` confirmerait qu'il y a quelque chose à cette adresse. Pour
-tout compte ordinaire, le back-office **n'existe pas** : `404 not_found`, le
-même message que n'importe quelle URL inventée.
-
-Un gérant qui tape `/api/v1/admin/metrics` par curiosité n'apprend rien. Il ne
-saura même pas qu'il existe une surface à attaquer.
-
-### 3.3 Toute intervention est inscrite chez le client
-
-`auditPlatformAction()` écrit dans les `audit_logs` **de la station
-concernée**, pas dans un registre séparé de l'éditeur. Le propriétaire voit
-donc, dans son propre historique :
-
-> **Forfait activé** — Système · réf. WAVE-884213
-
-Une action de l'éditeur invisible de celui qui la subit serait une porte
-dérobée, pas une administration. Si vous suspendez une station, son
-propriétaire doit pouvoir lire pourquoi — c'est d'ailleurs la première chose
-qu'il cherchera en appelant l'assistance.
-
-Les cinq actions sont traduites en français dans `server/audit-log.ts`, et
-`subscription.suspended` est classée en *Vigilance* pour qu'elle se repère
-d'un coup d'œil.
-
-### 3.4 Aucune coupure automatique
-
-Un forfait payant dont l'échéance est passée **n'est pas coupé**. Il apparaît
-en « Échéance dépassée » avec le nombre de jours de retard, et c'est tout.
-
-`computeSubscriptionState` ne fait expirer que les essais ; `active` ne
-s'éteint jamais tout seul. Couper automatiquement le service d'un client qui a
-payé onze mois parce qu'un virement a trois jours de retard, c'est perdre le
-client. Le back-office rend le retard **visible**, et la suspension reste un
-geste humain, pris en connaissance de cause.
-
-Le filtre « Échéance dépassée » de la liste sert exactement à cela : votre
-liste d'appels du lundi matin.
-
-### 3.5 Prolonger un forfait payant est refusé
-
-`POST /extend-trial` sur une station en `active` répond **409
-`subscription_active`**.
-
-Ce garde-fou vient d'un test manuel qui a révélé le défaut : prolonger un
-abonnement payant le repassait en `trialing`, remplaçant trois mois payés par
-sept jours d'essai. La bonne action pour un client payant est l'activation
-(qui renouvelle), pas le geste commercial.
-
-Dans le même esprit, la prolongation ne part de l'échéance existante que s'il
-s'agit d'un **essai encore en cours**. Essai échu ou abonnement résilié : on
-repart d'aujourd'hui, sinon hériter de l'échéance d'un forfait payé offrirait
-des mois d'essai par accident.
-
----
-
-## 4. Les routes
-
-Toutes sous `/api/v1/admin`, montées **avant** `requireTenantContext` — le
-back-office ne parle pas d'une station, il parle du parc.
-
-| Méthode | Route | Rôle |
+| | Station | Console |
 |---|---|---|
-| `GET` | `/metrics` | indicateurs du parc |
-| `GET` | `/organizations?q=&status=&limit=&offset=` | liste filtrable |
-| `GET` | `/organizations/:id` | fiche + membres + historique |
-| `GET` | `/upgrade-requests?pending=` | demandes des clients |
-| `GET` | `/plans` | forfaits disponibles |
-| `POST` | `/organizations/:id/activate` | `{plan_code, months≤36, payment_reference?, note?}` |
-| `POST` | `/organizations/:id/suspend` | `{reason}` → lecture seule |
-| `POST` | `/organizations/:id/extend-trial` | `{days≤90, reason}` |
-| `POST` | `/upgrade-requests/:id/decline` | `{reason}` → clôt la demande |
+| URL | `/` | `/console` |
+| Cookie | `washpilot_session` | `washpilot_console` |
+| En-tête | `Bearer` | `Console` |
+| Durée de session | 30 jours | **2 jours** |
+| Table des comptes | `users` | `platform_operators` |
+| Préfixe d'API | `/api/v1/...` | `/api/v1/console/...` |
+| Garde | `requireSession` + `requireTenantContext` | `requireOperator` |
+
+Les deux cookies ne se croisent jamais. Prouvé en conditions réelles : une
+session de station appelant `/api/v1/console/metrics` reçoit **404** ; un
+cookie de console appelant `/api/v1/subscription` reçoit **401**.
+
+La session courte est délibérée : un poste de console ouvert chez un
+partenaire est un risque bien plus lourd qu'une caisse ouverte en station.
+
+### 3.2 Aucune passerelle depuis le produit
+
+Rien dans l'application station ne mentionne la console : ni entrée de menu,
+ni lien dans l'avatar, ni redirection après connexion. Un test parcourt `src/`
+et **échoue si `/console` apparaît ailleurs que dans `src/console/` et la
+déclaration de route d'`App.tsx`**. L'ancienne page `/admin` et son client API
+ont été supprimés du dépôt, pas seulement masqués.
+
+### 3.3 Le refus est un 404, jamais un 403
+
+Un 403 confirme l'existence de ce qu'il protège. Toute requête de console sans
+opérateur valide reçoit `404 not_found`, le corps exact d'une route inexistante.
+Pour qui sonde l'application, la console n'existe pas.
+
+### 3.4 Toute intervention est inscrite chez le client
+
+Chaque action écrit **deux** traces : une dans `platform_audit_logs` (vue de
+l'éditeur) et une dans les `audit_logs` **de la station concernée**, visible du
+propriétaire dans son journal. Si l'éditeur intervient sur des données, le
+client doit pouvoir le lire chez lui. C'est la règle « on délègue
+l'enregistrement, jamais la réécriture » appliquée à l'éditeur lui-même.
+
+### 3.5 Aucune coupure automatique
+
+Un abonnement `active` dont l'échéance est passée **n'est jamais coupé par le
+système**. Il est signalé `past_due` dans les indicateurs, et un humain décide.
+Un virement peut avoir deux jours de retard ; couper la caisse d'un client en
+plein samedi après-midi pour cela serait indéfendable.
+
+### 3.6 Prolonger un forfait payant est refusé
+
+`extend-trial` sur un abonnement actif renvoie **409 `subscription_active`**.
+Prolonger « l'essai » d'un client qui paie est une façon déguisée d'offrir des
+jours sans trace comptable. Le geste légitime est une activation avec sa
+référence.
+
+---
+
+## 4. La suppression d'organisation, en deux temps
+
+Le non-but « la console ne supprime pas » est **levé** : un client a le droit
+de partir, et de voir ses données disparaître. Mais une suppression immédiate
+est irréparable, et une suppression différée sans coupure laisse un client
+convaincu d'être parti continuer à travailler.
+
+D'où deux temps :
+
+| Temps | Route | Effet |
+|---|---|---|
+| **1. Programmer** | `POST /organizations/:id/schedule-deletion` | accès **coupé immédiatement**, purge datée à +30 jours |
+| **1 bis. Annuler** | `POST /organizations/:id/cancel-deletion` | données intactes, accès rétabli |
+| **2. Purger** | `POST /organizations/:id/purge` | effacement définitif, 22 tables |
+
+Points décidés :
+
+- **La coupure est immédiate, pas différée.** Programmer la suspension
+  résilie l'abonnement et efface les sessions ouvertes. `requireTenantContext`
+  refuse alors toute requête avec `403 organization_deleted`. Un délai de grâce
+  protège les données, pas l'usage.
+- **Annuler ne rend pas l'abonnement.** La station retrouve ses données et sa
+  connexion, pas son forfait : il faut le réactiver explicitement. Une
+  annulation de suppression n'est pas un cadeau commercial.
+- **La purge exige le nom exact** de la station dans `confirm_name`, comparé
+  après `trim()`. Sinon `400 confirmation_mismatch`.
+- **Un utilisateur membre d'une autre station survit** à la purge. Seuls les
+  comptes dont c'était la seule appartenance disparaissent.
+- **Les écritures de l'éditeur survivent.** `platform_audit_logs` est écrit
+  *après* la purge, avec `organization_id` à `null` : la trace de la
+  suppression ne peut pas être effacée par la suppression elle-même.
+- Les purges échues s'exécutent dans le même `tick()` que les relances
+  (`server/reminders.ts`), une fois par heure.
+
+**Si vous ajoutez une table portant `organization_id`**, ajoutez-la à
+`PURGE_ORDER` dans `server/organization-deletion.ts`, ou à `PURGE_EXEMPT` si
+elle doit survivre. Un test compare ces deux listes au schéma réel via
+`information_schema` et **échoue** si une table n'est dans ni l'une ni l'autre.
+C'est le garde-fou qui évite qu'une purge laisse des orphelins six mois après.
+
+---
+
+## 5. Les routes
+
+Toutes sous `/api/v1/console`, toutes derrière `requireOperator`.
+
+**Identité** — `POST /auth/login` · `POST /auth/logout` · `GET /auth/me`
+
+**Lecture** — `GET /metrics` · `GET /organizations?q=&status=&limit=&offset=` ·
+`GET /organizations/:id` · `GET /organizations/:id/members` ·
+`GET /upgrade-requests?pending=` · `GET /plans` ·
+`GET /payment-intents?status=&declared=` · `GET /audit?organization_id=&limit=`
+
+**Écriture** — `POST /organizations/:id/activate {plan_code, months≤36,
+payment_reference?, note?}` · `/suspend {reason}` · `/extend-trial {days≤90,
+reason}` · `/schedule-deletion {reason≥10, grace_days?}` · `/cancel-deletion` ·
+`/purge {confirm_name}` · `POST /members/:userId/reset-password` ·
+`POST /members/:userId/status {status, reason}` ·
+`POST /upgrade-requests/:id/decline {reason 3-300}` ·
+`POST /payment-intents/:reference/confirm {note?}`
 
 ### Deux subtilités qui comptent
 
-**Le statut affiché est l'état effectif, pas le statut stocké.** Un essai dont
-l'échéance est passée est stocké `trialing` mais vaut `expired` pour
-l'application. Le back-office affiche `expired` et conserve `stored_status`
-pour le diagnostic. Deux vérités divergentes entre l'écran d'administration et
-le comportement réel seraient pires que pas d'écran du tout.
+**Toute activation converge vers `activateSubscription()`**, dans
+`server/subscription-service.ts`. Confirmation d'encaissement, activation
+directe, futur webhook : un seul endroit calcule les dates, purge le cache et
+écrit la trace. C'est ce qui permettra de brancher un agrégateur sans
+réécrire la console.
 
-**Une demande cesse d'être en attente dès qu'elle a reçu une réponse** — un
-oui (activation) comme un non (refus). La règle est écrite une seule fois
-(`PENDING_CLAUSE`) pour que le compteur du tableau de bord et la liste
-comptent la même chose.
-
----
-
-## 5. Ce que le back-office ne fait pas, volontairement
-
-| Absent | Pourquoi |
-|---|---|
-| Supprimer une station | la suspension suffit ; détruire les données d'un client n'est jamais un geste d'administration courante |
-| Se connecter à la place d'un client | fonction la plus pratique et la plus dangereuse ; à n'ajouter qu'avec consentement explicite et traçabilité renforcée |
-| Modifier les tarifs | les prix vivent en base (`plans`) ; les changer à chaud sans versionner casserait la facturation des abonnements en cours |
-| Créer un compte | l'inscription reste publique |
-| Encaisser un paiement | aucun agrégateur intégré (voir §1) |
+**`actorUserId` est nullable.** Un opérateur de console n'est pas un
+utilisateur de station : il ne peut pas être l'auteur d'une ligne d'audit
+`audit_logs` au sens habituel. L'auteur est alors `null`, et le libellé porte
+l'adresse de l'opérateur.
 
 ---
 
-## 6. Vérification
+## 6. Ce que la console ne fait pas, volontairement
 
-`tests/platform-admin.test.ts` — **22 tests**, le refus d'abord :
+- **Pas d'usurpation d'identité.** Aucun « se connecter en tant que ». Voir
+  les données d'un client est une chose, agir en son nom une autre.
+- **Pas d'édition des tarifs.** Les forfaits et leurs limites restent dans le
+  code et les migrations. Un prix modifié à chaud, sans trace ni revue, est
+  une source de litige.
+- **Pas de modification des données d'exploitation.** La console ne corrige
+  pas un lavage, ne touche pas une caisse. Elle administre des abonnements et
+  des comptes.
+- **Pas de notification automatique au client.** Les gestes de l'éditeur ne
+  déclenchent pas d'e-mail ; seules les relances d'échéance en envoient.
 
-- le back-office est invisible pour un gérant et un caissier (404 sur quatre routes) ;
-- un propriétaire ne peut pas s'offrir le forfait Business ;
-- sans session : 401 ;
-- aucune route n'accorde `platform_admin` (vérifié à la source) ;
-- activation → `audit.read` passe de 402 à 200, l'effet est réel côté client ;
-- l'activation figure dans l'historique **du client** avec sa référence ;
-- un renouvellement anticipé ne fait pas perdre les jours payés ;
-- suspension → lecture seule, mais lecture et export toujours ouverts ;
-- prolongation d'un essai échu → 7 jours pleins, pas 2 ;
-- prolongation d'un payant → 409 ;
-- la liste montre l'état effectif, pas le statut stocké ;
-- une échéance dépassée est signalée sans couper ;
-- le revenu mensuel ignore les essais ;
-- une demande déclinée cesse d'être en attente, sans toucher à l'abonnement ;
-- le back-office répond même si la station de l'éditeur n'est pas configurée ;
-- la garde d'onboarding laisse passer l'éditeur vers `/admin`.
+---
 
-Ces tests ont été vérifiés par mutation : altérer le code de production
-(404 → 403, suppression du garde-fou 409, perte des jours payés, refus qui ne
-clôt pas la demande, retrait de la dérogation d'onboarding) les fait échouer à
-chaque fois.
+## 7. Vérification
 
 ```bash
-NODE_ENV=test npx tsx --test tests/platform-admin.test.ts
+# Suite complète (242 tests)
+NODE_ENV=test npm test
+
+# Ciblé
+NODE_ENV=test npx tsx --test tests/platform-admin.test.ts    # 26 tests
+NODE_ENV=test npx tsx --test tests/console-deletion.test.ts  # 12 tests
 ```
+
+Parcours manuel utile, serveur lancé :
+
+```bash
+# 1. Entrer dans la console
+curl -s -c /tmp/c.txt -X POST localhost:3000/api/v1/console/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@washpilot.ci","password":"ConsoleWashPilot2026!"}'
+
+# 2. Vérifier l'étanchéité : une session de station doit recevoir 404
+curl -s -b /tmp/station.txt localhost:3000/api/v1/console/metrics
+
+# 3. Vérifier l'étanchéité inverse : le cookie de console doit recevoir 401
+curl -s -b /tmp/c.txt localhost:3000/api/v1/subscription
+```
+
+Les quatre comportements de la suppression sont couverts par un **test par
+mutation** : neutraliser la coupure immédiate, autoriser une purge non
+programmée, retirer une table de `PURGE_ORDER` ou supprimer la clause
+protégeant les comptes multi-stations font chacun échouer la suite.
 
 ---
 
-## 7. Prochaines marches
+## 8. Prochaines marches
 
-Par ordre d'utilité décroissante :
-
-1. **Relances automatiques des échéances dépassées** — la liste existe, l'envoi
-   reste manuel.
-2. **Export CSV du parc** — pour la comptabilité et le suivi commercial.
-3. **Intégration d'un agrégateur** (Wave, Orange Money) — la route d'activation
-   devient alors un webhook ; rien d'autre ne bouge.
-4. **Historique des activations par station** — aujourd'hui lisible dans les
-   `audit_logs`, pas encore présenté comme un échéancier.
+1. **Brancher un agrégateur** (CinetPay couvre Wave, Orange, MTN et Moov en
+   une intégration) : le webhook appellera `activateSubscription()`, la file de
+   confirmation deviendra le mode dégradé plutôt que le mode normal.
+2. **Export comptable** des encaissements confirmés, au format attendu par un
+   cabinet ivoirien.
+3. **Second opérateur avec droits restreints** — lecture seule pour une
+   personne au support, écriture réservée au créateur. Aujourd'hui tous les
+   opérateurs sont égaux ; il faudrait ajouter une colonne `role` à
+   `platform_operators` et la lire dans `requireOperator`.
