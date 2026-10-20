@@ -2,7 +2,7 @@
 
 import { useRef, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { useCapability } from "@/lib/subscription"
+import { useAccess } from "@/lib/permissions"
 import { apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import {
@@ -113,7 +113,7 @@ interface CreateExpenseRequest {
 }
 
 export default function ExpensesPage() {
-  const manageExpenses = useCapability("expenses.manage")
+  const manageExpenses = useAccess("expense:create", "expenses.manage")
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<Expense[]>(`/api/v1/expenses?refresh=${refreshKey}`)
   const expenses = data ?? []

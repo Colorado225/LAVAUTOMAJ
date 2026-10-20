@@ -2,7 +2,7 @@ import { Router } from "express"
 import { z } from "zod"
 import type { Pool } from "pg"
 import { getPool } from "./db.ts"
-import { asyncRoute, tenant } from "./http.ts"
+import { asyncRoute, tenant, requirePermission } from "./http.ts"
 import { HttpError } from "./auth.ts"
 import { clampReportRange, EXPIRED_REPORT_WINDOW_DAYS } from "./entitlements.ts"
 
@@ -68,6 +68,7 @@ export function createReportsRouter() {
   // GET /api/v1/dashboard/metrics — headline numbers for the dashboard.
   r.get(
     "/dashboard/metrics",
+    requirePermission("dashboard:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
 
@@ -126,7 +127,10 @@ export function createReportsRouter() {
         ),
       ])
 
+      const financial = t.can("report:financial")
+
       res.json({
+        financial_access: financial,
         total_washes: totalWashes.rows[0].count,
         completed_washes: completedWashes.rows[0].count,
         in_progress_washes: inProgressWashes.rows[0].count,
@@ -144,6 +148,7 @@ export function createReportsRouter() {
   // GET /api/v1/reports/summary?from=&to=&granularity=day|week|month
   r.get(
     "/reports/summary",
+    requirePermission("report:operational"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const today = new Date().toISOString().slice(0, 10)
@@ -260,10 +265,15 @@ export function createReportsRouter() {
 
       const summary = summaryQ.rows[0]
       const expensesCents = expensesQ.rows[0].expenses_cents
+      // Le détail financier (dépenses, marge nette, postes de dépense) est
+      // réservé aux rôles qui en ont le droit : un gérant voit son activité,
+      // pas la rentabilité de la station.
+      const financial = t.can("report:financial")
 
       res.json({
         period: { from: range.from, to: range.to, granularity },
         granularity,
+        financial_access: financial,
         // Informe l'interface que la période affichée a été réduite.
         restriction: clamped
           ? {
@@ -280,14 +290,16 @@ export function createReportsRouter() {
           unpaid_washes: summary.unpaid_washes,
           revenue_cents: summary.revenue_cents,
           pending_cents: summary.pending_cents,
-          expenses_cents: expensesCents,
-          net_cents: summary.revenue_cents - expensesCents,
+          expenses_cents: financial ? expensesCents : null,
+          net_cents: financial ? summary.revenue_cents - expensesCents : null,
         },
-        series: seriesQ.rows,
+        series: financial
+          ? seriesQ.rows
+          : seriesQ.rows.map((row) => ({ ...row, expenses_cents: null })),
         top_services: servicesQ.rows,
         top_workers: workersQ.rows,
         payment_methods: paymentsQ.rows,
-        expense_categories: expenseCategoriesQ.rows,
+        expense_categories: financial ? expenseCategoriesQ.rows : [],
       })
     }),
   )

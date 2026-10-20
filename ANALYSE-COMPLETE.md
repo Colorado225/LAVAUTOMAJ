@@ -519,4 +519,40 @@ vérification : **`AUDIT-FONCTIONNEL.md`**.
 
 ---
 
-*Généré automatiquement par analyse statique du dépôt `Colorado225/LAVAUTO` — `server.ts`, `server/*.ts`, `src/**/*`, `tests/*`, `package.json`, `vite.config.ts`, `tsconfig.json`. Sections 11 à 13 ajoutées au fil des itérations.*
+## 14. Permissions et garde-fous par rôle (20 octobre 2026)
+
+Mise en place d'un contrôle d'accès basé sur les rôles, vérifié par le serveur
+à chaque requête.
+
+**Audit préalable.** L'authentification par session et l'appartenance en base
+(`organization_members.role`) existaient déjà et ont été conservées : le
+nouveau système s'y branche plutôt que de dupliquer un second mécanisme. Deux
+faiblesses ont été relevées : `requireRole()` contrôlait le rôle et non
+l'action (30 routes), et **aucune lecture n'était gardée** — un caissier
+pouvait lire les rapports financiers, un agent de lavage les dépenses.
+
+**Livré.**
+
+| Niveau | Mise en œuvre |
+|--------|---------------|
+| Référentiel | `server/permissions.ts` : 27 permissions, 4 rôles (`owner`, `manager`, `cashier`, `washer`), refus par défaut, fonctions pures testables |
+| Serveur | `requirePermission()` sur **toutes** les routes, lectures comprises ; `requireTenantContext` calcule les droits effectifs et refuse un membre désactivé ; montage extrait dans `server/app.ts` pour que les tests exercent la pile réelle |
+| Base | `organization_members.status` (désactivation sans suppression) et `member_permissions` (exceptions accordées par le propriétaire) |
+| Interface | `src/lib/permissions.tsx` avec `useAccess(permission, capability)` — un seul appel pour le rôle **et** le forfait ; navigation filtrée ; écran Paramètres → Gestion des accès |
+| Données | Cloisonnement financier : sans `report:financial`, dépenses et marge sont renvoyées à `null` par le serveur, pas seulement masquées |
+
+**Garde-fous.** Personne ne modifie son propre rôle (refusé et journalisé) ;
+la station conserve toujours un propriétaire actif ; les permissions
+sensibles (utilisateurs, paramètres, abonnement, remboursement) ne sont jamais
+délégables ; un changement de rôle annule les exceptions ; un encaissement
+n'est jamais supprimé mais remboursé avec motif et sortie de caisse.
+
+**Tests** : 80 → **113**, dont 16 tests de bout en bout sur la vraie API qui
+vérifient aussi bien les accès autorisés que les tentatives de contournement
+par appel direct.
+
+→ Matrice complète, contrat d'API et limites assumées : **`RBAC-PERMISSIONS.md`**.
+
+---
+
+*Généré automatiquement par analyse statique du dépôt `Colorado225/LAVAUTO` — `server.ts`, `server/*.ts`, `src/**/*`, `tests/*`, `package.json`, `vite.config.ts`, `tsconfig.json`. Sections 11 à 14 ajoutées au fil des itérations.*

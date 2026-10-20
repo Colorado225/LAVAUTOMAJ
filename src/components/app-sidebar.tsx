@@ -11,11 +11,13 @@ import {
   Plus,
   List,
   BadgeCheck,
+  ShieldCheck,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { Logo } from "@/components/logo"
 import { useOnboardingStatus } from "@/lib/onboarding-api"
 import { TrialCountdown } from "@/components/trial/trial-countdown"
+import { usePermissions, type Permission } from "@/lib/permissions"
 
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
@@ -43,41 +45,49 @@ const data = {
           title: "Tableau de bord",
           url: "/dashboard",
           icon: LayoutPanelLeft,
+          permission: "dashboard:read" as Permission,
         },
         {
           title: "Nouveau lavage",
           url: "/washes",
           icon: Plus,
+          permission: "wash:read" as Permission,
         },
         {
           title: "Encaissements",
           url: "/payments",
           icon: BadgeCheck,
+          permission: "payment:read" as Permission,
         },
         {
           title: "Caisse",
           url: "/cash-drawer",
           icon: Wallet,
+          permission: "cash_session:read" as Permission,
         },
         {
           title: "Dépenses",
           url: "/expenses",
           icon: Receipt,
+          permission: "expense:read" as Permission,
         },
         {
           title: "Rapports",
           url: "/reports",
           icon: BarChart3,
+          permission: "report:operational" as Permission,
         },
         {
           title: "Équipe",
           url: "/team",
           icon: Users,
+          permission: "worker:read" as Permission,
         },
         {
           title: "Catalogue",
           url: "#",
           icon: List,
+          permission: "service:read" as Permission,
           items: [
             {
               title: "Prestations",
@@ -99,6 +109,12 @@ const data = {
       label: "Configuration",
       items: [
         {
+          title: "Gestion des accès",
+          url: "/settings/access",
+          icon: ShieldCheck,
+          permission: "user:manage" as Permission,
+        },
+        {
           title: "Paramètres",
           url: "#",
           icon: Settings,
@@ -110,10 +126,12 @@ const data = {
             {
               title: "Facturation",
               url: "/settings/billing",
+              permission: "subscription:manage" as Permission,
             },
             {
               title: "Données et sauvegarde",
               url: "/settings/data",
+              permission: "data:export" as Permission,
             },
           ],
         },
@@ -122,8 +140,23 @@ const data = {
   ],
 }
 
+type NavItems = React.ComponentProps<typeof NavMain>["items"]
+type NavEntry = NavItems[number] & { permission?: Permission; items?: NavEntry[] }
+
+/**
+ * Masque les entrées dont l'utilisateur n'a pas la permission.
+ * Un groupe dont toutes les sous-entrées sont masquées disparaît à son tour.
+ */
+function filterNav(items: NavEntry[], can: (permission: Permission) => boolean): NavEntry[] {
+  return items
+    .filter((item) => !item.permission || can(item.permission))
+    .map((item) => (item.items ? { ...item, items: filterNav(item.items, can) } : item))
+    .filter((item) => !item.items || item.items.length > 0 || item.url !== "#")
+}
+
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { data: status } = useOnboardingStatus()
+  const { can, loading: permissionsLoading } = usePermissions()
   const stationName = status?.station?.name ?? status?.org_name ?? "WashPilot CI"
   const stationCity = status?.station?.city
 
@@ -147,9 +180,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        {data.navGroups.map((group) => (
-          <NavMain key={group.label} label={group.label} items={group.items} />
-        ))}
+        {data.navGroups.map((group) => {
+          // Tant que les permissions ne sont pas chargées, on n'affiche rien
+          // plutôt qu'un menu complet qui se réduirait sous les yeux.
+          const items = permissionsLoading
+            ? []
+            : (filterNav(group.items as NavEntry[], can) as NavItems)
+          if (items.length === 0) return null
+          return <NavMain key={group.label} label={group.label} items={items} />
+        })}
       </SidebarContent>
       <SidebarFooter>
         <TrialCountdown />

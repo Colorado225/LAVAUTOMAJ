@@ -5,6 +5,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { SubscriptionProvider } from "@/lib/subscription"
+import { PermissionProvider } from "@/lib/permissions"
 import { TrialBanner } from "@/components/trial/trial-banner"
 import { SupportButton } from "@/components/support/support-button"
 
@@ -17,6 +18,7 @@ interface BaseLayoutProps {
 export function BaseLayout({ children, title, description }: BaseLayoutProps) {
   return (
     <SubscriptionProvider>
+    <PermissionProvider>
     <SidebarProvider
       style={
         {
@@ -50,6 +52,7 @@ export function BaseLayout({ children, title, description }: BaseLayoutProps) {
         <SupportButton />
       </SidebarInset>
     </SidebarProvider>
+    </PermissionProvider>
     </SubscriptionProvider>
   )
 }

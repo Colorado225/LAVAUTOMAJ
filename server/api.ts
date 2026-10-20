@@ -2,7 +2,7 @@ import { Router } from "express"
 import { z } from "zod"
 import type { Pool } from "pg"
 import { getPool } from "./db.ts"
-import { asyncRoute, body, tenant, parseId, requireRole, HttpError } from "./http.ts"
+import { asyncRoute, body, tenant, parseId, requirePermission, HttpError } from "./http.ts"
 import { fingerprint, withIdempotency } from "./idempotency.ts"
 import { initialPaymentStatus, resolvePaymentStatus, PAYMENT_METHODS } from "./payments.ts"
 
@@ -79,6 +79,7 @@ export function createApiRouter() {
   // ---------------------------------------------------------------- sites --
   r.get(
     "/sites",
+    requirePermission("wash:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -91,6 +92,7 @@ export function createApiRouter() {
 
   r.get(
     "/sites/:id",
+    requirePermission("wash:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -102,7 +104,7 @@ export function createApiRouter() {
 
   r.post(
     "/sites",
-    requireRole("owner", "manager"),
+    requirePermission("settings:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(catalogValidators.site, req.body)
@@ -117,7 +119,7 @@ export function createApiRouter() {
 
   r.patch(
     "/sites/:id",
-    requireRole("owner", "manager"),
+    requirePermission("settings:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -137,7 +139,7 @@ export function createApiRouter() {
   // DELETE /api/v1/sites/:id — refuse when washes, sessions, expenses or workers still reference the site.
   r.delete(
     "/sites/:id",
-    requireRole("owner", "manager"),
+    requirePermission("settings:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -163,6 +165,7 @@ export function createApiRouter() {
   // --------------------------------------------------- service categories --
   r.get(
     "/service-categories",
+    requirePermission("service:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -175,7 +178,7 @@ export function createApiRouter() {
 
   r.post(
     "/service-categories",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(catalogValidators.category, req.body)
@@ -196,7 +199,7 @@ export function createApiRouter() {
 
   r.patch(
     "/service-categories/:id",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -221,7 +224,7 @@ export function createApiRouter() {
 
   r.delete(
     "/service-categories/:id",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -238,6 +241,7 @@ export function createApiRouter() {
   // --------------------------------------------------- vehicle categories --
   r.get(
     "/vehicle-categories",
+    requirePermission("service:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -250,7 +254,7 @@ export function createApiRouter() {
 
   r.post(
     "/vehicle-categories",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(catalogValidators.category, req.body)
@@ -271,7 +275,7 @@ export function createApiRouter() {
 
   r.patch(
     "/vehicle-categories/:id",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -296,7 +300,7 @@ export function createApiRouter() {
 
   r.delete(
     "/vehicle-categories/:id",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -313,6 +317,7 @@ export function createApiRouter() {
   // ------------------------------------------------------------- services --
   r.get(
     "/services",
+    requirePermission("service:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -325,6 +330,7 @@ export function createApiRouter() {
 
   r.get(
     "/services/:id",
+    requirePermission("service:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -336,7 +342,7 @@ export function createApiRouter() {
 
   r.post(
     "/services",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(catalogValidators.service, req.body)
@@ -355,7 +361,7 @@ export function createApiRouter() {
 
   r.patch(
     "/services/:id",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -378,7 +384,7 @@ export function createApiRouter() {
 
   r.delete(
     "/services/:id",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -395,6 +401,7 @@ export function createApiRouter() {
   // --------------------------------------------------------------- washes --
   r.get(
     "/washes",
+    requirePermission("wash:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -407,6 +414,7 @@ export function createApiRouter() {
 
   r.get(
     "/washes/:id",
+    requirePermission("wash:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -436,7 +444,7 @@ export function createApiRouter() {
   // from the catalog, cash payments require an open cash session.
   r.post(
     "/washes",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("wash:create"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(washValidators.create, req.body)
@@ -563,7 +571,7 @@ export function createApiRouter() {
   // POST /api/v1/washes/:id/cancel — soft cancellation with mandatory reason.
   r.post(
     "/washes/:id/cancel",
-    requireRole("owner", "manager"),
+    requirePermission("wash:cancel"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)

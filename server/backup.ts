@@ -1,7 +1,7 @@
 import { Router } from "express"
 import type { Pool } from "pg"
 import { getPool } from "./db.ts"
-import { asyncRoute, tenant, requireRole, HttpError } from "./http.ts"
+import { asyncRoute, tenant, requirePermission, HttpError } from "./http.ts"
 
 // ---------------------------------------------------------------------------
 // Sauvegarde et récupération des données
@@ -114,7 +114,7 @@ export function createBackupRouter() {
   // GET /api/v1/backup/summary — ce que contient la sauvegarde, sans la produire.
   r.get(
     "/backup/summary",
-    requireRole("owner", "manager"),
+    requirePermission("data:export"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const pool = db()
@@ -147,7 +147,7 @@ export function createBackupRouter() {
   // GET /api/v1/backup/export — téléchargement de la sauvegarde complète.
   r.get(
     "/backup/export",
-    requireRole("owner", "manager"),
+    requirePermission("data:export"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const pool = db()

@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
-import { useCapability } from "@/lib/subscription"
+import { useAccess } from "@/lib/permissions"
 
 interface Wash {
   id: string
@@ -104,7 +104,7 @@ function paymentStatusLabel(status: string): string {
 }
 
 export default function WashDetailPage() {
-  const cancelCapability = useCapability("washes.cancel")
+  const cancelCapability = useAccess("wash:cancel", "washes.cancel")
   const { washID } = useParams<{ washID: string }>()
   const [refreshKey, setRefreshKey] = useState(0)
   const path = washID ? `/api/v1/washes/${encodeURIComponent(washID)}?refresh=${refreshKey}` : ""
@@ -115,7 +115,7 @@ export default function WashDetailPage() {
   const [reason, setReason] = useState("")
   const [saving, setSaving] = useState(false)
   const [mutationError, setMutationError] = useState<string | null>(null)
-  const managePayments = useCapability("payments.manage")
+  const managePayments = useAccess("payment:create", "payments.manage")
   const [paymentOpen, setPaymentOpen] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState<string>("cash")
   const [paymentAmount, setPaymentAmount] = useState("")

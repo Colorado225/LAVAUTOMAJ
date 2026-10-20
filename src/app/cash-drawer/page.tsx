@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { useCapability } from "@/lib/subscription"
+import { useAccess } from "@/lib/permissions"
 import { useApi, apiFetch } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import {
@@ -64,7 +64,7 @@ function xofToCents(value: string, requirePositive = false): number | null {
 }
 
 export default function CashDrawerPage() {
-  const manageCash = useCapability("cash.manage")
+  const manageCash = useAccess("cash_session:manage", "cash.manage")
   const { data: sites, loading: sitesLoading, error: sitesError } = useApi<Site[]>("/api/v1/sites")
   const [selectedSiteId, setSelectedSiteId] = React.useState("")
   const siteId = selectedSiteId || sites?.[0]?.id || ""

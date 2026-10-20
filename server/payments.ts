@@ -2,7 +2,7 @@ import { Router } from "express"
 import { z } from "zod"
 import type { Pool } from "pg"
 import { getPool } from "./db.ts"
-import { asyncRoute, body, tenant, parseId, requireRole, HttpError } from "./http.ts"
+import { asyncRoute, body, tenant, parseId, requirePermission, HttpError } from "./http.ts"
 import { fingerprint, withIdempotency } from "./idempotency.ts"
 
 // ---------------------------------------------------------------------------
@@ -46,6 +46,12 @@ export const MOBILE_MONEY_METHODS: PaymentMethod[] = [
 ]
 
 export const paymentValidators = {
+  /** Remboursement : le motif est obligatoire, c'est lui qui rend l'opération auditable. */
+  refund: z
+    .object({
+      reason: z.string().trim().min(3).max(300),
+    })
+    .strip(),
   create: z
     .object({
       method: z.enum(PAYMENT_METHODS),
@@ -112,6 +118,7 @@ export function createPaymentsRouter() {
   // Suivi des encaissements, canal par canal.
   r.get(
     "/payments",
+    requirePermission("payment:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const filters = body(
@@ -171,7 +178,7 @@ export function createPaymentsRouter() {
   // POST /api/v1/washes/:id/payments — encaisser (ou compléter) un lavage.
   r.post(
     "/washes/:id/payments",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("payment:create"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const washId = parseId(req.params.id)
@@ -301,7 +308,7 @@ export function createPaymentsRouter() {
   // mobile money après contrôle du SMS / relevé opérateur.
   r.post(
     "/payments/:id/verify",
-    requireRole("owner", "manager"),
+    requirePermission("payment:verify"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -336,6 +343,113 @@ export function createPaymentsRouter() {
         )
         await client.query("COMMIT")
         res.json(updatedQ.rows[0])
+      } catch (error) {
+        await client.query("ROLLBACK")
+        throw error
+      } finally {
+        client.release()
+      }
+    }),
+  )
+
+  // POST /api/v1/payments/:id/refund — annuler un encaissement déjà enregistré.
+  //
+  // Un encaissement n'est jamais supprimé : il passe en « remboursé », avec un
+  // motif obligatoire et, pour les espèces, une sortie de caisse correspondante.
+  // L'historique reste donc complet pour le rapprochement de caisse.
+  r.post(
+    "/payments/:id/refund",
+    requirePermission("payment:cancel"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const input = body(paymentValidators.refund, req.body ?? {})
+      const pool = db()
+      const client = await pool.connect()
+      try {
+        await client.query("BEGIN")
+        const paymentQ = await client.query(
+          `SELECT p.id, p.status, p.method, p.amount_cents, p.wash_id,
+                  w.reference AS wash_reference, w.site_id, w.total_cents
+           FROM payments p JOIN washes w ON w.id = p.wash_id
+           WHERE p.id=$1::uuid AND p.organization_id=$2::uuid FOR UPDATE OF p`,
+          [id, t.organizationId],
+        )
+        if (!paymentQ.rowCount) throw new HttpError(404, "payment_not_found", "Encaissement introuvable.")
+        const payment = paymentQ.rows[0]
+        if (payment.status === "refunded") {
+          throw new HttpError(409, "payment_already_refunded", "Cet encaissement est déjà remboursé.")
+        }
+
+        // Espèces : l'argent ressort physiquement de la caisse ouverte.
+        if (payment.method === "cash") {
+          const sessionQ = await client.query(
+            `SELECT id FROM cash_sessions
+             WHERE organization_id=$1::uuid AND site_id=$2::uuid AND status='open'
+             ORDER BY opened_at DESC LIMIT 1 FOR UPDATE`,
+            [t.organizationId, payment.site_id],
+          )
+          if (!sessionQ.rowCount) {
+            throw new HttpError(
+              400,
+              "cash_session_required",
+              "Ouvrez la caisse avant de rembourser un encaissement en espèces.",
+            )
+          }
+          await client.query(
+            `INSERT INTO cash_movements(organization_id, cash_session_id, type, amount_cents, source, description, wash_id, created_by)
+             VALUES($1,$2,'exit',$3,'refund',$4,$5,$6)`,
+            [
+              t.organizationId,
+              sessionQ.rows[0].id,
+              payment.amount_cents,
+              `Remboursement lavage ${payment.wash_reference} — ${input.reason}`,
+              payment.wash_id,
+              t.userId,
+            ],
+          )
+        }
+
+        const updatedQ = await client.query(
+          `UPDATE payments SET status='refunded'
+           WHERE id=$1::uuid AND organization_id=$2::uuid
+           RETURNING id, wash_id, method, amount_cents, status, reference, created_at`,
+          [id, t.organizationId],
+        )
+
+        // Le lavage redevient dû à hauteur du montant remboursé.
+        const paidQ = await client.query(
+          `SELECT COALESCE(SUM(amount_cents),0)::int AS paid FROM payments
+           WHERE wash_id=$1::uuid AND status <> 'refunded'`,
+          [payment.wash_id],
+        )
+        const paymentStatus = resolvePaymentStatus(Number(payment.total_cents), Number(paidQ.rows[0].paid))
+        await client.query("UPDATE washes SET payment_status=$2 WHERE id=$1::uuid", [
+          payment.wash_id,
+          paymentStatus,
+        ])
+
+        await client.query(
+          `INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+           VALUES($1,$2,'payment.refunded','payment',$3,$4)`,
+          [
+            t.organizationId,
+            t.userId,
+            id,
+            JSON.stringify({
+              method: payment.method,
+              amount_cents: payment.amount_cents,
+              reason: input.reason,
+              wash_id: payment.wash_id,
+            }),
+          ],
+        )
+
+        await client.query("COMMIT")
+        res.json({
+          payment: updatedQ.rows[0],
+          wash: { id: payment.wash_id, payment_status: paymentStatus },
+        })
       } catch (error) {
         await client.query("ROLLBACK")
         throw error

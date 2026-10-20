@@ -3,7 +3,7 @@
 import type * as React from "react"
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { useCapability } from "@/lib/subscription"
+import { useAccess } from "@/lib/permissions"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -94,7 +94,7 @@ function formatXof(cents: number) {
 }
 
 export default function ServicesPage() {
-  const manageCatalog = useCapability("catalog.manage")
+  const manageCatalog = useAccess("service:manage", "catalog.manage")
   const [refreshKey, setRefreshKey] = useState(0)
   const { data: services, loading, error } = useApi<Service[]>(`/api/v1/services?refresh=${refreshKey}`)
   const { data: categories, loading: categoriesLoading, error: categoriesError } = useApi<ServiceCategory[]>(`/api/v1/service-categories?refresh=${refreshKey}`)

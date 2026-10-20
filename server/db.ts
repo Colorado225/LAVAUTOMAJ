@@ -203,6 +203,25 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
  key text NOT NULL, fingerprint text NOT NULL, response_status integer, response_body jsonb,
  created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(organization_id,key)
 );
+-- Désactivation d'un membre sans suppression du compte : ses requêtes
+-- protégées sont refusées dès le middleware d'appartenance.
+ALTER TABLE organization_members ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
+ALTER TABLE organization_members ADD COLUMN IF NOT EXISTS disabled_at timestamptz;
+ALTER TABLE organization_members ADD COLUMN IF NOT EXISTS updated_by uuid REFERENCES users(id);
+
+-- Exceptions de permissions accordées (ou retirées) par le propriétaire à un
+-- membre précis : granted = false retire une permission venant du rôle.
+CREATE TABLE IF NOT EXISTS member_permissions (
+ organization_id uuid NOT NULL REFERENCES organizations(id),
+ user_id uuid NOT NULL REFERENCES users(id),
+ permission text NOT NULL,
+ granted boolean NOT NULL DEFAULT true,
+ granted_by uuid REFERENCES users(id),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY (organization_id, user_id, permission)
+);
+CREATE INDEX IF NOT EXISTS idx_member_permissions_user ON member_permissions(organization_id,user_id);
+
 -- Relances d'échéance d'abonnement : une ligne par relance réellement envoyée,
 -- ce qui garantit qu'une même station n'est jamais relancée deux fois.
 CREATE TABLE IF NOT EXISTS subscription_reminders (
@@ -291,6 +310,25 @@ async function seedDemoData(
      VALUES ($1, $2, 'owner')`,
     [orgId, userId]
   );
+
+  // Trois comptes de démonstration supplémentaires, un par rôle, pour que la
+  // gestion des accès soit testable immédiatement (même mot de passe).
+  const demoTeam = [
+    { email: "gerant@washpilot.ci", first: "Serge", last: "N'Guessan", phone: "+225 07 11 22 33 44", role: "manager" },
+    { email: "caisse@washpilot.ci", first: "Fatou", last: "Diarra", phone: "+225 07 55 66 77 88", role: "cashier" },
+    { email: "laveur@washpilot.ci", first: "Koffi", last: "Yao", phone: "+225 07 99 00 11 22", role: "washer" },
+  ];
+  for (const member of demoTeam) {
+    const memberRes = await queryFn(
+      `INSERT INTO users (email, first_name, last_name, phone, password_hash, status, organization_id)
+       VALUES ($1, $2, $3, $4, $5, 'active', $6) RETURNING id`,
+      [member.email, member.first, member.last, member.phone, demoPasswordHash, orgId]
+    );
+    await queryFn(
+      `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, $3)`,
+      [orgId, memberRes.rows[0].id, member.role]
+    );
+  }
 
   // Démonstration : la station est sur le forfait Gratuit, en cours d'essai.
   // L'essai de 14 jours a démarré il y a 3 jours → il reste 11 jours, ce qui

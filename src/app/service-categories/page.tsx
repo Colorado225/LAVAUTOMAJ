@@ -4,7 +4,7 @@ import type * as React from "react"
 
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { useCapability } from "@/lib/subscription"
+import { useAccess } from "@/lib/permissions"
 import { Badge } from "@/components/ui/badge"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
 import { Button } from "@/components/ui/button"
@@ -45,7 +45,7 @@ interface ServiceCategory {
 }
 
 export default function ServiceCategoriesPage() {
-  const manageCatalog = useCapability("catalog.manage")
+  const manageCatalog = useAccess("service:manage", "catalog.manage")
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<ServiceCategory[]>(`/api/v1/service-categories?refresh=${refreshKey}`)
   const { data: member } = useApi<CurrentMember>(`/api/v1/auth/me?refresh=${refreshKey}`)

@@ -4,8 +4,9 @@ export interface ReportSummary {
   revenue_cents: number
   /** Encaissements mobile money encore à confirmer sur la période. */
   pending_cents: number
-  expenses_cents: number
-  net_cents: number
+  /** `null` lorsque le rôle n'a pas le droit de voir les données financières. */
+  expenses_cents: number | null
+  net_cents: number | null
   paid_washes: number
   /** Lavages non réglés ou partiellement réglés. */
   unpaid_washes: number
@@ -18,7 +19,7 @@ export interface SeriesReportRow {
   period_end: string
   wash_count: number
   revenue_cents: number
-  expenses_cents: number
+  expenses_cents: number | null
 }
 
 export interface ServiceReportRow {
@@ -64,6 +65,8 @@ export interface ReportRestriction {
 }
 
 export interface ReportResponse {
+  /** Le rôle connecté a-t-il accès aux dépenses et à la marge ? */
+  financial_access: boolean
   period: { from: string; to: string; granularity: ReportGranularity }
   granularity: ReportGranularity
   restriction?: ReportRestriction | null

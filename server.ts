@@ -1,26 +1,14 @@
 import "dotenv/config";
 import express from "express"
-import type { NextFunction, Request, Response } from "express"
+import type { Request, Response } from "express"
 import cors from "cors"
 import path from "node:path"
 import fs from "node:fs"
 import { fileURLToPath } from "node:url"
 import { env } from "./server/env.ts"
 import { initDatabaseSchema, isDatabaseReady, closeDatabase, getPool } from "./server/db.ts"
-import { HttpError, requireSession } from "./server/auth.ts"
-import { requireTenantContext } from "./server/tenant.ts"
-import { createAuthRouter } from "./server/auth-router.ts"
-import { createOnboardingRouter } from "./server/onboarding.ts"
-import { createApiRouter } from "./server/api.ts"
-import { createOperationsRouter } from "./server/operations.ts"
-import { createTeamRouter } from "./server/team.ts"
-import { createReportsRouter } from "./server/reports.ts"
-import { createSubscriptionRouter } from "./server/subscription.ts"
-import { createPaymentsRouter } from "./server/payments.ts"
-import { createBackupRouter } from "./server/backup.ts"
-import { createSupportRouter } from "./server/support.ts"
 import { startReminderScheduler } from "./server/reminders.ts"
-import { attachSubscription, blockWritesWhenReadOnly } from "./server/entitlements.ts"
+import { mountApi, apiErrorHandler } from "./server/app.ts"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -76,90 +64,11 @@ app.use("/api/v1", (_req, res, next) => {
 
 // Health endpoints and /api/v1/auth/* are public (the auth router enforces
 // its own session checks); every other application route requires a session.
-app.use("/api/v1/auth", createAuthRouter())
-app.use("/api/v1", requireSession)
-app.use("/api/v1", requireTenantContext)
-// État d'abonnement (essai gratuit de 14 jours) : attaché à chaque requête,
-// puis filet de sécurité qui refuse les écritures une fois l'essai terminé.
-app.use("/api/v1", attachSubscription)
-app.use("/api/v1", blockWritesWhenReadOnly)
-app.use("/api/v1", createSubscriptionRouter())
-app.use("/api/v1", createOnboardingRouter())
-app.use("/api/v1", createApiRouter())
-app.use("/api/v1", createPaymentsRouter())
-app.use("/api/v1", createBackupRouter())
-app.use("/api/v1", createSupportRouter())
-app.use("/api/v1", createTeamRouter())
-app.use("/api/v1", createReportsRouter())
-app.use("/api/v1", createOperationsRouter())
+// Session → appartenance (rôle + permissions) → abonnement → routes.
+// Le montage vit dans server/app.ts pour que les tests exercent la même pile.
+mountApi(app)
 
-app.use("/api/v1", (_req, res) => {
-  res.status(404).json({ error: { code: "not_found", message: "Cette route API n'existe pas." } })
-})
-
-app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
-  void next
-  let status = error instanceof HttpError ? error.status : 500
-  let code = error instanceof HttpError ? error.code : "internal_error"
-  let message = error instanceof HttpError
-    ? error.message
-    : "Une erreur interne est survenue. Réessayez dans quelques instants."
-
-  if (!(error instanceof HttpError) && typeof error === "object" && error !== null && "type" in error) {
-    const parserType = (error as { type?: unknown }).type
-    if (parserType === "entity.parse.failed") {
-      status = 400
-      code = "invalid_json"
-      message = "Le corps de la requête contient un JSON invalide."
-    } else if (parserType === "entity.too.large") {
-      status = 413
-      code = "payload_too_large"
-      message = "Le corps de la requête dépasse la taille maximale autorisée."
-    } else if (parserType === "encoding.unsupported" || parserType === "charset.unsupported") {
-      status = 415
-      code = "unsupported_request_encoding"
-      message = "L'encodage de la requête n'est pas pris en charge."
-    } else if (parserType === "request.aborted") {
-      status = 400
-      code = "request_aborted"
-      message = "La requête a été interrompue avant sa réception complète."
-    }
-  }
-
-  if (!(error instanceof HttpError) && typeof error === "object" && error !== null && "code" in error) {
-    const databaseCode = (error as { code?: string }).code
-    if (databaseCode === "23505") {
-      status = 409
-      code = "resource_conflict"
-      message = "Cette ressource existe déjà dans votre organisation."
-    } else if (databaseCode === "23503") {
-      status = 400
-      code = "invalid_reference"
-      message = "Une ressource associée est introuvable ou n'appartient pas à cette organisation."
-    } else if (databaseCode === "23514" || databaseCode === "22P02" || databaseCode === "22003") {
-      status = 400
-      code = "invalid_data"
-      message = "Les données envoyées ne respectent pas les contraintes requises."
-    } else if (databaseCode === "40001" || databaseCode === "40P01") {
-      status = 503
-      code = "transaction_retry"
-      message = "Conflit temporaire de transaction. Réessayez l'opération."
-    }
-  }
-
-  if (status >= 500) {
-    console.error("[api] Request failed:", error instanceof Error ? error.message : "Unknown API error")
-    console.log("[api] ERROR STACK:", error instanceof Error ? error.stack : String(error))
-  }
-  // Development aid: surface auth/tenant failures so session issues are diagnosable.
-  if (env.NODE_ENV !== "production" && (status === 401 || status === 403)) {
-    const cookieNames = (_req.get("cookie") || "").split(";").map(v => v.split("=")[0].trim()).filter(Boolean).join(",") || "none"
-    const hasAuth = Boolean(_req.get("authorization"))
-    const hasCustom = Boolean(_req.get("x-session-token"))
-    console.warn(`[auth] ${status} ${code} on ${_req.method} ${_req.originalUrl} | cookies:[${cookieNames}] authHeader:${hasAuth} xSessionToken:${hasCustom} ua:${(_req.get("user-agent") || "?").slice(0, 40)}`)
-  }
-  res.status(status).json({ error: { code, message } })
-})
+app.use(apiErrorHandler)
 
 async function startServer() {
   const isProd = env.NODE_ENV === "production"

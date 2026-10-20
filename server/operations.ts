@@ -2,7 +2,7 @@ import { Router } from "express"
 import { z } from "zod"
 import type { Pool } from "pg"
 import { getPool } from "./db.ts"
-import { asyncRoute, body, tenant, parseId, requireRole } from "./http.ts"
+import { asyncRoute, body, tenant, parseId, requirePermission } from "./http.ts"
 import { HttpError } from "./auth.ts"
 import { fingerprint, withIdempotency } from "./idempotency.ts"
 
@@ -86,6 +86,7 @@ export function createOperationsRouter() {
   // -------------------------------------------------------- cash sessions --
   r.get(
     "/cash-sessions",
+    requirePermission("cash_session:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const status = typeof req.query.status === "string" && ["open", "closed"].includes(req.query.status) ? req.query.status : null
@@ -99,6 +100,7 @@ export function createOperationsRouter() {
 
   r.get(
     "/cash-sessions/current",
+    requirePermission("cash_session:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const siteId = typeof req.query.site_id === "string" && req.query.site_id ? parseId(req.query.site_id) : null
@@ -113,7 +115,7 @@ export function createOperationsRouter() {
 
   r.post(
     "/cash-sessions/open",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("cash_session:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(operationValidators.openSession, req.body)
@@ -155,6 +157,7 @@ export function createOperationsRouter() {
 
   r.get(
     "/cash-sessions/:id",
+    requirePermission("cash_session:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -166,6 +169,7 @@ export function createOperationsRouter() {
 
   r.get(
     "/cash-sessions/:id/movements",
+    requirePermission("cash_session:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -181,7 +185,7 @@ export function createOperationsRouter() {
 
   r.post(
     "/cash-sessions/:id/movements",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("cash_session:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -220,7 +224,7 @@ export function createOperationsRouter() {
 
   r.post(
     "/cash-sessions/:id/close",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("cash_session:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -271,6 +275,7 @@ export function createOperationsRouter() {
   // ------------------------------------------------------------- expenses --
   r.get(
     "/expenses",
+    requirePermission("expense:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -283,7 +288,7 @@ export function createOperationsRouter() {
 
   r.post(
     "/expenses",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("expense:create"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(operationValidators.expense, req.body)
@@ -361,7 +366,7 @@ export function createOperationsRouter() {
   // PATCH /api/v1/expenses/:id — editable only while the cash session is open.
   r.patch(
     "/expenses/:id",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("expense:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -475,7 +480,7 @@ export function createOperationsRouter() {
   // DELETE /api/v1/expenses/:id — reverses the cash movement when the session is still open.
   r.delete(
     "/expenses/:id",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("expense:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)

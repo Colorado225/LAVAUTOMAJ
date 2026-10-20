@@ -20,11 +20,12 @@ comment le vérifier soi-même.
 | 6 | Suivi des laveurs | **Absent des rapports** | Complet | Classement « Activité par laveur » (serveur + écran + export) |
 | 7 | Rapports | Jour uniquement, CA incohérent | Complet | Granularité jour/semaine/mois, encaissements confirmés vs à confirmer, CSV enrichi |
 | 8 | Multi-station | Filtré partout, **non testé** | Garanti par les tests | Suite d'isolation inter-stations (5 tests) |
-| 9 | Sécurité et données | RBAC solide, **aucune sauvegarde** | Complet | Export JSON, `pg_dump`/`pg_restore`, écran « Données et sauvegarde » |
+| 9 | Sécurité et données | Contrôle par rôle grossier, **aucune sauvegarde** | Complet | Export JSON, `pg_dump`/`pg_restore`, écran « Données et sauvegarde », puis **permissions par action** (voir `RBAC-PERMISSIONS.md`) |
 | 10 | Essai et abonnement | Essai livré, **sans relance ni issue** | Complet | Relances J-3 / J-1 / échéance, demande d'activation de forfait |
 | 11 | Assistance | **Absente** | Complet | Bouton WhatsApp flottant avec message pré-rempli |
 
-Vérifications automatiques : **80 tests** (contre 50 avant cette itération).
+Vérifications automatiques : **113 tests** (50 avant cette itération, 80 après
+la mise à niveau fonctionnelle, 113 après l'ajout du contrôle d'accès).
 
 ---
 
@@ -273,7 +274,7 @@ numéro de démonstration est affiché et signalé comme tel.
 ## Comment tout vérifier
 
 ```bash
-npm test                       # 80 tests (droits, encaissements, rapports,
+npm test                       # 113 tests (permissions, encaissements, rapports,
                                # relances, assistance, isolation multi-station)
 ./node_modules/.bin/tsc -b     # typage
 npm run lint                   # 0 erreur

@@ -2,7 +2,7 @@ import { Router } from "express"
 import { z } from "zod"
 import type { Pool, PoolClient } from "pg"
 import { getPool } from "./db.ts"
-import { asyncRoute, body, tenant, parseId, requireRole } from "./http.ts"
+import { asyncRoute, body, tenant, parseId, requirePermission } from "./http.ts"
 import { HttpError } from "./auth.ts"
 
 const workerRoleSchema = z.enum(["car_washer", "moto_washer", "versatile_washer", "team_lead", "custom"])
@@ -70,6 +70,7 @@ export function createTeamRouter() {
   // GET /api/v1/workers — field workers of the organization (no login account needed).
   r.get(
     "/workers",
+    requirePermission("worker:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -83,6 +84,7 @@ export function createTeamRouter() {
   // GET /api/v1/workers/:id
   r.get(
     "/workers/:id",
+    requirePermission("worker:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -95,7 +97,7 @@ export function createTeamRouter() {
   // POST /api/v1/workers
   r.post(
     "/workers",
-    requireRole("owner", "manager"),
+    requirePermission("worker:create"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(workerValidators.create, req.body)
@@ -131,7 +133,7 @@ export function createTeamRouter() {
   // PATCH /api/v1/workers/:id — partial update, including status toggling.
   r.patch(
     "/workers/:id",
-    requireRole("owner", "manager"),
+    requirePermission("worker:update"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -184,7 +186,7 @@ export function createTeamRouter() {
   // DELETE /api/v1/workers/:id — hard delete unless the worker appears in wash history.
   r.delete(
     "/workers/:id",
-    requireRole("owner", "manager"),
+    requirePermission("worker:delete"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -201,6 +203,7 @@ export function createTeamRouter() {
   // GET /api/v1/users — login accounts of the organization.
   r.get(
     "/users",
+    requirePermission("user:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(

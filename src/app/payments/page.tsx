@@ -18,7 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
-import { useCapability } from "@/lib/subscription"
+import { useAccess } from "@/lib/permissions"
 import {
   PAYMENT_METHODS,
   PAYMENT_STATUS_LABELS,
@@ -37,7 +37,10 @@ const STATUS_FILTERS = [
 ] as const
 
 export default function PaymentsPage() {
-  const managePayments = useCapability("payments.manage")
+  const managePayments = useAccess("payment:verify", "payments.manage")
+  // Le remboursement est réservé au propriétaire : il touche la caisse et la
+  // comptabilité, et ne peut pas être délégué.
+  const refundPayments = useAccess("payment:cancel", "payments.manage")
   const [status, setStatus] = React.useState<(typeof STATUS_FILTERS)[number]["value"]>("all")
   const [method, setMethod] = React.useState<string>("all")
   const [refreshKey, setRefreshKey] = React.useState(0)
@@ -48,6 +51,31 @@ export default function PaymentsPage() {
   const { data, loading, error: loadError } = useApi<PaymentsResponse>(
     `/api/v1/payments?status=${status}&method=${method}&refresh=${refreshKey}`,
   )
+
+  /** Remboursement tracé : l'encaissement est conservé, jamais supprimé. */
+  async function refundPayment(paymentId: string) {
+    const reason = window.prompt(
+      "Motif du remboursement (conservé dans le journal d’audit) :",
+    )
+    if (!reason || reason.trim().length < 3) return
+    setBusyId(paymentId)
+    setError(null)
+    try {
+      const response = await apiFetch(`/api/v1/payments/${paymentId}/refund`, {
+        method: "POST",
+        body: JSON.stringify({ reason: reason.trim() }),
+      })
+      if (!response.ok) {
+        setError(await apiErrorMessage(response))
+        return
+      }
+      setRefreshKey((key) => key + 1)
+    } catch {
+      setError("Remboursement impossible : serveur injoignable.")
+    } finally {
+      setBusyId(null)
+    }
+  }
 
   const totals = data?.totals_by_method ?? []
   const pendingTotal = totals.reduce((sum, row) => sum + row.pending_cents, 0)
@@ -302,6 +330,16 @@ export default function PaymentsPage() {
                                 onClick={() => void confirmPayment(payment.id)}
                               >
                                 {busyId === payment.id ? "…" : "Confirmer"}
+                              </Button>
+                            ) : payment.status === "verified" && refundPayments.allowed ? (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-destructive hover:text-destructive"
+                                disabled={busyId === payment.id}
+                                onClick={() => void refundPayment(payment.id)}
+                              >
+                                {busyId === payment.id ? "…" : "Rembourser"}
                               </Button>
                             ) : (
                               <span className="text-xs text-muted-foreground">—</span>

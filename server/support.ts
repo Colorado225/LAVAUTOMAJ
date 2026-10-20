@@ -2,7 +2,7 @@ import { Router } from "express"
 import { z } from "zod"
 import type { Pool } from "pg"
 import { getPool } from "./db.ts"
-import { asyncRoute, body, tenant, HttpError } from "./http.ts"
+import { asyncRoute, body, tenant, requirePermission, HttpError } from "./http.ts"
 import { env } from "./env.ts"
 import { sendMail, upgradeRequestMessage } from "./mailer.ts"
 import { invalidateSubscriptionCache } from "./entitlements.ts"
@@ -106,6 +106,7 @@ export function createSupportRouter() {
   // l'assistance et on renvoie le lien WhatsApp pour finaliser en direct.
   r.post(
     "/support/upgrade-request",
+    requirePermission("subscription:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(

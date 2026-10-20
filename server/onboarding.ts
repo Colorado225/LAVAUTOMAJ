@@ -2,7 +2,7 @@ import { Router } from "express"
 import { z } from "zod"
 import type { Pool } from "pg"
 import { getPool } from "./db.ts"
-import { asyncRoute, body, tenant, requireRole } from "./http.ts"
+import { asyncRoute, body, tenant, requirePermission } from "./http.ts"
 import { HttpError } from "./auth.ts"
 import { TRIAL_DAYS, invalidateSubscriptionCache } from "./entitlements.ts"
 
@@ -190,6 +190,7 @@ export function createOnboardingRouter() {
   // PUT /api/v1/onboarding/progress — persist one wizard stage ({stage, data, plan_code, draft}).
   r.put(
     "/onboarding/progress",
+    requirePermission("settings:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const pool = db()
@@ -281,7 +282,7 @@ export function createOnboardingRouter() {
   // site, services, workers and subscription, then mark onboarding complete.
   r.post(
     "/onboarding/confirm",
-    requireRole("owner", "manager"),
+    requirePermission("settings:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       console.log("[api] confirm handler:", { organizationId: t.organizationId, userId: t.userId })

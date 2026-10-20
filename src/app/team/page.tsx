@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { useCapability } from "@/lib/subscription"
+import { useAccess } from "@/lib/permissions"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -67,7 +67,7 @@ function roleLabel(worker: WorkerRecord) {
 }
 
 export default function TeamPage() {
-  const manageTeam = useCapability("team.manage")
+  const manageTeam = useAccess("worker:create", "team.manage")
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<WorkerRecord[]>(`/api/v1/workers?refresh=${refreshKey}`)
   const { data: accounts, loading: accountsLoading, error: accountsError } = useApi<OrganizationAccount[]>(`/api/v1/users?refresh=${refreshKey}`)

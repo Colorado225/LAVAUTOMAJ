@@ -2,7 +2,7 @@ import { Router } from "express"
 import { z } from "zod"
 import type { Pool } from "pg"
 import { getPool } from "./db.ts"
-import { asyncRoute, body, tenant, requireRole, HttpError } from "./http.ts"
+import { asyncRoute, body, tenant, requirePermission, HttpError } from "./http.ts"
 import { env } from "./env.ts"
 import {
   TRIAL_DAYS,
@@ -42,7 +42,7 @@ export function createSubscriptionRouter() {
   if (env.NODE_ENV !== "production") {
     r.post(
       "/subscription/simulate",
-      requireRole("owner", "manager"),
+      requirePermission("subscription:manage"),
       asyncRoute(async (req, res) => {
         const payload = body(
           z

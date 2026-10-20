@@ -25,7 +25,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useApi } from "@/lib/api"
-import { useCapability } from "@/lib/subscription"
+import { useAccess } from "@/lib/permissions"
 import type { ChartConfig } from "@/components/ui/chart"
 import type { ReportGranularity, ReportResponse } from "@/lib/reporting-api"
 import {
@@ -143,8 +143,13 @@ function downloadReport(report: ReportResponse) {
     ["Lavages terminés", report.summary.completed_washes, ""],
     ["Encaissements", "", csvAmount(report.summary.revenue_cents)],
     ["Dont à confirmer (mobile money)", "", csvAmount(report.summary.pending_cents)],
-    ["Dépenses enregistrées", "", csvAmount(report.summary.expenses_cents)],
-    ["Solde opérationnel", "", csvAmount(report.summary.net_cents)],
+    // Les lignes financières ne sont exportées que si le rôle y a accès.
+    ...(report.financial_access
+      ? [
+          ["Dépenses enregistrées", "", csvAmount(report.summary.expenses_cents ?? 0)],
+          ["Solde opérationnel", "", csvAmount(report.summary.net_cents ?? 0)],
+        ]
+      : []),
     [],
     ["Évolution", "Début", "Fin", "Lavages", "Encaissements (XOF)", "Dépenses (XOF)"],
     ...report.series.map((row) => [
@@ -153,7 +158,7 @@ function downloadReport(report: ReportResponse) {
       row.period_end,
       row.wash_count,
       csvAmount(row.revenue_cents),
-      csvAmount(row.expenses_cents),
+      report.financial_access ? csvAmount(row.expenses_cents ?? 0) : "",
     ]),
     [],
     ["Prestations", "Lavages", "Quantités", "Montant des prestations (XOF)"],
@@ -170,9 +175,17 @@ function downloadReport(report: ReportResponse) {
     [],
     ["Activité par laveur", "Rôle", "Lavages", "Chiffre d’affaires attribué (XOF)"],
     ...report.top_workers.map((row) => [row.name, ROLE_LABELS[row.role] ?? row.role, row.wash_count, csvAmount(row.amount_cents)]),
-    [],
-    ["Dépenses par catégorie", "Nombre", "Montant (XOF)"],
-    ...report.expense_categories.map((row) => [expenseLabels[row.category] ?? row.category, row.expense_count, csvAmount(row.amount_cents)]),
+    ...(report.financial_access
+      ? [
+          [],
+          ["Dépenses par catégorie", "Nombre", "Montant (XOF)"],
+          ...report.expense_categories.map((row) => [
+            expenseLabels[row.category] ?? row.category,
+            row.expense_count,
+            csvAmount(row.amount_cents),
+          ]),
+        ]
+      : []),
   ]
   const content = `\uFEFF${rows.map((row) => row.map(csvCell).join(";")).join("\r\n")}`
   const url = URL.createObjectURL(new Blob([content], { type: "text/csv;charset=utf-8" }))
@@ -184,7 +197,7 @@ function downloadReport(report: ReportResponse) {
 }
 
 export default function ReportsPage() {
-  const exportReports = useCapability("reports.export")
+  const exportReports = useAccess("report:export", "reports.export")
   const today = useMemo(() => dateInAbidjan(), [])
   const [from, setFrom] = useState(() => shiftDate(dateInAbidjan(), -29))
   const [to, setTo] = useState(today)
@@ -194,13 +207,16 @@ export default function ReportsPage() {
     ? `/api/v1/reports/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&granularity=${granularity}`
     : ""
   const { data, loading, error } = useApi<ReportResponse>(reportPath)
+  // Le serveur renvoie null sur les champs financiers quand le rôle n'y a pas
+  // droit : l'interface s'aligne sur sa décision plutôt que de la deviner.
+  const financialAccess = data?.financial_access ?? false
 
   const chartData = useMemo(
     () => (data?.series ?? []).map((row) => ({
       date: row.date,
       wash_count: row.wash_count,
       revenue: row.revenue_cents / 100,
-      expenses: row.expenses_cents / 100,
+      expenses: (row.expenses_cents ?? 0) / 100,
     })),
     [data],
   )
@@ -320,8 +336,20 @@ export default function ReportsPage() {
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard index={0} title="Lavages enregistrés" icon={<CarFront className="size-4 text-muted-foreground" />} value={data?.summary.total_washes} loading={loading} detail={data ? `${data.summary.completed_washes} terminé${data.summary.completed_washes === 1 ? "" : "s"}` : undefined} />
           <MetricCard index={1} title="Encaissements" icon={<Wallet className="size-4 text-muted-foreground" />} value={data?.summary.revenue_cents} loading={loading} money detail={data ? `${data.summary.paid_washes} lavage${data.summary.paid_washes === 1 ? "" : "s"} réglé${data.summary.paid_washes === 1 ? "" : "s"}${data.summary.pending_cents > 0 ? ` · ${formatXof(data.summary.pending_cents)} à confirmer` : ""}` : undefined} />
-          <MetricCard index={2} title="Dépenses enregistrées" icon={<Receipt className="size-4 text-muted-foreground" />} value={data?.summary.expenses_cents} loading={loading} money />
-          <MetricCard index={3} title="Solde opérationnel" icon={<TrendingUp className="size-4 text-muted-foreground" />} value={data?.summary.net_cents} loading={loading} money />
+          {/* Dépenses et marge : réservées aux rôles disposant de report:financial. */}
+          {financialAccess ? (
+            <>
+              <MetricCard index={2} title="Dépenses enregistrées" icon={<Receipt className="size-4 text-muted-foreground" />} value={data?.summary.expenses_cents ?? undefined} loading={loading} money />
+              <MetricCard index={3} title="Solde opérationnel" icon={<TrendingUp className="size-4 text-muted-foreground" />} value={data?.summary.net_cents ?? undefined} loading={loading} money />
+            </>
+          ) : (
+            <Card className="row-in sm:col-span-2" style={{ "--row": 2 } as React.CSSProperties}>
+              <CardContent className="flex items-center gap-3 p-4 text-sm text-muted-foreground">
+                <Lock className="size-4 shrink-0" aria-hidden="true" />
+                Les dépenses et la marge de la station sont réservées au propriétaire.
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
@@ -381,6 +409,7 @@ export default function ReportsPage() {
             empty="Aucune prestation réalisée sur cette période."
             rows={(data?.top_services ?? []).map((row) => [row.name, row.wash_count, row.quantity, formatXof(row.amount_cents)])}
           />
+          {financialAccess && (
           <BreakdownTable
             title="Dépenses par catégorie"
             description="Dépenses enregistrées et non annulées."
@@ -388,7 +417,7 @@ export default function ReportsPage() {
             columns={["Catégorie", "Opérations", "Montant"]}
             empty="Aucune dépense enregistrée sur cette période."
             rows={(data?.expense_categories ?? []).map((row) => [expenseLabels[row.category] ?? row.category, row.expense_count, formatXof(row.amount_cents)])}
-          />
+          />)}
         </div>
 
         <BreakdownTable

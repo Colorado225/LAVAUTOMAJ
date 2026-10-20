@@ -3,6 +3,7 @@ import { promisify } from "node:util"
 import type { NextFunction, Request, Response } from "express"
 import type pg from "pg"
 import { getPool } from "./db.ts"
+import type { Permission } from "./permissions.ts"
 
 const scrypt = promisify(scryptCallback) as (password: string, salt: Buffer, keylen: number) => Promise<Buffer>
 
@@ -24,8 +25,24 @@ export interface AuthContext {
 }
 
 // Express request augmentation requires a namespace declaration by design.
-// eslint-disable-next-line @typescript-eslint/no-namespace
-declare global { namespace Express { interface Request { auth?: AuthContext; tenant?: { organizationId: string; userId: string; role: string; siteId?: string } } } }
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      auth?: AuthContext
+      tenant?: {
+        organizationId: string
+        userId: string
+        role: string
+        siteId?: string
+        /** Permissions effectives (rôle + exceptions), calculées par requireTenantContext. */
+        permissions: Set<Permission>
+        /** Raccourci de lecture, équivalent à `permissions.has(p)`. */
+        can: (permission: Permission) => boolean
+      }
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Password hashing (scrypt, Node built-in — no external dependency)

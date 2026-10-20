@@ -3,7 +3,7 @@
 import { useMemo, useState, type FormEvent } from "react"
 import { Link, useViewTransitionState } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { useCapability } from "@/lib/subscription"
+import { useAccess } from "@/lib/permissions"
 import { apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { Button } from "@/components/ui/button"
@@ -113,7 +113,7 @@ function WashReference({ washId, reference }: { washId: string; reference: strin
 }
 
 export default function WashesPage() {
-  const createWash = useCapability("washes.create")
+  const createWash = useAccess("wash:create", "washes.create")
   const [selectedSiteId, setSelectedSiteId] = useState("")
   const sitePath = "/api/v1/sites"
   const { data: sites, loading: sitesLoading, error: sitesError } = useApi<Site[]>(sitePath)
