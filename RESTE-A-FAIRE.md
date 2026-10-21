@@ -281,5 +281,37 @@ supplantée — sa suppression est une décision à prendre, pas un oubli.
   et sans emploi ; `washes.customer_id` n'est plus alimenté.
 - `clerk_webhook_events` : table morte, héritée d'une architecture abandonnée.
 - Deuxième instance impossible (limitation en mémoire, `setInterval`).
-- `wash_quality_events` absente ; l'achat ne met pas à jour le coût de
-  référence ; messages de validation encore en anglais.
+- `wash_quality_events` absente ; messages de validation encore en anglais.
+
+### Coût de référence d'un produit — réglé le 21 octobre 2026
+
+Acheter un produit ne touchait pas à sa fiche. Le gérant saisissait « 300 F le
+sachet » le premier jour, le prix montait à 350 au marché, et la fiche affichait
+toujours 300. Comme chaque lavage valorise sa consommation au coût de la fiche,
+**la marge affichée était fausse, et toujours dans le sens flatteur.**
+
+Désormais, **le dernier prix payé devient le coût de référence.**
+
+Pas une moyenne pondérée, pour deux raisons. D'abord le stock peut être négatif
+dans ce produit — une rupture n'a jamais le droit de bloquer un lavage — et une
+moyenne pondérée par une quantité négative ne veut plus rien dire. Ensuite
+c'est le chiffre que le gérant reconnaît : il a payé 350, sa fiche doit
+afficher 350. La valeur du stock se lit alors comme un coût de reconstitution,
+ce qui est la bonne question pour décider, et non comme une valeur comptable
+historique — la comptabilité, elle, part de l'export.
+
+Trois garde-fous :
+
+- **un prix nul n'écrase rien.** Recevoir un échantillon gratuit ne doit pas
+  faire croire que le produit ne coûte plus rien, ce qui rendrait toutes les
+  marges parfaites ;
+- **l'historique n'est jamais réécrit.** Chaque mouvement déjà enregistré garde
+  le coût qui était vrai ce jour-là ;
+- **le réalignement est tracé** (`product.cost_changed` : ancien prix, nouveau
+  prix, achat en cause), et l'écran dit d'où vient le chiffre — « prix payé le
+  21/10/2026 » ou « saisi à la main ». Corriger le coût à la main efface la
+  mention, pour que l'écran ne mente pas.
+
+**Limite assumée :** annuler un achat reprend la marchandise mais ne restaure
+pas l'ancien coût de référence. Un prix payé par erreur se corrige à la main
+sur la fiche produit.

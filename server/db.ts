@@ -298,6 +298,11 @@ CREATE TABLE IF NOT EXISTS products (
  created_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(),
  UNIQUE(organization_id,name)
 );
+-- Date du dernier realignement du cout de reference sur un prix reellement
+-- paye. Sert a dire a l'ecran d'ou vient le chiffre : un cout saisi a la main
+-- il y a six mois et un cout confirme par l'achat de mardi ne meritent pas la
+-- meme confiance.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS unit_cost_updated_at timestamptz;
 CREATE TABLE IF NOT EXISTS stock_movements (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  product_id uuid NOT NULL REFERENCES products(id), site_id uuid REFERENCES sites(id),

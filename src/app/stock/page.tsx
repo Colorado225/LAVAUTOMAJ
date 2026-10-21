@@ -62,6 +62,7 @@ interface Product {
   category_name: string | null
   unit: string
   unit_cost_cents: number
+  unit_cost_updated_at: string | null
   low_stock_threshold_milli: number
   stock_milli: number
   low_stock: boolean
@@ -479,7 +480,14 @@ export default function StockPage() {
                             </div>
                           )}
                         </TableCell>
-                        <TableCell>{formatXOF(product.unit_cost_cents)}</TableCell>
+                        <TableCell>
+                          {formatXOF(product.unit_cost_cents)}
+                          <div className="text-xs text-muted-foreground">
+                            {product.unit_cost_updated_at
+                              ? `Prix payé le ${new Date(product.unit_cost_updated_at).toLocaleDateString("fr-CI")}`
+                              : "Saisi à la main"}
+                          </div>
+                        </TableCell>
                         <TableCell>{formatXOF(stockValueCents(product.stock_milli, product.unit_cost_cents))}</TableCell>
                         <TableCell>
                           <div className="flex flex-wrap justify-end gap-1">

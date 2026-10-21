@@ -94,7 +94,7 @@ export const stockValidators = {
     .strip(),
 }
 
-const PRODUCT_FIELDS = `p.id, p.name, p.category_id, p.unit, p.unit_cost_cents,
+const PRODUCT_FIELDS = `p.id, p.name, p.category_id, p.unit, p.unit_cost_cents, p.unit_cost_updated_at,
   p.low_stock_threshold_milli, p.is_active, p.created_at`
 
 const MOVEMENT_FIELDS = `m.id, m.product_id, m.site_id, m.kind, m.quantity_milli,
@@ -452,10 +452,15 @@ export function createStockRouter() {
 
         const merged = { ...old, ...input }
         const q = await client.query(
+          // Corriger le cout a la main efface la marque laissee par le dernier
+          // achat : l'ecran ne doit pas continuer a annoncer « prix paye le... »
+          // alors que le chiffre vient d'etre retape.
           `UPDATE products SET name=$3, category_id=$4, unit_cost_cents=$5,
-             low_stock_threshold_milli=$6, is_active=$7
+             low_stock_threshold_milli=$6, is_active=$7,
+             unit_cost_updated_at = CASE WHEN $5 <> unit_cost_cents THEN NULL ELSE unit_cost_updated_at END
            WHERE id=$1::uuid AND organization_id=$2::uuid
-           RETURNING id, name, category_id, unit, unit_cost_cents, low_stock_threshold_milli, is_active, created_at`,
+           RETURNING id, name, category_id, unit, unit_cost_cents, unit_cost_updated_at,
+                     low_stock_threshold_milli, is_active, created_at`,
           [
             id,
             t.organizationId,
