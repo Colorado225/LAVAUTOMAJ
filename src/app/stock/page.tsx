@@ -3,8 +3,11 @@
 import type * as React from "react"
 
 import { useMemo, useState, type FormEvent } from "react"
+import { Link } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
+import { useCapability } from "@/lib/subscription"
+import { PlanGate } from "@/components/subscription/plan-gate"
 import { actionGate } from "@/lib/action-blocking"
 import { BlockedReason } from "@/components/access/blocked-reason"
 import { Badge } from "@/components/ui/badge"
@@ -70,6 +73,12 @@ interface Movement {
   created_at: string
   first_name: string | null
   last_name: string | null
+  /** Renseigné seulement pour une consommation ou sa contrepassation. */
+  wash_id: string | null
+  wash_reference: string | null
+  /** Renseigné seulement pour une entrée issue d'un achat, ou sa reprise. */
+  purchase_id: string | null
+  purchase_reference: string | null
 }
 
 const KIND_LABELS: Record<string, string> = {
@@ -91,6 +100,9 @@ export default function StockPage() {
   const readStock = useAccess("stock:read")
   const manageStock = useAccess("stock:manage")
   const moveStock = useAccess("stock:move")
+  // Le suivi du stock appartient au forfait Pro. « stock.read » n'est pas
+  // coupé en lecture seule : un espace échu reste consultable.
+  const planStock = useCapability("stock.manage")
 
   // Ouvrir un formulaire n'écrit rien : on laisse cliquer pendant que les
   // droits chargent. Enregistrer écrit tout de suite : on attend.
@@ -294,11 +306,30 @@ export default function StockPage() {
     setRefreshKey((key) => key + 1)
   }
 
+  // Le rôle est évalué avant le forfait : un caissier reçoit un refus de
+  // droit, jamais une invitation à payer pour une page qui ne le concerne pas.
   if (readStock.loading === false && readStock.allowed === false) {
     return (
       <BaseLayout title="Stock" description="Produits, mouvements et seuils d’alerte.">
         <div className="p-4">
           <BlockedReason reason={readStock.reason ?? "Vous n’avez pas accès au stock."} />
+        </div>
+      </BaseLayout>
+    )
+  }
+
+  if (planStock.loading === false && planStock.allowed === false) {
+    return (
+      <BaseLayout title="Stock" description="Produits, mouvements et seuils d’alerte.">
+        <div className="p-4">
+          <PlanGate
+            permission="stock:read"
+            capability="stock.manage"
+            title="Suivi du stock"
+            pitch="Comptez vos sachets d’Omo, vos bidons et vos chiffons, voyez ce qu’un lavage consomme réellement, et sachez quoi racheter avant la rupture."
+          >
+            <span />
+          </PlanGate>
         </div>
       </BaseLayout>
     )
@@ -471,9 +502,46 @@ export default function StockPage() {
                         {movement.quantity_milli > 0 ? "+" : "−"}
                         {formatQuantity(Math.abs(movement.quantity_milli), movement.unit)}
                       </TableCell>
-                      <TableCell className="max-w-64 truncate text-sm text-muted-foreground">{movement.reason ?? "—"}</TableCell>
+                      <TableCell className="max-w-64 truncate text-sm text-muted-foreground">
+                        {movement.purchase_id && movement.purchase_reference ? (
+                          <Link
+                            to="/achats"
+                            className="underline underline-offset-2 hover:text-foreground"
+                          >
+                            {movement.kind === "reversal" ? "Achat annulé" : "Achat"} {movement.purchase_reference}
+                          </Link>
+                        ) : movement.wash_id && movement.wash_reference ? (
+                          <Link
+                            to={`/washes/${movement.wash_id}`}
+                            className="underline underline-offset-2 hover:text-foreground"
+                          >
+                            {movement.kind === "reversal" ? "Lavage annulé" : "Lavage"} {movement.wash_reference}
+                          </Link>
+                        ) : (
+                          (movement.reason ?? "—")
+                        )}
+                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {movement.first_name ? `${movement.first_name} ${movement.last_name ?? ""}`.trim() : "—"}
+                        {movement.wash_id || movement.purchase_id ? (
+                          // Déduction automatique : la personne reste dans la
+                          // donnée — c'est elle la cause, la traçabilité en
+                          // dépend — mais l'écran ne doit pas présenter un
+                          // mouvement déclenché par le système comme un geste
+                          // délibéré de sa part.
+                          <span
+                            title={
+                              movement.first_name
+                                ? `Déclenché en enregistrant ${movement.purchase_id ? "l’achat" : "le lavage"} par ${`${movement.first_name} ${movement.last_name ?? ""}`.trim()}`
+                                : `Déclenché par l’enregistrement ${movement.purchase_id ? "de l’achat" : "du lavage"}`
+                            }
+                          >
+                            Système
+                          </span>
+                        ) : movement.first_name ? (
+                          `${movement.first_name} ${movement.last_name ?? ""}`.trim()
+                        ) : (
+                          "—"
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}

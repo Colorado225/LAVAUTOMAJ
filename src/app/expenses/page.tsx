@@ -1,6 +1,7 @@
 "use client"
 
 import { useRef, useState, type FormEvent } from "react"
+import { Link } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
 import { actionGate } from "@/lib/action-blocking"
@@ -64,6 +65,8 @@ interface Expense {
   cash_session_id: string | null
   description: string | null
   beneficiary: string | null
+  /** Renseigné quand la dépense a été écrite par un achat, jamais à la main. */
+  purchase_id: string | null
 }
 
 const paymentMethods = [
@@ -472,7 +475,20 @@ export default function ExpensesPage() {
                     style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
                   >
                     <TableCell>{new Date(e.expense_date).toLocaleDateString("fr-CI")}</TableCell>
-                    <TableCell>{expenseCategories.find(c => c.value === e.category)?.label || e.category}</TableCell>
+                    <TableCell>
+                      {expenseCategories.find(c => c.value === e.category)?.label || e.category}
+                      {/* Dire d'où vient la ligne est la moitié visible de la
+                          garantie : sans cette mention, le gérant croirait
+                          l'achat non enregistré et le ressaisirait ici. */}
+                      {e.purchase_id && (
+                        <Link
+                          to="/achats"
+                          className="mt-0.5 block text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                        >
+                          Issue d’un achat — déjà comptée
+                        </Link>
+                      )}
+                    </TableCell>
                     <TableCell>{e.beneficiary || "-"}</TableCell>
                     <TableCell className="text-right font-medium">
                       {(e.amount_cents / 100).toLocaleString("fr-CI")}

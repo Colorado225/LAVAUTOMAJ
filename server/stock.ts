@@ -21,6 +21,7 @@ import type { Pool } from "pg"
 import { getPool } from "./db.ts"
 import { asyncRoute, body, tenant, parseId, requirePermission } from "./http.ts"
 import { HttpError } from "./auth.ts"
+import { requireCapability } from "./entitlements.ts"
 import { fingerprint, withIdempotency } from "./idempotency.ts"
 import { signedQuantity, canApply, isLowStock, inventoryDelta, UNITS } from "./stock-rules.ts"
 
@@ -97,7 +98,7 @@ const PRODUCT_FIELDS = `p.id, p.name, p.category_id, p.unit, p.unit_cost_cents,
   p.low_stock_threshold_milli, p.is_active, p.created_at`
 
 const MOVEMENT_FIELDS = `m.id, m.product_id, m.site_id, m.kind, m.quantity_milli,
-  m.unit_cost_cents, m.reason, m.reference, m.reverses_movement_id, m.created_at`
+  m.unit_cost_cents, m.reason, m.reference, m.reverses_movement_id, m.wash_id, m.purchase_id, m.created_at`
 
 /**
  * Stock courant d'un produit, verrou posé.
@@ -270,6 +271,7 @@ export function createStockRouter() {
   r.get(
     "/product-categories",
     requirePermission("stock:read"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -284,6 +286,7 @@ export function createStockRouter() {
   r.post(
     "/product-categories",
     requirePermission("stock:manage"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(stockValidators.category, req.body)
@@ -310,6 +313,7 @@ export function createStockRouter() {
   r.get(
     "/products",
     requirePermission("stock:read"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -335,6 +339,7 @@ export function createStockRouter() {
   r.post(
     "/products",
     requirePermission("stock:manage"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(stockValidators.product, req.body)
@@ -413,6 +418,7 @@ export function createStockRouter() {
   r.patch(
     "/products/:id",
     requirePermission("stock:manage"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -489,15 +495,19 @@ export function createStockRouter() {
   r.get(
     "/stock-movements",
     requirePermission("stock:read"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const productId = typeof req.query.product_id === "string" ? parseId(req.query.product_id) : null
       const q = await db().query(
         `SELECT ${MOVEMENT_FIELDS}, p.name AS product_name, p.unit,
-                u.first_name, u.last_name
+                u.first_name, u.last_name, w.reference AS wash_reference,
+                pu.reference AS purchase_reference
          FROM stock_movements m
          JOIN products p ON p.id = m.product_id
          LEFT JOIN users u ON u.id = m.created_by
+         LEFT JOIN washes w ON w.id = m.wash_id AND w.organization_id = m.organization_id
+         LEFT JOIN purchases pu ON pu.id = m.purchase_id AND pu.organization_id = m.organization_id
          WHERE m.organization_id=$1::uuid AND ($2::uuid IS NULL OR m.product_id=$2::uuid)
          ORDER BY m.created_at DESC LIMIT 200`,
         [t.organizationId, productId],
@@ -509,6 +519,7 @@ export function createStockRouter() {
   r.post(
     "/stock-movements",
     requirePermission("stock:move"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(stockValidators.movement, req.body)
@@ -591,6 +602,7 @@ export function createStockRouter() {
   r.post(
     "/products/:id/inventory",
     requirePermission("stock:move"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -652,6 +664,7 @@ export function createStockRouter() {
   r.post(
     "/stock-movements/:id/reverse",
     requirePermission("stock:move"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -736,6 +749,7 @@ export function createStockRouter() {
   r.get(
     "/services/:id/consumables",
     requirePermission("service:read"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -757,6 +771,7 @@ export function createStockRouter() {
   r.put(
     "/services/:id/consumables",
     requirePermission("service:manage"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)

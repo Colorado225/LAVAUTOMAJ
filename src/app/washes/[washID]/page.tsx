@@ -6,6 +6,7 @@ import { Link, useParams } from "react-router-dom"
 import { ArrowLeft, Ban, BadgeCheck, Lock, RefreshCw, Wallet } from "lucide-react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useApi } from "@/lib/api"
+import { formatQuantity } from "@/lib/quantity"
 import { useMutation } from "@/lib/use-mutation"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { Input } from "@/components/ui/input"
@@ -59,11 +60,26 @@ interface Payment {
   received_at: string
 }
 
+interface Consumable {
+  id: string
+  product_id: string
+  product_name: string
+  unit: string
+  kind: string
+  quantity_milli: number
+}
+
 interface WashDetail {
   wash: Wash
   items: WashItem[]
   workers: Worker[]
   payments: Payment[]
+  /**
+   * Absent — et non vide — lorsque le lecteur n'a pas accès au stock ou que
+   * son forfait ne l'inclut pas. Une liste vide dirait « ce lavage n'a rien
+   * consommé », ce qui est une tout autre affirmation.
+   */
+  consumables?: Consumable[]
 }
 
 interface Site {
@@ -342,6 +358,41 @@ export default function WashDetailPage() {
                 </Table>
               </div>
             </section>
+
+            {detail.consumables && (
+              <section className="overflow-hidden rounded-lg border bg-card">
+                <div className="border-b p-4">
+                  <h2 className="font-semibold">Sorti du stock</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Déduit automatiquement à l’enregistrement. Sans effet sur le prix facturé.
+                  </p>
+                </div>
+                {detail.consumables.length === 0 ? (
+                  <p className="p-4 text-sm text-muted-foreground">
+                    Ce lavage n’a rien sorti du stock. Déclarez les consommables de la prestation
+                    dans le catalogue pour que la déduction soit automatique.
+                  </p>
+                ) : (
+                  <ul className="divide-y">
+                    {detail.consumables.map((ligne) => (
+                      <li key={ligne.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
+                        <span className="font-medium">{ligne.product_name}</span>
+                        <span
+                          className={
+                            ligne.kind === "reversal"
+                              ? "text-emerald-700 dark:text-emerald-400"
+                              : "text-muted-foreground"
+                          }
+                        >
+                          {ligne.kind === "reversal" ? "rendu au stock : " : ""}
+                          {formatQuantity(Math.abs(ligne.quantity_milli), ligne.unit)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            )}
 
             <section className="grid gap-6 lg:grid-cols-2">
               <div className="rounded-lg border bg-card p-4">

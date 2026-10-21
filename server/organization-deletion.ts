@@ -43,6 +43,8 @@ const PURGE_ORDER: { table: string; where: string }[] = [
   // produits et vers les services.
   { table: "service_consumables", where: "organization_id = $1::uuid" },
   { table: "stock_movements", where: "organization_id = $1::uuid" },
+  // Les lignes d'achat pointent vers les produits : elles partent avant eux.
+  { table: "purchase_items", where: "organization_id = $1::uuid" },
   { table: "products", where: "organization_id = $1::uuid" },
   { table: "product_categories", where: "organization_id = $1::uuid" },
   { table: "cash_movements", where: "organization_id = $1::uuid" },
@@ -51,9 +53,17 @@ const PURGE_ORDER: { table: string; where: string }[] = [
   { table: "cash_sessions", where: "organization_id = $1::uuid" },
   { table: "expenses", where: "organization_id = $1::uuid" },
   { table: "expense_categories", where: "organization_id = $1::uuid" },
+  // Les achats sont référencés par les mouvements de stock et par les
+  // dépenses, tous deux déjà purgés ci-dessus. Les fournisseurs ferment la
+  // marche, puisque les achats les désignent.
+  { table: "purchases", where: "organization_id = $1::uuid" },
+  { table: "suppliers", where: "organization_id = $1::uuid" },
   { table: "services", where: "organization_id = $1::uuid" },
   { table: "service_categories", where: "organization_id = $1::uuid" },
   { table: "vehicle_categories", where: "organization_id = $1::uuid" },
+  // Présences et horaires pointent vers les laveurs : ils partent avant eux.
+  { table: "attendance_records", where: "organization_id = $1::uuid" },
+  { table: "work_schedules", where: "organization_id = $1::uuid" },
   { table: "workers", where: "organization_id = $1::uuid" },
   { table: "customers", where: "organization_id = $1::uuid" },
   { table: "sites", where: "organization_id = $1::uuid" },

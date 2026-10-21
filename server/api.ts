@@ -53,6 +53,10 @@ export const washValidators = {
         )
         .min(1, "Sélectionnez au moins une prestation."),
       worker_ids: z.array(z.string().uuid()).max(50).default([]),
+      // Responsable principal, facultatif. Il doit figurer parmi les laveurs
+      // affectés : désigner un responsable absent de l'équipe du lavage
+      // produirait une statistique que personne ne pourrait expliquer.
+      principal_worker_id: z.string().uuid().nullable().optional(),
       payment_method: z.enum(PAYMENT_METHODS),
       amount_received_cents: z.number().int().min(0).max(100000000),
       cash_session_id: z.string().uuid().optional(),
@@ -480,7 +484,38 @@ export function createApiRouter() {
           [id],
         ),
       ])
-      res.json({ wash: washQ.rows[0], items: items.rows, workers: workers.rows, payments: payments.rows })
+      // Ce que le lavage a sorti du stock. Réservé à qui a le droit de voir le
+      // stock **et** dont le forfait l'inclut : sans cette double condition,
+      // la fiche de lavage — ouverte à tout caissier — contournerait d'un
+      // coup les deux portes posées sur le module stock, coûts unitaires
+      // compris. La clé est absente de la réponse plutôt que vide : une liste
+      // vide signifie « ce lavage n'a rien consommé », ce qui est autre chose.
+      //
+      // On lit les mouvements réellement écrits, pas la recette : celle-ci a
+      // pu changer depuis, et un lavage saisi hors forfait n'a rien déduit.
+      const peutVoirLeStock =
+        t.can("stock:read") && req.subscription?.capabilities["stock.manage"] === true
+      const consumables = peutVoirLeStock
+        ? (
+            await pool.query(
+              `SELECT m.id, m.product_id, m.kind, m.quantity_milli, m.created_at,
+                      p.name AS product_name, p.unit
+               FROM stock_movements m
+               JOIN products p ON p.id = m.product_id
+               WHERE m.wash_id=$1::uuid AND m.organization_id=$2::uuid
+               ORDER BY m.created_at, p.name`,
+              [id, t.organizationId],
+            )
+          ).rows
+        : undefined
+
+      res.json({
+        wash: washQ.rows[0],
+        items: items.rows,
+        workers: workers.rows,
+        payments: payments.rows,
+        ...(consumables === undefined ? {} : { consumables }),
+      })
     }),
   )
 
@@ -582,10 +617,30 @@ export function createApiRouter() {
           // Ce que le lavage a consommé sort du stock dans la même
           // transaction : si le lavage échoue, rien n'est déduit. Jamais
           // bloquant — le produit a réellement été utilisé.
-          await consumeForWash(client, t.organizationId, wash.id, input.items, t.userId)
+          //
+          // Le suivi du stock appartient au forfait Pro. Sans lui, on ne
+          // déduit rien : écrire dans un stock que le client ne peut ni
+          // consulter ni corriger reviendrait à le fausser en silence. Une
+          // station rétrogradée retrouve donc son stock figé là où il était,
+          // à inventorier. Et en aucun cas l'absence de forfait n'empêche
+          // d'enregistrer le lavage : c'est le métier même de Starter.
+          if (req.subscription?.capabilities["stock.manage"]) {
+            await consumeForWash(client, t.organizationId, wash.id, input.items, t.userId)
+          }
 
+          const principal = input.principal_worker_id ?? null
+          if (principal && !input.worker_ids.includes(principal)) {
+            throw new HttpError(
+              400,
+              "invalid_principal",
+              "Le responsable principal doit faire partie des laveurs affectés à ce lavage.",
+            )
+          }
           for (const workerId of new Set(input.worker_ids)) {
-            await client.query("INSERT INTO wash_assignments(wash_id, worker_id) VALUES($1,$2)", [wash.id, workerId])
+            await client.query(
+              "INSERT INTO wash_assignments(wash_id, worker_id, assignment_role, assigned_by) VALUES($1,$2,$3,$4)",
+              [wash.id, workerId, workerId === principal ? "principal" : "participant", t.userId],
+            )
           }
 
           if (input.amount_received_cents > 0) {
@@ -659,6 +714,11 @@ export function createApiRouter() {
 
         // Le lavage n'a pas eu lieu : ce qu'il avait consommé revient au
         // stock, par contrepassation et non par suppression.
+        //
+        // Volontairement non soumise au forfait, contrairement à la
+        // déduction : s'il n'y a rien à contrepasser, l'appel ne fait rien.
+        // S'il y a quelque chose, c'est qu'une consommation a bien eu lieu,
+        // et la laisser en place fausserait un stock déjà écrit.
         await reverseWashConsumption(client, t.organizationId, id, t.userId)
 
         const q = await client.query(
