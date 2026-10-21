@@ -24,6 +24,7 @@ import {
 } from "./organization-deletion.ts"
 import { createPasswordResetToken } from "./auth.ts"
 import { registerAccountRoutes } from "./console-accounts.ts"
+import { registerSupportRoutes } from "./console-support.ts"
 
 // ---------------------------------------------------------------------------
 // Back-office de l'éditeur
@@ -1167,6 +1168,7 @@ export function createAdminRouter() {
   )
 
   registerAccountRoutes(r)
+  registerSupportRoutes(r)
 
   return r
 }

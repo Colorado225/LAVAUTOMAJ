@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { LifeBuoy, Mail, MessageCircle, X } from "lucide-react"
+import { FileText, LifeBuoy, Mail, MessageCircle, X } from "lucide-react"
+import { Link } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { useApi } from "@/lib/api"
 import { useSubscription } from "@/lib/subscription"
@@ -16,6 +17,11 @@ import { cn } from "cn"
  */
 
 interface SupportConfig {
+  commitment?: {
+    label: string
+    guaranteed: boolean
+    business_hours: string
+  }
   whatsapp_number: string
   whatsapp_display: string
   email: string
@@ -100,7 +106,9 @@ export function SupportButton() {
           <div>
             <p className="font-semibold">Besoin d’aide ?</p>
             <p className="text-sm text-muted-foreground">
-              Écrivez-nous sur WhatsApp, on répond pendant les heures d’ouverture.
+              {data.commitment?.guaranteed
+                ? `Votre forfait vous garantit une réponse sous ${data.commitment.label}.`
+                : "Écrivez-nous sur WhatsApp, on répond pendant les heures d’ouverture."}
             </p>
           </div>
           <button
@@ -114,6 +122,18 @@ export function SupportButton() {
         </div>
 
         <div className="mt-4 flex flex-col gap-2">
+          {/* En premier : le chemin qui laisse une trace. WhatsApp reste
+              proposé juste en dessous pour l'urgence, parce que c'est le
+              canal que les gérants utilisent réellement. */}
+          <Link
+            to="/support"
+            onClick={() => setOpen(false)}
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition-transform duration-150 hover:scale-[1.02] active:scale-[0.98]"
+          >
+            <FileText className="size-4" aria-hidden="true" />
+            Décrire mon problème
+          </Link>
+
           {whatsappUrl ? (
             <a
               href={whatsappUrl}
@@ -148,7 +168,8 @@ export function SupportButton() {
               {data.is_placeholder && " (numéro de démonstration)"} ·{" "}
             </>
           )}
-          Votre station et votre forfait sont automatiquement indiqués dans le message.
+          Une demande écrite garde une trace et reçoit une réponse suivie ; WhatsApp va plus
+          vite mais se perd dans le fil.
         </p>
       </div>
 

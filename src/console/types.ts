@@ -231,3 +231,89 @@ export interface ConsoleAccountDetail {
   sessions: ConsoleAccountSession[]
   sole_owner_of: Array<{ organization_id: string; name: string }>
 }
+
+/** État de l'engagement de délai sur une demande. */
+export interface SupportSla {
+  breached: boolean
+  hours_remaining: number
+  responded: boolean
+}
+
+export interface SupportRequest {
+  id: string
+  organization_id: string
+  organization_name: string
+  created_by: string | null
+  subject: string
+  category: string
+  status: string
+  plan_code: string | null
+  commitment_hours: number
+  response_due_at: string
+  first_responded_at: string | null
+  resolved_at: string | null
+  created_at: string
+  updated_at: string
+  requester_name: string | null
+  requester_email: string | null
+  requester_phone: string | null
+  message_count: number
+  sla: SupportSla
+}
+
+export interface SupportMessage {
+  id: string
+  author_user_id: string | null
+  author_operator_email: string | null
+  author_name: string | null
+  internal: boolean
+  body: string
+  created_at: string
+}
+
+export const SUPPORT_STATUS_LABELS: Record<string, string> = {
+  open: "En attente de réponse",
+  answered: "Répondu",
+  resolved: "Résolu",
+}
+
+export const SUPPORT_CATEGORY_LABELS: Record<string, string> = {
+  technique: "Problème technique",
+  facturation: "Abonnement et facturation",
+  formation: "Prise en main",
+  autre: "Autre",
+}
+
+/** Diagnostic technique d'un membre, vu depuis la console. */
+export interface MemberDiagnostic {
+  member: {
+    user_id: string
+    email: string
+    name: string | null
+    organization_id: string
+    organization_name: string
+    role: string
+    role_label: string
+    account_status: string
+    membership_status: string
+    disabled_at: string | null
+    active_sessions: number
+    last_seen_at: string | null
+  }
+  subscription: {
+    status: string
+    plan_code: string | null
+    plan_name: string | null
+    read_only: boolean
+    days_remaining: number
+    restricted: string[]
+  }
+  limits: Array<{ key: string; label: string; used: number; max: number | null; reached: boolean }>
+  permissions: {
+    granted: Array<{ permission: string; label: string; source: string }>
+    overrides: Array<{ permission: string; label: string; granted: boolean }>
+  }
+  blockers: Array<{ cause: string; explanation: string }>
+  recent_activity: Array<{ action: string; entity_type: string | null; created_at: string }>
+  server_time: string
+}

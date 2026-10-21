@@ -37,6 +37,31 @@ export interface PricingPlan {
   featured?: boolean
 }
 
+/**
+ * Délai de première réponse annoncé, par forfait, **en heures ouvrées**.
+ *
+ * C'est la définition de « assistance prioritaire » : non plus un badge, mais
+ * un engagement que le client peut vérifier. La source de vérité est
+ * `RESPONSE_COMMITMENT_HOURS` dans `server/support-sla.ts`, qui pilote les
+ * échéances réelles ; `tests/pricing-promises.test.ts` interdit la dérive
+ * entre les deux.
+ */
+export const PUBLIC_RESPONSE_HOURS: Record<string, number> = {
+  starter: 30,
+  pro: 10,
+  business: 4,
+}
+
+/** Une journée d'assistance : du lundi au vendredi, 8 h - 18 h. */
+export const PUBLIC_BUSINESS_HOURS_PER_DAY = 10
+
+/** Rend un délai lisible : « 4 heures ouvrées », « 1 jour ouvré ». */
+export function publicResponseLabel(hours: number): string {
+  if (hours < PUBLIC_BUSINESS_HOURS_PER_DAY) return `${hours} heures ouvrées`
+  const days = hours / PUBLIC_BUSINESS_HOURS_PER_DAY
+  return days === 1 ? "1 jour ouvré" : `${days} jours ouvrés`
+}
+
 export const PRICING_PLANS: PricingPlan[] = [
   {
     code: "starter",
@@ -51,6 +76,7 @@ export const PRICING_PLANS: PricingPlan[] = [
       "Recettes par mode de paiement",
       "Suivi simple des dépenses",
       "Rapport quotidien",
+      `Assistance WhatsApp, réponse sous ${publicResponseLabel(PUBLIC_RESPONSE_HOURS.starter)}`,
     ],
   },
   {
@@ -67,7 +93,7 @@ export const PRICING_PLANS: PricingPlan[] = [
       "Suivi des dépenses et des marges opérationnelles",
       "Rapports détaillés et exports",
       "Historique des opérations et traçabilité",
-      "Assistance prioritaire",
+      `Assistance prioritaire : réponse sous ${publicResponseLabel(PUBLIC_RESPONSE_HOURS.pro)}`,
     ],
     featured: true,
   },
@@ -84,6 +110,7 @@ export const PRICING_PLANS: PricingPlan[] = [
       "Vue consolidée du propriétaire",
       "Permissions avancées",
       "Rapports consolidés",
+      `Assistance prioritaire : réponse sous ${publicResponseLabel(PUBLIC_RESPONSE_HOURS.business)}`,
       "Accompagnement à la mise en service",
     ],
   },

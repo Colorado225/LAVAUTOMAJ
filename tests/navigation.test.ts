@@ -69,10 +69,16 @@ const NOT_IN_SIDEBAR: Record<string, string> = {
   "/onboarding": "parcours de première configuration, atteint automatiquement",
   "/washes/:washID": "détail d'un lavage, atteint depuis la liste",
   "*": "page 404 de repli",
-  "/admin":
-    "back-office de l'éditeur : vue sur le parc entier, pas un écran de station. " +
-    "Atteint depuis le menu utilisateur, et seulement par un administrateur de plateforme.",
+  "/support":
+    "assistance : atteinte depuis le bouton d'aide flottant, présent sur toutes les pages. " +
+    "Pas dans la barre latérale parce que celle-ci est filtrée par permission, alors que " +
+    "demander de l'aide n'en exige aucune : un agent de lavage doit pouvoir signaler un problème.",
 }
+
+// Retiré : "/admin". Le back-office a quitté l'application cliente au profit
+// de /console (console autonome, authentification séparée). L'entrée restait
+// ici alors que la route n'existe plus — une exception sans objet finit par
+// couvrir autre chose que ce qu'elle décrivait.
 
 /** Préfixes hors barre latérale par nature. */
 const PUBLIC_PREFIXES = ["/auth/", "/errors/"]

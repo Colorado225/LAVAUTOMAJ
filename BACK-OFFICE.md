@@ -21,7 +21,7 @@ puis à une exigence venue ensuite : **qu'aucune passerelle ne relie la console
 
 ## 1. Ce que la console permet
 
-Quatre familles, correspondant aux quatre raisons d'ouvrir cet écran.
+Cinq familles, correspondant aux cinq raisons d'ouvrir cet écran.
 
 ### 1.1 Savoir où en est l'argent
 
@@ -59,7 +59,15 @@ la fois, fermer ses sessions. Le détail au §6.
 Également : suspendre la station entière (lecture seule) et **supprimer une
 organisation**, en deux temps, décrits au §4.
 
-### 1.4 Surveiller
+### 1.4 Répondre à une demande d'aide
+
+File des demandes ouvertes, **triée par échéance d'engagement** et non par
+date d'arrivée : un Business arrivé à midi passe devant un Starter arrivé le
+matin. Fil de discussion, notes internes invisibles du client, et un
+diagnostic technique qui nomme la cause d'un blocage sans se connecter à la
+place du client. Le détail au §7.
+
+### 1.5 Surveiller
 
 Journal de toutes les interventions de l'éditeur, filtrable par station, et
 détection des stations **dormantes** (aucun lavage depuis 14 jours) — le
@@ -431,7 +439,121 @@ verte ne dit rien d'un chemin que personne n'a parcouru. Les 20 tests de
 - **Supprimer un compte.** Un compte n'est purgé que lorsque sa dernière
   station l'est (§4).
 
-## 7. Les routes
+## 7. L'assistance
+
+Jusqu'ici, une demande d'aide était un message WhatsApp : aucune trace, donc
+aucun moyen de savoir combien de demandes sont ouvertes, depuis quand, ni si
+l'on a répondu. WhatsApp reste le canal de discussion — c'est celui que les
+gérants utilisent réellement, et lutter contre serait perdre. Ce qui change,
+c'est que la conversation a maintenant une mémoire.
+
+### 7.1 Les deux chemins, et pourquoi les deux
+
+Le client ouvre sa demande **dans l'application** : elle est datée, rattachée
+à sa station et à son forfait, et la réponse se lit au même endroit des
+semaines plus tard. Le lien **WhatsApp** reste proposé juste en dessous, pour
+l'urgence. Les deux cohabitent parce qu'ils ne servent pas à la même chose :
+WhatsApp va plus vite et se perd dans le fil, l'écrit garde une trace et reçoit
+une réponse suivie. L'interface le dit en ces termes au client.
+
+### 7.2 « Assistance prioritaire » : ce que le mot engage
+
+La page tarifaire vendait « assistance prioritaire » sans définition.
+`TARIFS.md` §6 refusait d'écrire la moindre ligne tant que l'arbitrage
+n'était pas fait : promettre *prioritaire* sans délai mesurable est une
+promesse qu'on ne peut ni tenir ni démentir.
+
+Le mot engage désormais **un délai de première réponse** :
+
+| Forfait | Première réponse | Garanti |
+|---|---|---|
+| Business | 4 heures ouvrées | oui |
+| Pro | 1 jour ouvré | oui |
+| Starter | 3 jours ouvrés | oui |
+| Essai, abonnement échu | 5 jours ouvrés | **non**, indicatif |
+
+Journée d'assistance : **lundi-vendredi, 8 h – 18 h, heure d'Abidjan**. Le
+calcul tient en UTC sans bibliothèque de fuseaux parce que la Côte d'Ivoire est
+à UTC+0 toute l'année, sans heure d'été — hypothèse écrite en tête de
+`server/support-sla.ts`, à revisiter si le produit sort de cette zone.
+
+Une demande du samedi soir démarre lundi 8 h : le client n'est pas pénalisé
+pour avoir écrit la nuit, et l'éditeur ne s'engage pas sur des heures où
+personne ne travaille.
+
+### 7.3 La priorité n'est pas un badge, c'est un ordre de traitement
+
+La file est **triée par échéance**, pas par date d'arrivée. Un Business arrivé
+à midi passe devant un Starter arrivé le matin. Aucune règle de tri
+particulière n'a été écrite : l'engagement ordonne la file à lui seul, et c'est
+ce qui rend la priorité réelle plutôt que décorative.
+
+Trois propriétés qui rendent la mesure honnête :
+
+- **L'engagement est figé au dépôt.** Il a été pris sous le forfait de ce
+  jour-là ; si le client rétrograde ensuite, la promesse tient.
+- **Une note interne n'arrête pas le compteur.** Sans cela, l'éditeur
+  tiendrait son engagement en se parlant à lui-même.
+- **Une réponse tardive reste tardive.** `breached` ne s'efface pas une fois
+  la réponse envoyée. On ne réécrit pas l'histoire, sinon la mesure ne vaut
+  rien.
+
+### 7.4 Les notes internes
+
+L'opérateur peut écrire des notes que le client ne verra jamais. C'est utile
+— « déjà appelé la semaine dernière pour le même sujet » — et c'est risqué :
+une fuite serait un désastre de confiance, pire que l'absence de la
+fonctionnalité.
+
+La protection n'est donc pas une discipline mais **une structure** : un seul
+chemin de lecture, `threadMessages()`, dont le paramètre `includeInternal`
+n'a **pas de valeur par défaut**. Une route qui l'oublie ne compile pas. Les
+routes client passent `false`, la route console passe `true`, et c'est le seul
+endroit du produit où une note interne sort.
+
+Le compteur de messages renvoyé au client **exclut** lui aussi les notes :
+sans cela, le client verrait qu'on lui cache un message, ce qui est pire que
+de ne rien lui montrer. Quatre mutations distinctes vérifient cette
+étanchéité (§10).
+
+### 7.5 Le diagnostic, à la place de l'usurpation
+
+« Pourquoi je ne peux pas enregistrer un lavage ? » est la question la plus
+fréquente au téléphone, et la plus pénible à élucider à l'aveugle. C'est aussi
+celle que le « se connecter en tant que » prétendait résoudre — refusé au §3,
+et toujours refusé.
+
+`GET /organizations/:id/members/:userId/diagnostic` évalue les causes dans
+l'ordre où elles mordent et nomme celle qui bloque :
+
+1. le compte est bloqué au niveau de la plateforme ;
+2. la personne a été retirée de la station ;
+3. la station est programmée pour suppression ;
+4. l'abonnement est en lecture seule ;
+5. un plafond du forfait est atteint.
+
+Il montre aussi les **droits effectifs** en distinguant ce qui vient du rôle
+de ce qui a été accordé à la personne — la distinction qui explique pourquoi
+deux caissiers de la même station n'ont pas les mêmes droits.
+
+**Aucun montant n'y figure.** La limite a été posée là : expliquer des
+blocages, pas ouvrir la comptabilité du client. Les compteurs sont des nombres
+d'objets ; le journal d'activité est réduit aux noms d'actions, parce que
+`metadata` contient des sommes. Un test vérifie structurellement qu'aucune
+chaîne monétaire n'apparaît dans la réponse — une évolution future qui
+ajouterait un champ de montant le ferait tomber.
+
+### 7.6 Ce que l'assistance ne fait pas
+
+- **Pas d'usurpation d'identité**, toujours (§3). Le diagnostic répond à la
+  question sans ouvrir la porte.
+- **Pas de notification au client.** Une réponse ne déclenche aucun e-mail :
+  le client la découvre en revenant, ou parce qu'on lui a écrit sur WhatsApp.
+  C'est la limite la plus gênante de cette version — voir §11.
+- **Pas de pièces jointes.** Une capture d'écran vaut souvent dix lignes de
+  description ; elle passe aujourd'hui par WhatsApp.
+
+## 8. Les routes
 
 Toutes sous `/api/v1/console`, toutes derrière `requireOperator`.
 
@@ -442,7 +564,9 @@ Toutes sous `/api/v1/console`, toutes derrière `requireOperator`.
 `GET /upgrade-requests?pending=` · `GET /plans` ·
 `GET /payment-intents?status=&declared=` · `GET /audit?organization_id=&limit=` ·
 `GET /revenue?months=` · `GET /revenue/export?format=detail|journal&from=&to=` ·
-`GET /accounts?q=&limit=` · `GET /accounts/:userId`
+`GET /accounts?q=&limit=` · `GET /accounts/:userId` ·
+`GET /support?status=&limit=` · `GET /support/:id` ·
+`GET /organizations/:id/members/:userId/diagnostic`
 
 **Écriture** — `POST /organizations/:id/activate {plan_code, months≤36,
 payment_reference?, note?}` · `/suspend {reason}` · `/extend-trial {days≤90,
@@ -452,6 +576,8 @@ reason}` · `/schedule-deletion {reason≥10, grace_days?}` · `/cancel-deletion
 `POST /members/:userId/role {role, reason≥5}` ·
 `POST /accounts/:userId/status {status: active|inactive, reason≥5}` ·
 `POST /accounts/:userId/revoke-sessions {reason≥5}` ·
+`POST /support/:id/messages {body, internal}` ·
+`POST /support/:id/status {status: open|resolved}` ·
 `POST /upgrade-requests/:id/decline {reason 3-300}` ·
 `POST /payment-intents/:reference/confirm {note?, channel?}` ·
 `POST /revenue/:id/reverse {reason≥10}`
@@ -471,7 +597,7 @@ l'adresse de l'opérateur.
 
 ---
 
-## 8. Ce que la console ne fait pas, volontairement
+## 9. Ce que la console ne fait pas, volontairement
 
 - **Pas d'usurpation d'identité.** Aucun « se connecter en tant que ». Voir
   les données d'un client est une chose, agir en son nom une autre.
@@ -484,15 +610,17 @@ l'adresse de l'opérateur.
 - **Pas de changement d'adresse e-mail.** L'adresse est l'identifiant de
   connexion : la modifier depuis la console permettrait de rediriger un compte
   vers une boîte que l'opérateur contrôle.
+- **Pas de notification d'une réponse d'assistance.** Le client la découvre
+  en revenant dans l'application, ou parce qu'on lui a écrit sur WhatsApp.
 - **Pas de notification automatique au client.** Les gestes de l'éditeur ne
   déclenchent pas d'e-mail ; seules les relances d'échéance en envoient.
 
 ---
 
-## 9. Vérification
+## 10. Vérification
 
 ```bash
-# Suite complète (285 tests)
+# Suite complète (333 tests)
 NODE_ENV=test npm test
 
 # Ciblé
@@ -500,6 +628,9 @@ NODE_ENV=test npx tsx --test tests/platform-admin.test.ts    # 26 tests
 NODE_ENV=test npx tsx --test tests/console-deletion.test.ts  # 12 tests
 NODE_ENV=test npx tsx --test tests/revenue.test.ts           # 23 tests
 NODE_ENV=test npx tsx --test tests/console-accounts.test.ts  # 20 tests
+NODE_ENV=test npx tsx --test tests/support-sla.test.ts       # 20 tests
+NODE_ENV=test npx tsx --test tests/support-requests.test.ts  # 23 tests
+NODE_ENV=test npx tsx --test tests/pricing-promises.test.ts  #  5 tests
 ```
 
 Parcours manuel utile, serveur lancé :
@@ -528,9 +659,21 @@ propriétaire, conserver les permissions exceptionnelles lors d'un changement de
 rôle, ou ignorer les stations en suppression dans le garde-fou — les quatre
 sont détectés.
 
+L'assistance l'est également, sur cinq mutations : faire fuir les notes
+internes par le fil, les laisser arrêter le compteur d'engagement, trier la
+file par date d'arrivée plutôt que par échéance, ouvrir les demandes d'un
+collègue à tout le monde, ou compter les notes internes dans le compteur
+affiché au client.
+
+L'arithmétique des heures ouvrées est couverte autrement : `addBusinessHours`
+consomme un solde, `businessHoursBetween` balaie les journées. Deux
+raisonnements indépendants, confrontés sur **six mille tirages**. C'est ce
+contrôle qui a rattrapé un exemple écrit à la main — et faux — dans le test
+lui-même.
+
 ---
 
-## 10. Prochaines marches
+## 11. Prochaines marches
 
 1. **Brancher un agrégateur** (CinetPay couvre Wave, Orange, MTN et Moov en
    une intégration) : le webhook appellera `activateSubscription()`, la file de
@@ -538,10 +681,15 @@ sont détectés.
 2. **Réconciliation** entre le registre et le relevé de l'agrégateur, une fois
    celui-ci branché : comparer chaque jour ce qu'on croit avoir encaissé et ce
    que le prestataire a réellement versé.
-3. **Supervision technique** — la famille qui reste : santé du service,
+3. **Prévenir le client qu'on lui a répondu.** La limite la plus gênante de
+   la version actuelle : une réponse d'assistance n'envoie rien. Un e-mail ou
+   un message WhatsApp sortant suffirait, mais c'est la première fois que
+   l'éditeur écrirait au client de sa propre initiative — décision à prendre
+   avant de coder.
+4. **Supervision technique** — la famille qui reste : santé du service,
    erreurs, lenteurs, alerte quand une station cesse d'émettre. Aujourd'hui un
    incident se découvre par l'appel d'un client.
-4. **Second opérateur avec droits restreints** — lecture seule pour une
+5. **Second opérateur avec droits restreints** — lecture seule pour une
    personne au support, écriture réservée au créateur. Aujourd'hui tous les
    opérateurs sont égaux ; il faudrait ajouter une colonne `role` à
    `platform_operators` et la lire dans `requireOperator`.

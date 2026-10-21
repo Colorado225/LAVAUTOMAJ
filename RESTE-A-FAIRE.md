@@ -196,8 +196,10 @@ seul le SHA-256 est stocké.
   posée — on ne peut pas faire mieux que les contrôles statiques actuels.
   **Cette contrainte mérite d'être rediscutée**, c'est la seule qui laisse
   passer une classe entière de défauts.
-- **« Assistance prioritaire »** (forfait Pro) : promesse sans définition.
-  Déjà documenté dans `TARIFS.md` §6, toujours ouvert.
+- ~~**« Assistance prioritaire »** (forfait Pro) : promesse sans définition.~~
+  **Tranché** : délai de première réponse par forfait (Business 4 h ouvrées,
+  Pro 1 jour, Starter 3 jours), affiché au client et mesuré dans la console.
+  Voir `TARIFS.md` §6 et `BACK-OFFICE.md` §7.
 - **« Suivi des sessions de caisse »** vendu en Pro mais disponible en
   Starter, et **« gestion des équipes »** différenciée seulement par le
   plafond : `TARIFS.md` §7.2 propose une reformulation, non tranchée.

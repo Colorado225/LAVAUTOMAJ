@@ -6,6 +6,18 @@ import { asyncRoute, body, tenant, requirePermission, HttpError } from "./http.t
 import { env } from "./env.ts"
 import { sendMail, upgradeRequestMessage } from "./mailer.ts"
 import { invalidateSubscriptionCache } from "./entitlements.ts"
+import { parseId } from "./http.ts"
+import { commitmentFor, commitmentLabel } from "./support-sla.ts"
+import {
+  SUPPORT_CATEGORIES,
+  SUPPORT_CATEGORY_LABELS,
+  addMessage,
+  createSupportRequest,
+  getRequest,
+  listForOrganization,
+  threadMessages,
+  withSla,
+} from "./support-service.ts"
 
 // ---------------------------------------------------------------------------
 // Assistance
@@ -87,8 +99,30 @@ export function createSupportRouter() {
         [t.organizationId, t.userId],
       )
       const row = q.rows[0] ?? {}
+      // L'engagement de delai est annonce au client : c'est ce qui donne un
+      // sens verifiable a la mention « assistance prioritaire » du forfait Pro.
+      const planQ = await db().query(
+        `SELECT p.code FROM subscriptions s JOIN plans p ON p.id = s.plan_id
+          WHERE s.organization_id = $1::uuid AND s.status = 'active'`,
+        [t.organizationId],
+      )
+      const activePlan = (planQ.rows[0]?.code as string | undefined) ?? null
+      const hours = commitmentFor(activePlan)
       res.json({
         ...resolveSupportConfig(),
+        commitment: {
+          hours,
+          label: commitmentLabel(hours),
+          plan_code: activePlan,
+          // Faux pour un essai ou un abonnement echu : rien n'a ete achete,
+          // donc rien n'est promis. Le delai affiche reste indicatif.
+          guaranteed: activePlan !== null,
+          business_hours: "du lundi au vendredi, 8 h - 18 h (heure d'Abidjan)",
+        },
+        categories: SUPPORT_CATEGORIES.map((code) => ({
+          code,
+          label: SUPPORT_CATEGORY_LABELS[code],
+        })),
         context: {
           organization_name: row.organization_name ?? null,
           contact_name: [row.first_name, row.last_name].filter(Boolean).join(" ") || null,
@@ -170,6 +204,126 @@ export function createSupportRouter() {
         whatsapp_url: buildWhatsAppUrl(support.whatsapp_number, message),
         support_email: support.email,
       })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // Le registre des demandes
+  //
+  // Qui voit quoi : l'auteur voit ses propres demandes ; propriétaires et
+  // gérants voient toutes celles de la station. Un caissier ne lit donc pas la
+  // demande d'un collègue — une demande peut parler d'un écart de caisse, et
+  // la mettre sous les yeux de tout le monde serait indélicat.
+  //
+  // Aucune permission nouvelle n'est introduite : ouvrir une demande est à la
+  // portée de n'importe quel membre, parce que la personne qui rencontre le
+  // problème est celle qui sait le décrire.
+  // -------------------------------------------------------------------------
+
+  /** Vrai si ce rôle voit toutes les demandes de la station. */
+  function seesEverything(role: string): boolean {
+    return role === "owner" || role === "manager"
+  }
+
+  // POST /api/v1/support/requests — ouvrir une demande.
+  r.post(
+    "/support/requests",
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const input = body(
+        z
+          .object({
+            subject: z.string().trim().min(5, "Résumez votre demande en quelques mots.").max(140),
+            category: z.enum(SUPPORT_CATEGORIES).default("autre"),
+            body: z
+              .string()
+              .trim()
+              .min(15, "Décrivez le problème : ce que vous faisiez, ce qui s'est passé.")
+              .max(4000),
+          })
+          .strip(),
+        req.body,
+      )
+
+      const request = await createSupportRequest(db(), {
+        organizationId: t.organizationId,
+        userId: t.userId,
+        subject: input.subject,
+        category: input.category,
+        body: input.body,
+      })
+
+      const support = resolveSupportConfig()
+      const message = `Bonjour WashPilot CI, j'ai ouvert la demande « ${input.subject} » dans l'application.`
+      res.status(201).json({
+        request: withSla(request),
+        // Le lien WhatsApp reste proposé : la trace est dans l'application,
+        // la discussion se fait où le client a l'habitude de la faire.
+        whatsapp_url: buildWhatsAppUrl(support.whatsapp_number, message),
+      })
+    }),
+  )
+
+  // GET /api/v1/support/requests — mes demandes, ou toutes selon le rôle.
+  r.get(
+    "/support/requests",
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const rows = await listForOrganization(db(), t.organizationId, {
+        createdBy: seesEverything(t.role) ? null : t.userId,
+      })
+      res.json({ requests: rows.map((row) => withSla(row)), scope: seesEverything(t.role) ? "station" : "mine" })
+    }),
+  )
+
+  // GET /api/v1/support/requests/:id — le fil, sans les notes internes.
+  r.get(
+    "/support/requests/:id",
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const pool = db()
+      const request = await getRequest(pool, id)
+      // Une demande d'une autre station est introuvable, pas interdite : la
+      // distinction renseignerait sur son existence.
+      if (!request || request.organization_id !== t.organizationId) {
+        throw new HttpError(404, "not_found", "Cette demande est introuvable.")
+      }
+      if (!seesEverything(t.role) && request.created_by !== t.userId) {
+        throw new HttpError(404, "not_found", "Cette demande est introuvable.")
+      }
+      res.json({
+        request: withSla(request),
+        // `false` : jamais les notes internes de l'éditeur.
+        messages: await threadMessages(pool, id, false),
+      })
+    }),
+  )
+
+  // POST /api/v1/support/requests/:id/messages — répondre ou relancer.
+  r.post(
+    "/support/requests/:id/messages",
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const input = body(
+        z.object({ body: z.string().trim().min(2, "Le message est vide.").max(4000) }).strip(),
+        req.body,
+      )
+      const pool = db()
+      const request = await getRequest(pool, id)
+      if (!request || request.organization_id !== t.organizationId) {
+        throw new HttpError(404, "not_found", "Cette demande est introuvable.")
+      }
+      if (!seesEverything(t.role) && request.created_by !== t.userId) {
+        throw new HttpError(404, "not_found", "Cette demande est introuvable.")
+      }
+      const message = await addMessage(pool, {
+        requestId: id,
+        body: input.body,
+        authorUserId: t.userId,
+      })
+      res.status(201).json({ message, request: withSla((await getRequest(pool, id))!) })
     }),
   )
 

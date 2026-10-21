@@ -316,6 +316,49 @@ CREATE TABLE IF NOT EXISTS subscription_payments (
 CREATE INDEX IF NOT EXISTS subscription_payments_when_idx ON subscription_payments(occurred_at DESC);
 CREATE INDEX IF NOT EXISTS subscription_payments_org_idx ON subscription_payments(organization_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS subscription_payments_period_idx ON subscription_payments(period_start, period_end);
+
+-- Demandes d'assistance.
+--
+-- Jusqu'ici une demande d'aide etait un message WhatsApp : aucune trace, donc
+-- aucun moyen de savoir combien de demandes sont ouvertes, depuis quand, ni
+-- si l'engagement de delai a ete tenu. WhatsApp reste le canal de discussion ;
+-- cette table lui donne une memoire.
+CREATE TABLE IF NOT EXISTS support_requests (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+ created_by uuid REFERENCES users(id) ON DELETE SET NULL,
+ subject text NOT NULL,
+ category text NOT NULL DEFAULT 'autre',
+ status text NOT NULL DEFAULT 'open',
+ -- Forfait au moment de la demande, fige volontairement : l'engagement a ete
+ -- pris sous ce forfait. Si le client retrograde ensuite, la promesse tient.
+ plan_code text,
+ commitment_hours integer NOT NULL,
+ response_due_at timestamptz NOT NULL,
+ first_responded_at timestamptz,
+ resolved_at timestamptz,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+-- La file de la console : les demandes ouvertes, la plus urgente d'abord.
+CREATE INDEX IF NOT EXISTS support_requests_queue_idx ON support_requests(status, response_due_at);
+CREATE INDEX IF NOT EXISTS support_requests_org_idx ON support_requests(organization_id, created_at DESC);
+
+-- Messages d'un fil d'assistance.
+--
+-- 'internal' marque une note que le client ne doit jamais voir. Aucune
+-- contrainte CHECK ici : 'ON DELETE SET NULL' sur l'auteur declencherait une
+-- revalidation et ferait echouer la suppression du compte.
+CREATE TABLE IF NOT EXISTS support_messages (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ request_id uuid NOT NULL REFERENCES support_requests(id) ON DELETE CASCADE,
+ author_user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+ author_operator_email text,
+ internal boolean NOT NULL DEFAULT false,
+ body text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS support_messages_thread_idx ON support_messages(request_id, created_at);
 -- Une ligne ne peut etre contrepassee qu'une fois.
 CREATE UNIQUE INDEX IF NOT EXISTS subscription_payments_reverses_idx
  ON subscription_payments(reverses_id) WHERE reverses_id IS NOT NULL;

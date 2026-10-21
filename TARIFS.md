@@ -154,20 +154,50 @@ des garde-fous (section 7).
 | Pro | Suivi des dépenses et marges opérationnelles | ✅ |
 | Pro | Rapports détaillés et exports | ✅ |
 | Pro | Historique des opérations et traçabilité | ✅ *(ajouté)* |
-| Pro | Assistance prioritaire | ⚠️ à arbitrer |
+| Pro | Assistance prioritaire | ✅ *(délai de réponse mesuré)* |
 | Business | Gestion multi-sites selon les limites du forfait | ✅ *(écran ajouté)* |
 | Business | Vue consolidée du propriétaire | ✅ *(ajouté)* |
 | Business | Permissions avancées | ✅ |
 | Business | Rapports consolidés | ✅ *(ajouté)* |
 | Business | Accompagnement à la mise en service | 🤝 service humain |
 
-**« Assistance prioritaire ».** `server/support.ts` rattache déjà chaque ticket
-au forfait et au statut d'abonnement, mais ne connaît aucune notion de
-priorité. Avant d'écrire une ligne de code, il faut décider ce que le mot
-engage : un délai de première réponse affiché ? un canal distinct ? un simple
-tri de file ? Promettre « prioritaire » sans délai mesurable est une promesse
-que l'on ne peut ni tenir ni démentir. Tant que l'arbitrage n'est pas fait,
-mieux vaut l'absence de code qu'un badge décoratif.
+**« Assistance prioritaire » — arbitré.** Le mot engage désormais **un délai
+de première réponse, affiché au client et mesuré**. C'était la seule des trois
+options envisagées (délai affiché, canal distinct, tri de file) qui rende la
+promesse vérifiable par celui qui la paie.
+
+| Forfait | Première réponse | Garanti |
+|---|---|---|
+| Starter | 3 jours ouvrés | oui |
+| Pro | 1 jour ouvré | oui |
+| Business | 4 heures ouvrées | oui |
+| Essai, abonnement échu | 5 jours ouvrés | **non** — indicatif, rien n'a été acheté |
+
+Journée d'assistance : **du lundi au vendredi, 8 h – 18 h, heure d'Abidjan**.
+Une demande déposée le samedi soir voit son compteur démarrer le lundi à 8 h ;
+le client n'est pas pénalisé pour avoir écrit la nuit, et l'éditeur ne
+s'engage pas sur des heures où personne ne travaille.
+
+Trois conséquences assumées :
+
+1. **La priorité n'est pas un badge, c'est un ordre de traitement.** La file
+   de la console est triée par échéance. Un Business arrivé à midi passe
+   devant un Starter arrivé le matin — sans règle de tri particulière,
+   l'échéance suffit à produire la priorité.
+2. **L'engagement est figé au dépôt de la demande.** Il a été pris sous le
+   forfait en vigueur ce jour-là ; si le client rétrograde ensuite, la
+   promesse tient.
+3. **L'éditeur devient réfutable.** Une demande dépassée est comptée et
+   visible. C'est tout l'intérêt de la mesure, et tout son risque : les délais
+   retenus sont volontairement prudents, parce qu'une seule personne tient
+   l'assistance. Les relever est facile ; les abaisser après les avoir
+   annoncés ne l'est pas.
+
+Les valeurs vivent dans `RESPONSE_COMMITMENT_HOURS` (`server/support-sla.ts`),
+que la page tarifaire duplique nécessairement côté navigateur.
+`tests/pricing-promises.test.ts` interdit la dérive entre les deux — et garde
+aussi `PUBLIC_TRIAL_DAYS`, qui portait jusqu'ici un commentaire « doit rester
+égal à TRIAL_DAYS » que rien ne vérifiait.
 
 ### Les garde-fous, maintenant posés
 
