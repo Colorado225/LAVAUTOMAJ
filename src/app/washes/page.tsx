@@ -5,7 +5,12 @@ import { Link, useViewTransitionState } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
 import { BlockedReason } from "@/components/access/blocked-reason"
-import { washButtonState, washSubmitBlockedReason } from "@/lib/action-blocking"
+import {
+  isWashButtonClickable,
+  resolvePendingOpen,
+  washButtonState,
+  washSubmitBlockedReason,
+} from "@/lib/action-blocking"
 import { apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { Button } from "@/components/ui/button"
@@ -135,6 +140,9 @@ export default function WashesPage() {
     `/api/v1/washes?refresh=${refreshKey}`
   )
   const [formOpen, setFormOpen] = useState(false)
+  // Clic reçu avant que les droits soient connus : on le garde pour l'honorer
+  // dès qu'ils arrivent, plutôt que de griser le bouton par précaution.
+  const [openRequested, setOpenRequested] = useState(false)
   const [vehicleCategoryId, setVehicleCategoryId] = useState("")
   const [quantities, setQuantities] = useState<Record<string, number>>({})
   const [selectedWorkerIds, setSelectedWorkerIds] = useState<string[]>([])
@@ -159,6 +167,19 @@ export default function WashesPage() {
     allowed: createWash.allowed,
     reason: createWash.reason,
   })
+  // Le bouton reste actif tant qu'on ne sait pas : un clic reçu pendant
+  // l'attente est honoré dès que les droits arrivent, ou abandonné si le
+  // refus se confirme — auquel cas le motif est déjà affiché sous le bouton.
+  const pendingOutcome = resolvePendingOpen(washFormBlocked)
+  // Dérivé plutôt que recopié dans un effet : un clic en attente ouvre le
+  // formulaire de lui-même dès que les droits le permettent, et s'efface tout
+  // seul si le refus se confirme — le motif est alors déjà sous le bouton.
+  const awaitingRights = openRequested && pendingOutcome === "attendre"
+  const showForm = formOpen || (openRequested && pendingOutcome === "ouvrir")
+  const closeForm = () => {
+    setFormOpen(false)
+    setOpenRequested(false)
+  }
   const activeCategories = (categories ?? []).filter((item) => item.is_active)
   const activeServices = (serviceCatalog ?? []).filter((item) => item.is_active)
   const activeWorkers = (workers ?? []).filter((worker) => worker.status === "active")
@@ -277,7 +298,7 @@ export default function WashesPage() {
       setAmountReceived("0")
       setIdempotencyKey(null)
       setRefreshKey((key) => key + 1)
-      setFormOpen(false)
+      closeForm()
     } catch (err) {
       // Keep the key while the payload stays unchanged: retrying after a lost
       // response returns the original record instead of creating a duplicate.
@@ -321,13 +342,21 @@ export default function WashesPage() {
                 onClick={() => {
                   setMutationError(null)
                   setMutationSuccess(null)
-                  setFormOpen((open) => !open)
+                  if (washFormBlocked.preparing) {
+                    setOpenRequested(true)
+                    return
+                  }
+                  if (showForm) {
+                    closeForm()
+                    return
+                  }
+                  setFormOpen(true)
                 }}
-                disabled={washFormBlocked.disabled}
-                aria-busy={washFormBlocked.preparing}
+                disabled={!isWashButtonClickable(washFormBlocked)}
+                aria-busy={awaitingRights}
                 title={washFormBlocked.reason ?? undefined}
               >
-                {washFormBlocked.preparing ? (
+                {awaitingRights ? (
                   <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
                 ) : washFormBlocked.denied ? (
                   <Lock className="mr-2 size-4" />
@@ -352,7 +381,7 @@ export default function WashesPage() {
           </div>
         )}
 
-        {formOpen && (
+        {showForm && (
           <section className="elev-1 rounded-lg border bg-card p-4 md:p-6">
             <div className="mb-5 flex items-start justify-between gap-3">
               <div>
@@ -361,7 +390,7 @@ export default function WashesPage() {
                   Les prix du catalogue seront copiés sur le lavage à l’enregistrement.
                 </p>
               </div>
-              <Button variant="ghost" onClick={() => setFormOpen(false)}>Fermer</Button>
+              <Button variant="ghost" onClick={closeForm}>Fermer</Button>
             </div>
 
             <form onSubmit={submitWash} className="space-y-6">
@@ -567,7 +596,7 @@ export default function WashesPage() {
                 </div>
               )}
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>Annuler</Button>
+                <Button type="button" variant="outline" onClick={closeForm}>Annuler</Button>
                 <SubmitButton
                   type="submit"
                   pending={saving}

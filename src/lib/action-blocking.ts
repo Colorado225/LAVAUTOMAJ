@@ -70,6 +70,41 @@ export function washButtonState(input: WashButtonInput): BlockedState {
   return READY
 }
 
+/**
+ * Le bouton doit-il rester cliquable ?
+ *
+ * Pendant l'attente des droits, **oui**. Griser par précaution punit tout le
+ * monde pour une incertitude qui dure une seconde : l'utilisateur voit un
+ * bouton mort sans savoir si c'est passager. On le laisse donc actif et on
+ * mémorise son clic — c'est le serveur qui refuse pour de bon, de toute façon,
+ * et il revérifie chaque permission à chaque requête.
+ *
+ * Une fois les droits connus, un refus avéré grise franchement : à ce
+ * moment-là le cadenas dit quelque chose de vrai.
+ */
+export function isWashButtonClickable(state: BlockedState): boolean {
+  return !state.disabled || state.preparing
+}
+
+/** Ce qu'il faut faire d'un clic reçu avant que les droits soient connus. */
+export type PendingClickOutcome =
+  /** Les droits ne sont pas encore là : garder le clic en mémoire. */
+  | "attendre"
+  /** Droits connus et favorables : ouvrir le formulaire. */
+  | "ouvrir"
+  /** Droits connus et défavorables : ne pas ouvrir, le motif est affiché. */
+  | "abandonner"
+
+/**
+ * Résout un clic mis en attente, une fois les droits arrivés.
+ *
+ * Volontairement sans effet de bord pour être vérifiable sans navigateur.
+ */
+export function resolvePendingOpen(state: BlockedState): PendingClickOutcome {
+  if (state.preparing) return "attendre"
+  return state.disabled ? "abandonner" : "ouvrir"
+}
+
 export interface WashSubmitInput {
   allowed: boolean
   accessReason: string | null
