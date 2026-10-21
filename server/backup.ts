@@ -22,7 +22,7 @@ function db(): Pool {
 }
 
 /** Requêtes d'export, dans l'ordre de restauration (parents puis enfants). */
-const EXPORT_QUERIES: { key: string; sql: string }[] = [
+export const EXPORT_QUERIES: { key: string; sql: string }[] = [
   { key: "organization", sql: "SELECT id, name, slug, onboarding_completed, created_at FROM organizations WHERE id=$1::uuid" },
   {
     key: "members",
@@ -54,6 +54,9 @@ const EXPORT_QUERIES: { key: string; sql: string }[] = [
   { key: "cash_movements", sql: "SELECT * FROM cash_movements WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "expense_categories", sql: "SELECT * FROM expense_categories WHERE organization_id=$1::uuid" },
   { key: "expenses", sql: "SELECT * FROM expenses WHERE organization_id=$1::uuid ORDER BY created_at" },
+  { key: "product_categories", sql: "SELECT * FROM product_categories WHERE organization_id=$1::uuid ORDER BY created_at" },
+  { key: "products", sql: "SELECT * FROM products WHERE organization_id=$1::uuid ORDER BY created_at" },
+  { key: "stock_movements", sql: "SELECT * FROM stock_movements WHERE organization_id=$1::uuid ORDER BY created_at" },
   {
     key: "audit_logs",
     sql: `SELECT action, entity_type, entity_id, metadata, created_at FROM audit_logs

@@ -42,6 +42,10 @@ export const PERMISSIONS = [
   "expense:read",
   "expense:create",
   "expense:manage",
+  // Stock (produits, mouvements)
+  "stock:read",
+  "stock:manage",
+  "stock:move",
   // Rapports
   "report:operational",
   "report:financial",
@@ -120,6 +124,20 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     // délègue l'enregistrement, jamais la réécriture.
     "expense:read",
     "expense:create",
+    // Stock : voir, gérer et mouvementer.
+    //
+    // Même raisonnement que pour les dépenses. En station, c'est le gérant qui
+    // réceptionne les bidons et qui compte les étagères. Sans `stock:move` il
+    // ferait saisir le mouvement par son caissier, qui en deviendrait l'auteur
+    // apparent dans `audit_logs` : refuser la permission fabriquerait un
+    // journal faux.
+    //
+    // La frontière « on délègue l'enregistrement, jamais la réécriture » n'est
+    // pas portée ici par une permission mais par le modèle : un mouvement ne
+    // se modifie ni ne se supprime, il se contrepasse.
+    "stock:read",
+    "stock:manage",
+    "stock:move",
     // Le détail des dépenses sans leur total rendrait l'écran de rapports
     // incohérent — retenir l'agrégat quand on donne la ligne ne protège rien.
     "report:financial",
@@ -181,6 +199,9 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "expense:read": "Consulter les dépenses",
   "expense:create": "Enregistrer une dépense",
   "expense:manage": "Modifier ou supprimer une dépense",
+  "stock:read": "Consulter le stock et les mouvements",
+  "stock:manage": "Créer et modifier les produits du stock",
+  "stock:move": "Enregistrer un mouvement de stock",
   "report:operational": "Consulter les rapports d’activité",
   "report:financial": "Consulter les rapports financiers (marges, dépenses)",
   "report:export": "Exporter les rapports",

@@ -400,3 +400,50 @@ chaque rôle et vérifie qu'aucun subordonné ne détient sur les dépenses un
 droit que son supérieur n'a pas. Faire échouer ce test n'est pas un incident :
 c'est le signal qu'un droit change de main, et qu'il faut d'abord écrire la
 décision dans cette section.
+
+### 2026-10-21 — Le stock entre dans la matrice (lot L3)
+
+**Constat.** Le domaine du stock n'existait pas : ni table, ni route, ni
+permission. Trois droits sont créés.
+
+| Permission | Couvre |
+|---|---|
+| `stock:read` | Consulter les produits, leur stock et l'historique des mouvements |
+| `stock:manage` | Créer et modifier un produit ou une catégorie, fixer le coût unitaire et le seuil d'alerte |
+| `stock:move` | Enregistrer une entrée, une sortie, un inventaire, ou contrepasser un mouvement |
+
+**Décision.** Le rôle `manager` reçoit les trois. Le caissier et l'agent de
+lavage n'en reçoivent aucune.
+
+**Pourquoi le gérant reçoit `stock:move` et pas seulement la lecture.** C'est
+exactement le raisonnement du 20 octobre sur les dépenses. En station, c'est
+le gérant qui réceptionne les bidons et qui compte les étagères. S'il n'a pas
+le droit d'enregistrer le mouvement, il le fait saisir par son caissier — qui
+en devient l'auteur apparent dans `audit_logs`. Refuser la permission ne
+protège rien et **fabrique un journal d'audit faux**.
+
+**Pourquoi le caissier n'a rien par défaut.** Son métier est le tiroir, pas la
+réserve. Le refus par défaut s'applique. Une station où le caissier gère
+réellement le stock peut lui accorder `stock:move` au cas par cas — les trois
+permissions sont délégables.
+
+**Pourquoi aucune n'est réservée au propriétaire.** `OWNER_ONLY_PERMISSIONS`
+protège ce qui permettrait de contourner le système : les utilisateurs, les
+paramètres, l'abonnement, le remboursement. Le stock ne touche à aucun de ces
+leviers.
+
+**La frontière « enregistrement / réécriture » est tenue autrement.** Ici elle
+n'est pas portée par une permission mais par le modèle de données : un
+mouvement de stock **ne peut être ni modifié ni supprimé**, seulement
+contrepassé par un mouvement inverse qui le référence
+(`reverses_movement_id`). Même le propriétaire ne peut pas réécrire un
+mouvement passé. C'est plus fort qu'un droit, parce que c'est structurel.
+
+**Le coût unitaire ne réécrit jamais le passé.** `stock:manage` permet de
+changer le coût d'un produit, mais chaque mouvement fige le coût appliqué au
+moment où il est écrit (`unit_cost_cents`), exactement comme `wash_items` fige
+le prix d'une prestation. Augmenter le prix d'un bidon demain ne change pas la
+valeur des sorties d'hier.
+
+**Verrouillage.** `tests/permissions.test.ts` passe de 18 à 21 permissions
+attendues pour le gérant, et de 28 à 31 pour le propriétaire.

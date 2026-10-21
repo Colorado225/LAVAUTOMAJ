@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   History,
   Building2,
+  Package,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { BrandBadge } from "@/components/brand"
@@ -72,6 +73,12 @@ const data = {
           url: "/expenses",
           icon: Receipt,
           permission: "expense:read" as Permission,
+        },
+        {
+          title: "Stock",
+          url: "/stock",
+          icon: Package,
+          permission: "stock:read" as Permission,
         },
         {
           title: "Rapports",

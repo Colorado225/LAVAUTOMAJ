@@ -163,6 +163,11 @@ compte » — c'est respecté. Mais il faut **le lien optionnel inverse** :
 
 ## 4. Constat critique n° 3 — tout le domaine « stock » est absent
 
+> **Partiellement refermé le 21/10/2026 — voir §14.** Les produits, les
+> catégories et les mouvements existent désormais (lot L3). Restent absents :
+> les consommables par prestation (L4), les fournisseurs et les achats (L5),
+> le coût direct et la marge (L6).
+
 Les écrans 13 (Stocks) et 14 (Fournisseurs et achats), les phases 4 et une
 partie de la 5 : **rien n'existe**.
 
@@ -373,13 +378,13 @@ Plan révisé après les décisions du §9.
 | **L0** | **Persistance** : `dataDir` PGlite, garde-fou des tests, journal explicite | — | Moyen | ✅ **Fait** (§14) |
 | ~~L1~~ | ~~Cycle de vie du lavage~~ | — | — | ❌ **Abandonné** (décision 1) |
 | ~~L2~~ | ~~Écran agent de lavage~~ | — | — | ❌ **Abandonné** (décision 1) |
-| **L3** | **Produits et mouvements** : `products`, `product_categories`, `stock_movements`, écran Stocks, seuils d'alerte | L0 | Élevé | À faire |
+| **L3** | **Produits et mouvements** : `products`, `product_categories`, `stock_movements`, écran Stocks, seuils d'alerte | L0 | Élevé | ✅ **Fait** (§14) |
 | **L4** | **Consommables et coût direct** : `service_consumables`, déduction dans la transaction de saisie du lavage, mouvement inverse à l'annulation, coût moyen pondéré | L3 | Élevé | À faire |
 | **L5** | **Fournisseurs et achats** : `suppliers`, `purchases`, `purchase_items`, réception partielle, non-double-comptage avec les dépenses | L3 | Élevé | À faire |
 | **L6** | **Marges et rapports** : coûts directs, marge estimée, distinction CA / encaissements | L4 | Moyen | À faire |
 | **L7** | **Confort** : remise autorisée, immatriculation, messages zod en français | — | Faible | À faire |
 
-**Ordre : L0 ✅ → L3 → L4 → L5 → L6 → L7.**
+**Ordre : L0 ✅ → L3 ✅ → L4 → L5 → L6 → L7.**
 
 L'abandon de L1 et L2 raccourcit sensiblement le chemin vers le stock, qui
 devient le prochain chantier. L4 ne dépend plus que de L3.
@@ -422,18 +427,16 @@ Conventions en vigueur à respecter : `node:test` + `assert/strict`,
 
 ## 13. Prochain chantier
 
-L0 étant livré, le chemin est dégagé pour le **stock** (L3), qui est désormais
-le plus gros écart restant et celui qui débloque le plus de valeur : sans lui,
-trois des dix questions du §17 restent sans réponse.
+**L4 — consommables et coût direct.** Les fondations posées par L3 le rendent
+direct : il s'agit de rattacher des produits à une prestation
+(`service_consumables`) et de déclencher la déduction dans la transaction de
+saisie du lavage, conformément à la décision 2.
 
-Deux points à arbitrer à l'ouverture de L3, sans urgence :
+Deux points mineurs restent ouverts, sans urgence :
 
-- **Écart C4** — un agent de lavage voit aujourd'hui tous les lavages de la
-  station. Ce n'est plus un défaut fonctionnel depuis la décision 1, mais cela
-  reste une question de confidentialité.
-- **Écart M5** — les messages de validation remontent en anglais brut
-  (« Invalid input: expected string, received undefined »). Constaté à nouveau
-  pendant les essais du 21 octobre.
+- **Écart C4** — un agent de lavage voit tous les lavages de la station.
+  Question de confidentialité, plus de fonctionnalité.
+- **Écart M5** — les messages de validation remontent en anglais brut.
 
 ---
 
@@ -479,3 +482,51 @@ par `in_progress_washes` ne pouvait afficher que zéro.
 
 **Preuve** : un lavage réglé en Orange Money fait passer la carte à
 12 000 FCFA sur 1 encaissement. Ce n'est pas un nouveau zéro permanent.
+
+### 21 octobre 2026 — L3, le stock *(écart E1, partiel)*
+
+**Modèle.** Trois tables : `product_categories`, `products`,
+`stock_movements`. Une règle les gouverne : **il n'existe nulle part une
+colonne « quantité en stock »**. Le stock d'un produit est toujours la somme
+signée de ses mouvements. Aucune écriture directe n'est donc possible, ni par
+l'API, ni par une requête manuelle distraite. Un test lit
+`information_schema` pour vérifier qu'aucune colonne de quantité n'apparaît
+sur `products`.
+
+**Un mouvement ne se modifie ni ne s'efface.** On le contrepasse par un
+mouvement inverse qui le référence (`reverses_movement_id`, unique). Même le
+propriétaire ne peut pas réécrire le passé. C'est plus fort qu'une
+permission, parce que c'est structurel.
+
+**Instantané du coût.** Chaque mouvement fige `unit_cost_cents` au moment où
+il est écrit, exactement comme `wash_items` fige le prix d'une prestation.
+Augmenter le prix d'un bidon demain ne change pas la valeur des sorties
+d'hier — vérifié par test.
+
+**Quantités en millièmes d'unité.** Même raison que les centimes pour
+l'argent : un entier exact plutôt qu'un flottant qui dérive. 0,15 L se note
+150, sans arrondi.
+
+**L'inventaire enregistre l'écart, pas le stock compté.** On ne « fixe » pas
+une quantité : on écrit la différence constatée, qui reste lisible dans
+l'historique. Un comptage conforme n'écrit rien plutôt qu'un mouvement nul.
+C'est aussi la seule issue prévue quand une sortie est refusée pour stock
+insuffisant.
+
+**Permissions.** `stock:read`, `stock:manage`, `stock:move` — accordées au
+gérant, refusées par défaut au caissier et à l'agent. Décision argumentée
+dans `RBAC-PERMISSIONS.md` §11, consignée avant d'être codée.
+
+**Une régression évitée de justesse.** Le garde-fou de
+`tests/console-deletion.test.ts` a détecté que les trois nouvelles tables
+manquaient dans `PURGE_ORDER` : supprimer une organisation aurait laissé son
+stock orphelin. Corrigé, et un **garde-fou jumeau a été ajouté sur l'export
+de données**, qui souffrait du même angle mort sans que rien ne le signale.
+
+**Vérifié en réel**, pas seulement en test : produit à 20 L, sortie de 2,5 L,
+sortie de 100 L refusée en `insufficient_stock`, inventaire à 16 L
+enregistrant un écart de −1,5 L, puis concordance exacte entre le stock
+affiché et la somme des trois mouvements. Alerte de seuil déclenchée en
+passant sous 5 L. Laveur et caissier en 403.
+
+58 tests ajoutés (493 au total), 6 mutations injectées et toutes détectées.

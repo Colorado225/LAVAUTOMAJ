@@ -191,6 +191,55 @@ CREATE TABLE IF NOT EXISTS receipt_issues (
 );
 CREATE INDEX IF NOT EXISTS receipt_issues_wash_idx ON receipt_issues(wash_id, copy_number DESC);
 
+-- ------------------------------------------------------------------ stock --
+-- Regle structurelle : il n'existe NULLE PART une colonne « quantite en
+-- stock ». Le stock d'un produit est toujours la somme des mouvements qui le
+-- concernent. Aucune ecriture directe n'est donc possible, ni par l'API, ni
+-- par une requete manuelle distraite : pour changer un stock il faut laisser
+-- une trace datee, signee et motivee.
+CREATE TABLE IF NOT EXISTS product_categories (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ name text NOT NULL, is_active boolean NOT NULL DEFAULT true,
+ created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(organization_id,name)
+);
+CREATE TABLE IF NOT EXISTS products (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ category_id uuid REFERENCES product_categories(id),
+ name text NOT NULL,
+ -- Unite de mesure affichee. Les quantites sont stockees en milliemes de
+ -- cette unite (1 litre = 1000), pour la meme raison que l'argent est stocke
+ -- en centimes : un entier exact plutot qu'un flottant approximatif.
+ unit text NOT NULL DEFAULT 'unite' CHECK(unit IN ('unite','litre','kilogramme')),
+ unit_cost_cents integer NOT NULL DEFAULT 0 CHECK(unit_cost_cents >= 0),
+ low_stock_threshold_milli integer NOT NULL DEFAULT 0 CHECK(low_stock_threshold_milli >= 0),
+ is_active boolean NOT NULL DEFAULT true,
+ created_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(organization_id,name)
+);
+CREATE TABLE IF NOT EXISTS stock_movements (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ product_id uuid NOT NULL REFERENCES products(id), site_id uuid REFERENCES sites(id),
+ -- initial   : stock d'ouverture a la creation du produit
+ -- entry     : entree manuelle (correction, retour)
+ -- exit      : sortie manuelle (consommation, perte, casse)
+ -- inventory : ecart constate lors d'un comptage physique
+ -- reversal  : contrepassation d'un mouvement precedent
+ kind text NOT NULL CHECK(kind IN ('initial','entry','exit','inventory','reversal')),
+ -- Signe : positif pour une entree, negatif pour une sortie. Jamais zero,
+ -- un mouvement nul n'aurait rien a dire.
+ quantity_milli integer NOT NULL CHECK(quantity_milli <> 0),
+ -- Instantane du cout unitaire au moment du mouvement, exactement comme
+ -- wash_items fige le prix d'une prestation. Changer le cout d'un produit
+ -- demain ne doit pas reecrire la valeur des sorties d'hier.
+ unit_cost_cents integer NOT NULL DEFAULT 0 CHECK(unit_cost_cents >= 0),
+ reason text, reference text,
+ reverses_movement_id uuid REFERENCES stock_movements(id),
+ created_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS stock_movements_product_idx ON stock_movements(organization_id, product_id, created_at DESC);
+-- Un mouvement ne peut etre contrepasse qu'une seule fois.
+CREATE UNIQUE INDEX IF NOT EXISTS stock_movements_reversal_idx ON stock_movements(reverses_movement_id) WHERE reverses_movement_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS wash_assignments (
  wash_id uuid NOT NULL REFERENCES washes(id), worker_id uuid NOT NULL REFERENCES workers(id), PRIMARY KEY(wash_id,worker_id)
 );

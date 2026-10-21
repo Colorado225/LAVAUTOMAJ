@@ -37,6 +37,11 @@ const PURGE_ORDER: { table: string; where: string }[] = [
   { table: "wash_items", where: "wash_id IN (SELECT id FROM washes WHERE organization_id = $1::uuid)" },
   { table: "wash_assignments", where: "wash_id IN (SELECT id FROM washes WHERE organization_id = $1::uuid)" },
   // Puis tout ce qui porte directement l'organisation.
+  // Stock : les mouvements référencent les produits, qui référencent les
+  // catégories — l'ordre inverse de création est le seul qui tienne.
+  { table: "stock_movements", where: "organization_id = $1::uuid" },
+  { table: "products", where: "organization_id = $1::uuid" },
+  { table: "product_categories", where: "organization_id = $1::uuid" },
   { table: "cash_movements", where: "organization_id = $1::uuid" },
   { table: "payments", where: "organization_id = $1::uuid" },
   { table: "washes", where: "organization_id = $1::uuid" },

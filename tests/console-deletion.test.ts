@@ -378,3 +378,58 @@ test("le planificateur n'efface que les échéances atteintes", async () => {
   assert.equal((await pool.query("SELECT 1 FROM organizations WHERE id = $1::uuid", [due.orgId])).rowCount, 0)
   assert.equal((await pool.query("SELECT 1 FROM organizations WHERE id = $1::uuid", [notDue.orgId])).rowCount, 1)
 })
+
+// ---------------------------------------------------------------------------
+// Garde-fou jumeau : l'export de données
+//
+// La purge et l'export sont les deux faces du même devoir envers le client :
+// pouvoir tout effacer, et pouvoir tout lui rendre. Une table oubliée dans
+// l'un l'est généralement dans l'autre. Ce test a été ajouté après que le
+// lot « stock » eut fait tomber le garde-fou de la purge sans que rien ne
+// signale l'absence correspondante dans l'export.
+// ---------------------------------------------------------------------------
+
+test("l'export de données couvre toutes les tables métier rattachées à une organisation", async () => {
+  const { EXPORT_QUERIES } = await import("../server/backup.ts")
+  const exported = new Set(EXPORT_QUERIES.map((entry) => entry.key))
+
+  // Tables techniques : elles portent un `organization_id` mais ne sont pas
+  // des données que le client reconnaîtrait comme siennes.
+  const horsPerimetre = new Set([
+    "organizations",
+    "organization_members",
+    "subscriptions",
+    "platform_audit_logs",
+    "users",
+    "idempotency_keys",
+    "member_permissions",
+    "onboarding_progress",
+    "subscription_reminders",
+    "subscription_payments",
+    "payment_intents",
+    "error_events",
+    "request_metrics",
+    "support_requests",
+    "support_messages",
+    "receipt_issues",
+    "audit_logs",
+    "clerk_webhook_events",
+    "auth_sessions",
+    "password_reset_tokens",
+  ])
+
+  const q = await pool.query<{ table_name: string }>(
+    `SELECT table_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND column_name = 'organization_id'
+      ORDER BY table_name`,
+  )
+  const oubliees = q.rows
+    .map((row) => row.table_name)
+    .filter((name) => !exported.has(name) && !horsPerimetre.has(name))
+
+  assert.deepEqual(
+    oubliees,
+    [],
+    `tables métier absentes de EXPORT_QUERIES : ${oubliees.join(", ")}`,
+  )
+})
