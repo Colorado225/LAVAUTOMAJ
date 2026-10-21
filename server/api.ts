@@ -6,6 +6,7 @@ import { asyncRoute, body, tenant, parseId, requirePermission, HttpError } from 
 import { fingerprint, withIdempotency } from "./idempotency.ts"
 import { consumeForWash, reverseWashConsumption } from "./stock.ts"
 import { initialPaymentStatus, resolvePaymentStatus, PAYMENT_METHODS } from "./payments.ts"
+import { plateDisplay, plateKey } from "./plate.ts"
 import { assertSiteCapacity, assertSiteWritable, loadSiteLimitState } from "./plan-limits.ts"
 
 export const catalogValidators = {
@@ -60,6 +61,9 @@ export const washValidators = {
       payment_method: z.enum(PAYMENT_METHODS),
       amount_received_cents: z.number().int().min(0).max(100000000),
       cash_session_id: z.string().uuid().optional(),
+      // Plaque du vehicule, facultative. Aucun format n'est impose : une
+      // saisie refusee bloquerait un encaissement.
+      plate: z.string().trim().max(32).nullable().optional(),
     })
     .strip(),
   cancel: z
@@ -75,7 +79,7 @@ function db(): Pool {
   return pool
 }
 
-const WASH_FIELDS = `id, reference, site_id, vehicle_category_id, customer_id, status, payment_status,
+const WASH_FIELDS = `id, reference, site_id, vehicle_category_id, customer_id, plate, status, payment_status,
   total_cents, payment_method, created_by AS author_id, cancelled_by AS cancelled_by_id,
   cancelled_at, cancellation_reason, created_at`
 
@@ -452,11 +456,65 @@ export function createApiRouter() {
     requirePermission("wash:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
+      // Recherche par plaque. On compare sur la cle normalisee : le caissier
+      // tape "1234ab01" et doit retrouver le lavage saisi " 1234 AB 01 ".
+      const plate = typeof req.query.plate === "string" ? plateKey(req.query.plate) : null
       const q = await db().query(
-        `SELECT ${WASH_FIELDS} FROM washes WHERE organization_id=$1::uuid ORDER BY created_at DESC LIMIT 200`,
-        [t.organizationId],
+        `SELECT ${WASH_FIELDS} FROM washes
+         WHERE organization_id=$1::uuid AND ($2::text IS NULL OR plate_key = $2::text)
+         ORDER BY created_at DESC LIMIT 200`,
+        [t.organizationId, plate],
       )
       res.json(q.rows)
+    }),
+  )
+
+  // GET /api/v1/vehicles/:plate — l'historique d'un vehicule.
+  //
+  // Le produit ne tient pas de fichier client : il n'y a donc rien a lire sur
+  // le proprietaire. Ce qu'on expose est seulement ce que la caisse a vu
+  // passer : combien de fois ce vehicule est venu, quand, et pour quel
+  // montant. Les lavages annules sont comptes a part et jamais additionnes au
+  // reste : une annulation n'est pas une visite facturee.
+  r.get(
+    "/vehicles/:plate",
+    requirePermission("wash:read"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const raw = req.params.plate
+      const key = plateKey(typeof raw === "string" ? raw : null)
+      if (!key) throw new HttpError(400, "invalid_data", "Indiquez une plaque.")
+      const pool = db()
+
+      const summaryQ = await pool.query(
+        `SELECT count(*) FILTER (WHERE cancelled_at IS NULL) AS visits,
+                count(*) FILTER (WHERE cancelled_at IS NOT NULL) AS cancelled,
+                COALESCE(sum(total_cents) FILTER (WHERE cancelled_at IS NULL), 0) AS total_cents,
+                min(created_at) FILTER (WHERE cancelled_at IS NULL) AS first_visit_at,
+                max(created_at) FILTER (WHERE cancelled_at IS NULL) AS last_visit_at,
+                max(plate) AS plate
+         FROM washes WHERE organization_id=$1::uuid AND plate_key=$2::text`,
+        [t.organizationId, key],
+      )
+      const row = summaryQ.rows[0] ?? {}
+
+      const washesQ = await pool.query(
+        `SELECT ${WASH_FIELDS} FROM washes
+         WHERE organization_id=$1::uuid AND plate_key=$2::text
+         ORDER BY created_at DESC LIMIT 50`,
+        [t.organizationId, key],
+      )
+
+      res.json({
+        plate_key: key,
+        plate: row.plate ?? null,
+        visits: Number(row.visits ?? 0),
+        cancelled: Number(row.cancelled ?? 0),
+        total_cents: Number(row.total_cents ?? 0),
+        first_visit_at: row.first_visit_at ?? null,
+        last_visit_at: row.last_visit_at ?? null,
+        washes: washesQ.rows,
+      })
     }),
   )
 
@@ -598,11 +656,21 @@ export function createApiRouter() {
 
           await assertSiteWritable(client, t.organizationId, input.site_id)
           const washQ = await client.query(
-            `INSERT INTO washes(organization_id, site_id, vehicle_category_id, status, payment_status, total_cents, payment_method, created_by, reference)
-             VALUES($1,$2,$3,'completed',$4,$5,$6,$7,
+            `INSERT INTO washes(organization_id, site_id, vehicle_category_id, status, payment_status, total_cents, payment_method, created_by, plate, plate_key, reference)
+             VALUES($1,$2,$3,'completed',$4,$5,$6,$7,$8,$9,
                'LAV-' || to_char(now(),'YYYYMMDD') || '-' || upper(substr(md5(random()::text),1,6)))
              RETURNING ${WASH_FIELDS}`,
-            [t.organizationId, input.site_id, input.vehicle_category_id, paymentStatus, totalCents, input.payment_method, t.userId],
+            [
+              t.organizationId,
+              input.site_id,
+              input.vehicle_category_id,
+              paymentStatus,
+              totalCents,
+              input.payment_method,
+              t.userId,
+              plateDisplay(input.plate ?? null),
+              plateKey(input.plate ?? null),
+            ],
           )
           const wash = washQ.rows[0]
 

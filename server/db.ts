@@ -240,7 +240,17 @@ CREATE TABLE IF NOT EXISTS washes (
 ALTER TABLE washes ADD COLUMN IF NOT EXISTS reference text;
 ALTER TABLE washes ADD COLUMN IF NOT EXISTS payment_status text NOT NULL DEFAULT 'pending';
 ALTER TABLE washes ADD COLUMN IF NOT EXISTS cancelled_by uuid REFERENCES users(id);
+-- Plaque du vehicule lave.
+--
+-- Le produit ne tient pas de fichier client : c'est la plaque, et elle seule,
+-- qui permet de reconnaitre un vehicule qui revient. Deux colonnes : la forme
+-- affichee, proche de ce qui a ete tape, et la cle reduite aux lettres et aux
+-- chiffres, qui sert a regrouper. Sans elle, " 1234 ab 01 " et "1234-AB-01"
+-- seraient deux vehicules differents.
+ALTER TABLE washes ADD COLUMN IF NOT EXISTS plate text;
+ALTER TABLE washes ADD COLUMN IF NOT EXISTS plate_key text;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_washes_org_reference ON washes(organization_id,reference);
+CREATE INDEX IF NOT EXISTS idx_washes_org_plate ON washes(organization_id,plate_key,created_at DESC);
 CREATE TABLE IF NOT EXISTS wash_items (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), wash_id uuid NOT NULL REFERENCES washes(id),
  service_id uuid REFERENCES services(id), service_name text NOT NULL, quantity integer NOT NULL CHECK(quantity > 0),

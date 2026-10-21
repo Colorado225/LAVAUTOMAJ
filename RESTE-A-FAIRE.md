@@ -274,9 +274,11 @@ supplantée — sa suppression est une décision à prendre, pas un oubli.
 
 ### Ce qui reste ouvert
 
-- **Le client n'existe toujours pas** : la table `customers` est vide, aucune
-  plaque d'immatriculation n'est écrite nulle part. Arbitrage à rendre : suit-on
-  une **personne** ou un **véhicule** ?
+- ~~Le client n'existe toujours pas~~ — **tranché le 21 octobre 2026 : on suit
+  le véhicule, pas la personne.** On note la plaque, rien d'autre : pas de nom,
+  pas de téléphone, pas de fichier client à tenir. Elle sert à retrouver
+  l'historique d'un véhicule qui revient. La table `customers` reste donc vide
+  et sans emploi ; `washes.customer_id` n'est plus alimenté.
 - `clerk_webhook_events` : table morte, héritée d'une architecture abandonnée.
 - Deuxième instance impossible (limitation en mémoire, `setInterval`).
 - `wash_quality_events` absente ; l'achat ne met pas à jour le coût de

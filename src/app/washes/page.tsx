@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState, type FormEvent } from "react"
+import { useEffect, useMemo, useState, type FormEvent } from "react"
 import { Link, useViewTransitionState } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
@@ -17,6 +17,7 @@ import { isNetworkError } from "@/lib/offline-queue"
 import { enqueueMutation } from "@/lib/offline-sync"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { plateKey } from "@/lib/plate"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
 import { SubmitButton } from "@/components/ui/submit-button"
@@ -58,7 +59,17 @@ interface CashSession {
   status: string
 }
 
+interface VehicleHistory {
+  plate: string | null
+  visits: number
+  cancelled: number
+  total_cents: number
+  first_visit_at: string | null
+  last_visit_at: string | null
+}
+
 interface Wash {
+  plate: string | null
   id: string
   reference: string
   site_id: string | null
@@ -146,6 +157,22 @@ export default function WashesPage() {
   // dès qu'ils arrivent, plutôt que de griser le bouton par précaution.
   const [openRequested, setOpenRequested] = useState(false)
   const [vehicleCategoryId, setVehicleCategoryId] = useState("")
+  const [plate, setPlate] = useState("")
+  // Plaque figee apres une pause de frappe : sans cela, on interrogerait le
+  // serveur a chaque caractere pendant que le caissier tape.
+  const [plateSettled, setPlateSettled] = useState("")
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setPlateSettled(plate), 400)
+    return () => window.clearTimeout(timer)
+  }, [plate])
+
+  const plateLookup = plateKey(plateSettled)
+  // On n'interroge qu'a partir de quatre caracteres : en dessous, la saisie
+  // est trop partielle pour designer un vehicule.
+  const { data: vehicleHistory } = useApi<VehicleHistory>(
+    plateLookup && plateLookup.length >= 4 ? `/api/v1/vehicles/${encodeURIComponent(plateLookup)}` : "",
+  )
   const [quantities, setQuantities] = useState<Record<string, number>>({})
   const [selectedWorkerIds, setSelectedWorkerIds] = useState<string[]>([])
   const [paymentMethod, setPaymentMethod] = useState("cash")
@@ -272,6 +299,7 @@ export default function WashesPage() {
     const payload = {
       site_id: siteId,
       vehicle_category_id: vehicleCategoryId,
+      ...(plate.trim() ? { plate: plate.trim() } : {}),
       items: selectedServices.map((service) => ({
         service_id: service.id,
         quantity: quantities[service.id],
@@ -302,6 +330,7 @@ export default function WashesPage() {
       setQuantities({})
       setSelectedWorkerIds([])
       setVehicleCategoryId("")
+      setPlate("")
       setAmountReceived("0")
       setIdempotencyKey(null)
       setRefreshKey((key) => key + 1)
@@ -327,6 +356,7 @@ export default function WashesPage() {
           setQuantities({})
           setSelectedWorkerIds([])
           setVehicleCategoryId("")
+          setPlate("")
           setAmountReceived("0")
           setIdempotencyKey(null)
           closeForm()
@@ -428,7 +458,7 @@ export default function WashesPage() {
             </div>
 
             <form onSubmit={submitWash} className="space-y-6">
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-3">
                 <label className="flex flex-col gap-1.5 text-sm font-medium">
                   Catégorie du véhicule
                   <select
@@ -446,6 +476,34 @@ export default function WashesPage() {
                       <option key={category.id} value={category.id}>{category.name}</option>
                     ))}
                   </select>
+                </label>
+                <label className="flex flex-col gap-1.5 text-sm font-medium">
+                  Plaque <span className="font-normal text-muted-foreground">(facultatif)</span>
+                  <Input
+                    value={plate}
+                    onChange={(event) => {
+                      setPlate(event.target.value)
+                      markFormChanged()
+                    }}
+                    placeholder="Ex. 1234 AB 01"
+                    maxLength={32}
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="h-10 uppercase"
+                  />
+                  {vehicleHistory && vehicleHistory.visits > 0 ? (
+                    <span className="text-xs font-normal text-muted-foreground">
+                      Déjà venu <strong>{vehicleHistory.visits} fois</strong>
+                      {vehicleHistory.last_visit_at
+                        ? `, la dernière le ${new Date(vehicleHistory.last_visit_at).toLocaleDateString("fr-CI")}`
+                        : ""}
+                      .
+                    </span>
+                  ) : (
+                    <span className="text-xs font-normal text-muted-foreground">
+                      Sert à retrouver l’historique du véhicule. Aucun nom, aucun téléphone.
+                    </span>
+                  )}
                 </label>
                 <div className="flex flex-col gap-1.5 text-sm font-medium">
                   Site sélectionné
@@ -661,6 +719,7 @@ export default function WashesPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Référence</TableHead>
+                    <TableHead>Plaque</TableHead>
                     <TableHead>Site</TableHead>
                     <TableHead>Catégorie</TableHead>
                     <TableHead className="text-right">Total</TableHead>
@@ -691,6 +750,7 @@ export default function WashesPage() {
                       <TableCell className="font-medium">
                         <WashReference washId={wash.id} reference={wash.reference} />
                       </TableCell>
+                      <TableCell className="font-mono text-xs uppercase tabular-nums">{wash.plate ?? "—"}</TableCell>
                       <TableCell>{activeSites.find((site) => site.id === wash.site_id)?.name ?? "—"}</TableCell>
                       <TableCell>{activeCategories.find((category) => category.id === wash.vehicle_category_id)?.name ?? "—"}</TableCell>
                       <TableCell className="text-right">{formatXof(wash.total_cents)}</TableCell>
