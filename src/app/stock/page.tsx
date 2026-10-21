@@ -112,6 +112,10 @@ export default function StockPage() {
   const movements = useMemo(() => (movementData ?? []).slice(0, 15), [movementData])
 
   const lowStock = useMemo(() => products.filter((p) => p.low_stock && p.is_active), [products])
+  // Un stock négatif n'est pas une alerte de seuil : c'est un écart entre le
+  // papier et l'étagère. On a consommé plus que ce qui était déclaré. Seul un
+  // inventaire le referme.
+  const negatifs = useMemo(() => products.filter((p) => p.stock_milli < 0 && p.is_active), [products])
   const totalValue = useMemo(
     () => products.reduce((sum, p) => sum + stockValueCents(p.stock_milli, p.unit_cost_cents), 0),
     [products],
@@ -328,6 +332,17 @@ export default function StockPage() {
           </p>
         )}
 
+        {negatifs.length > 0 && (
+          <div role="status" className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <span>
+              {negatifs.length === 1
+                ? `Le stock de ${negatifs[0].name} est négatif : il a été consommé plus que ce qui était déclaré. Comptez-le et enregistrez un inventaire.`
+                : `${negatifs.length} produits ont un stock négatif : ${negatifs.map((p) => p.name).join(", ")}. Comptez-les et enregistrez un inventaire.`}
+            </span>
+          </div>
+        )}
+
         {lowStock.length > 0 && (
           <div role="status" className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -381,8 +396,10 @@ export default function StockPage() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
-                            <span className="font-medium">{formatQuantity(product.stock_milli, product.unit)}</span>
-                            {product.low_stock && <Badge variant="outline" className="border-amber-400 text-amber-700 dark:text-amber-300">Seuil atteint</Badge>}
+                            <span className={product.stock_milli < 0 ? "font-medium text-destructive" : "font-medium"}>{formatQuantity(product.stock_milli, product.unit)}</span>
+                            {product.stock_milli < 0
+                              ? <Badge variant="outline" className="border-destructive text-destructive">À inventorier</Badge>
+                              : product.low_stock && <Badge variant="outline" className="border-amber-400 text-amber-700 dark:text-amber-300">Seuil atteint</Badge>}
                           </div>
                           {product.low_stock_threshold_milli > 0 && (
                             <div className="text-xs text-muted-foreground">

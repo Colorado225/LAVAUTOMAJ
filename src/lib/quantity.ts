@@ -18,12 +18,14 @@ export const MILLI = 1000
 
 export const UNIT_LABELS: Record<string, string> = {
   unite: "unité",
+  sachet: "sachet",
   litre: "litre",
   kilogramme: "kilogramme",
 }
 
 /** Options proposées dans les formulaires. */
 export const UNIT_OPTIONS = [
+  { value: "sachet", label: "Sachet" },
   { value: "unite", label: "Unité" },
   { value: "litre", label: "Litre" },
   { value: "kilogramme", label: "Kilogramme" },

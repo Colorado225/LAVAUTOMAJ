@@ -367,6 +367,35 @@ du lot L4 envers un cycle de vie qui n'existera pas.
 
 ---
 
+### Décision 4 — Les consommables ne touchent pas au prix
+
+Dicté par l'utilisateur le 21 octobre 2026, en correction d'un cadrage erroné
+de ma part qui parlait de « coût direct » et de « marge » :
+
+> « le prix d'un service de lavage est déjà défini. il suffira de le
+> sélectionner et valider. » — « cela n'influence en aucun cas le prix de
+> service, mais plutôt le niveau de stock des consommables utilisés. »
+
+Déclarer qu'un lavage consomme deux sachets d'Omo ne change donc **rien** au
+montant facturé. Le prix reste celui saisi dans la fiche de prestation. Les
+consommables n'agissent que sur le niveau de stock. **Il n'y a ni coût direct
+ni marge dans L4.**
+
+Trois conséquences :
+
+1. **L'unité de comptage est le sachet**, pas le litre abstrait : « ici en
+   côte d'ivoire on utilise des sachets d'omo ». `sachet` est proposée en
+   premier dans la liste des unités.
+2. **Une quantité par produit et par prestation**, sans variation par
+   catégorie de véhicule. Le besoin n'existe pas aujourd'hui.
+3. **La déduction automatique n'est jamais refusée.** Un stock à zéro
+   n'empêche pas d'encaisser un client : le lavage s'enregistre, le stock
+   passe en négatif, s'affiche en rouge et appelle un inventaire. C'est la
+   différence assumée avec une **sortie manuelle**, qui reste bloquée en
+   `insufficient_stock` — son auteur, lui, peut corriger sa saisie sur-le-champ.
+
+---
+
 ## 10. Plan d'implémentation par lots
 
 Chaque lot est indépendant, livrable et testable séparément.
@@ -379,7 +408,7 @@ Plan révisé après les décisions du §9.
 | ~~L1~~ | ~~Cycle de vie du lavage~~ | — | — | ❌ **Abandonné** (décision 1) |
 | ~~L2~~ | ~~Écran agent de lavage~~ | — | — | ❌ **Abandonné** (décision 1) |
 | **L3** | **Produits et mouvements** : `products`, `product_categories`, `stock_movements`, écran Stocks, seuils d'alerte | L0 | Élevé | ✅ **Fait** (§14) |
-| **L4** | **Consommables et coût direct** : `service_consumables`, déduction dans la transaction de saisie du lavage, mouvement inverse à l'annulation, coût moyen pondéré | L3 | Élevé | À faire |
+| **L4** | **Consommables par prestation** : `service_consumables`, déduction dans la transaction de saisie du lavage, contrepassation à l'annulation. **Aucun effet sur le prix** (décision 4) | L3 | Élevé | **Fait** |
 | **L5** | **Fournisseurs et achats** : `suppliers`, `purchases`, `purchase_items`, réception partielle, non-double-comptage avec les dépenses | L3 | Élevé | À faire |
 | **L6** | **Marges et rapports** : coûts directs, marge estimée, distinction CA / encaissements | L4 | Moyen | À faire |
 | **L7** | **Confort** : remise autorisée, immatriculation, messages zod en français | — | Faible | À faire |
@@ -427,10 +456,12 @@ Conventions en vigueur à respecter : `node:test` + `assert/strict`,
 
 ## 13. Prochain chantier
 
-**L4 — consommables et coût direct.** Les fondations posées par L3 le rendent
-direct : il s'agit de rattacher des produits à une prestation
-(`service_consumables`) et de déclencher la déduction dans la transaction de
-saisie du lavage, conformément à la décision 2.
+**L5 — fournisseurs et achats.** Les entrées de stock se saisissent
+aujourd'hui à la main, sans pièce justificative en face. L5 rattache une
+entrée à un achat et un achat à un fournisseur. Attention au piège déjà
+identifié : **seules les quantités reçues augmentent le stock**, et un achat
+ne doit pas être compté deux fois, une fois comme achat et une fois comme
+dépense.
 
 Deux points mineurs restent ouverts, sans urgence :
 
@@ -530,3 +561,54 @@ affiché et la somme des trois mouvements. Alerte de seuil déclenchée en
 passant sous 5 L. Laveur et caissier en 403.
 
 58 tests ajoutés (493 au total), 6 mutations injectées et toutes détectées.
+
+### 21 octobre 2026 — L4, consommables par prestation *(écart E1, suite)*
+
+**Avant** : rien ne reliait une prestation aux produits qu'elle consomme. Le
+stock existait depuis L3, mais il fallait saisir chaque sortie à la main,
+lavage après lavage. En pratique, personne ne le fait.
+
+**Après** : chaque fiche de prestation porte la liste de ce qu'elle sort du
+stock. Un lavage enregistré déduit automatiquement, dans la même transaction.
+
+| Règle | Mise en œuvre |
+| --- | --- |
+| Le prix ne bouge pas | Aucune lecture de `service_consumables` dans le calcul du total. Vérifié par deux tests dédiés |
+| Comptage en sachets | `sachet` ajoutée aux unités, proposée en premier |
+| Déduction à la fin | `consumeForWash` appelée dans la transaction de `POST /washes`, après l'insertion des lignes |
+| Jamais bloquante | Aucun contrôle de disponibilité : le stock peut passer en négatif |
+| Un seul mouvement par produit | Les quantités sont cumulées avant écriture, même si deux prestations du lavage partagent un produit |
+| Annulation | `reverseWashConsumption` contrepasse, sans effacer le mouvement d'origine |
+| Traçabilité | `stock_movements.wash_id` relie chaque consommation à son lavage |
+
+**Le stock négatif est un signal, pas une erreur.** Il dit qu'on a consommé
+plus que ce qui était déclaré. L'écran Stock l'affiche en rouge, avec une
+pastille « À inventorier » et un bandeau qui nomme les produits concernés.
+Seul un inventaire le referme.
+
+**Permissions.** Déclarer une recette relève du catalogue (`service:manage`),
+pas du stock : c'est une propriété de la prestation. Un caissier sans aucun
+droit sur le stock déclenche malgré tout la déduction en enregistrant un
+lavage — c'est le système qui mouvemente, pas lui. Les deux cas sont testés.
+
+**Vérifié en conditions réelles** : 10 sachets en stock, prestation à 3 000 F
+consommant 2 sachets. Quatre lavages → facturé 12 000 F, stock à 2. Trois de
+plus → stock à **−4**, lavage accepté. Au même instant, une sortie manuelle de
+5 sachets est refusée en `insufficient_stock` : le contraste est volontaire.
+Annulation des quatre premiers → stock à 4. Caissier : 403 sur `GET /products`,
+lavage accepté, stock à 2.
+
+**Ce qu'un garde-fou a rattrapé.** Les deux tests qui comparent
+`information_schema` à `PURGE_ORDER` et à `EXPORT_QUERIES` ont échoué dès la
+création de `service_consumables`, avant que j'y pense. Le second de ces
+garde-fous avait été écrit la veille, pendant L3 ; il a servi le lendemain.
+
+**Ce qu'une mutation a révélé.** Retirer la garde anti-double-contrepassation
+de `reverseWashConsumption` ne faisait échouer aucun test : la route
+d'annulation refuse déjà un lavage annulé (`wash_already_cancelled`) et le
+code n'était jamais atteint. Le test visait donc une défense en croyant en
+viser une autre. Un test appelant `reverseWashConsumption` deux fois de suite,
+hors route, a été ajouté ; la mutation est désormais détectée.
+
+**Tests** : 20 nouveaux (`tests/service-consumables.test.ts`), suite à
+**513/513**. `tsc -b` 0, build ✓, lint 0 erreur / 21 warnings.

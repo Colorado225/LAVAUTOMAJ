@@ -74,6 +74,18 @@ export const stockValidators = {
       reason: z.string().trim().max(500).nullable().optional(),
     })
     .strip(),
+  consumables: z
+    .object({
+      items: z
+        .array(
+          z.object({
+            product_id: z.string().uuid(),
+            quantity_milli: quantityMilli,
+          }),
+        )
+        .max(20),
+    })
+    .strip(),
   reversal: z
     .object({
       reason: z.string().trim().min(1, "Indiquez pourquoi ce mouvement est annulé.").max(500),
@@ -129,6 +141,125 @@ async function assertSite(
     organizationId,
   ])
   if (!q.rowCount) throw new HttpError(400, "invalid_site", "Station invalide.")
+}
+
+/**
+ * Type minimal d'un client de transaction, pour que les deux fonctions
+ * ci-dessous soient appelables depuis la transaction d'un lavage.
+ */
+type TxClient = {
+  query: (
+    sql: string,
+    params?: unknown[],
+  ) => Promise<{ rows: Record<string, unknown>[]; rowCount: number | null }>
+}
+
+/**
+ * Déduit du stock ce qu'un lavage a consommé.
+ *
+ * Appelée **dans la transaction d'enregistrement du lavage** : si le lavage
+ * échoue, rien n'est déduit ; s'il est enregistré, la déduction l'est aussi.
+ *
+ * Trois choix importants, tous assumés :
+ *
+ * 1. **Cette déduction n'est jamais refusée**, même si le stock tombe en
+ *    négatif. Un lavage rendu est de l'argent qui rentre : refuser de
+ *    l'enregistrer parce que le stock déclaré est faux serait absurde, et
+ *    pousserait simplement à ne plus enregistrer les lavages. Le produit a
+ *    réellement été utilisé — c'est le stock enregistré qui est faux, pas le
+ *    lavage. Un stock négatif s'affiche en rouge et appelle un inventaire.
+ *    C'est la différence avec une sortie manuelle, qui reste bloquée parce
+ *    que son auteur peut corriger sa saisie sur-le-champ.
+ *
+ * 2. **La consommation ne touche pas au prix.** Le prix d'une prestation est
+ *    fixé à la main dans sa fiche et ne se déduit d'aucun coût.
+ *
+ * 3. Chaque mouvement porte le `wash_id`, pour pouvoir contrepasser
+ *    exactement ce qui a été déduit si le lavage est annulé.
+ */
+export async function consumeForWash(
+  client: TxClient,
+  organizationId: string,
+  washId: string,
+  items: readonly { service_id: string; quantity: number }[],
+  userId: string | null,
+): Promise<void> {
+  if (items.length === 0) return
+
+  // Une seule requête pour toutes les recettes concernées : un lavage à cinq
+  // prestations ne doit pas déclencher cinq allers-retours.
+  const serviceIds = [...new Set(items.map((item) => item.service_id))]
+  const recettes = await client.query(
+    `SELECT sc.service_id, sc.product_id, sc.quantity_milli, p.unit_cost_cents
+     FROM service_consumables sc
+     JOIN products p ON p.id = sc.product_id
+     WHERE sc.organization_id=$1::uuid AND sc.service_id = ANY($2::uuid[]) AND p.is_active`,
+    [organizationId, serviceIds],
+  )
+  if (!recettes.rowCount) return
+
+  // Un même produit peut servir à plusieurs prestations du même lavage :
+  // on cumule avant d'écrire, pour une ligne par produit plutôt qu'une par
+  // couple prestation-produit.
+  const parProduit = new Map<string, { quantite: number; cout: number }>()
+  for (const item of items) {
+    for (const recette of recettes.rows) {
+      if (recette.service_id !== item.service_id) continue
+      const productId = String(recette.product_id)
+      const ajout = Number(recette.quantity_milli) * item.quantity
+      const courant = parProduit.get(productId)
+      if (courant) courant.quantite += ajout
+      else parProduit.set(productId, { quantite: ajout, cout: Number(recette.unit_cost_cents) })
+    }
+  }
+
+  for (const [productId, { quantite, cout }] of parProduit) {
+    await client.query(
+      `INSERT INTO stock_movements(organization_id, product_id, wash_id, kind, quantity_milli,
+         unit_cost_cents, reason, created_by)
+       VALUES($1,$2,$3,'consumption',$4,$5,'Consommation automatique du lavage',$6)`,
+      [organizationId, productId, washId, -quantite, cout, userId],
+    )
+  }
+}
+
+/**
+ * Rend au stock ce qu'un lavage annulé n'a finalement pas consommé.
+ *
+ * Contrepassation, jamais suppression : les mouvements d'origine restent
+ * lisibles dans l'historique du produit, et l'index unique sur
+ * `reverses_movement_id` garantit qu'une annulation rejouée ne rend pas le
+ * produit deux fois.
+ */
+export async function reverseWashConsumption(
+  client: TxClient,
+  organizationId: string,
+  washId: string,
+  userId: string | null,
+): Promise<void> {
+  const aContrepasser = await client.query(
+    `SELECT m.id, m.product_id, m.quantity_milli, m.unit_cost_cents
+     FROM stock_movements m
+     WHERE m.organization_id=$1::uuid AND m.wash_id=$2::uuid AND m.kind='consumption'
+       AND NOT EXISTS (SELECT 1 FROM stock_movements r WHERE r.reverses_movement_id = m.id)`,
+    [organizationId, washId],
+  )
+  for (const mouvement of aContrepasser.rows) {
+    await client.query(
+      `INSERT INTO stock_movements(organization_id, product_id, wash_id, kind, quantity_milli,
+         unit_cost_cents, reason, reverses_movement_id, created_by)
+       VALUES($1,$2,$3,'reversal',$4,$5,'Lavage annulé : consommation rendue au stock',$6,$7)`,
+      [
+        organizationId,
+        mouvement.product_id,
+        washId,
+        -Number(mouvement.quantity_milli),
+        mouvement.unit_cost_cents,
+        mouvement.id,
+        userId,
+      ],
+    )
+  }
 }
 
 export function createStockRouter() {
@@ -585,6 +716,101 @@ export function createStockRouter() {
         )
         await client.query("COMMIT")
         res.status(201).json({ ...q.rows[0], stock_milli: stockMilli + inverse })
+      } catch (error) {
+        await client.query("ROLLBACK")
+        throw error
+      } finally {
+        client.release()
+      }
+    }),
+  )
+
+  // ------------------------------------------- recette d'une prestation --
+  //
+  // Ce que consomme une prestation appartient à sa fiche, au même titre que
+  // son prix : c'est donc `service:manage` qui en décide, pas une permission
+  // de stock. Un caissier qui enregistre un lavage déclenche la déduction
+  // sans détenir le moindre droit sur le stock — c'est le système qui agit,
+  // pas lui.
+
+  r.get(
+    "/services/:id/consumables",
+    requirePermission("service:read"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const q = await db().query(
+        `SELECT sc.product_id, sc.quantity_milli, p.name AS product_name, p.unit, p.is_active
+         FROM service_consumables sc
+         JOIN products p ON p.id = sc.product_id
+         WHERE sc.organization_id=$1::uuid AND sc.service_id=$2::uuid
+         ORDER BY p.name`,
+        [t.organizationId, id],
+      )
+      res.json(q.rows)
+    }),
+  )
+
+  // Remplace la recette entière. Plus simple à utiliser qu'un couple
+  // ajouter/retirer, et sans état intermédiaire incohérent : à tout instant
+  // la recette enregistrée est celle que le gérant a sous les yeux.
+  r.put(
+    "/services/:id/consumables",
+    requirePermission("service:manage"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const input = body(stockValidators.consumables, req.body)
+
+      const client = await db().connect()
+      try {
+        await client.query("BEGIN")
+        const serviceQ = await client.query(
+          "SELECT id FROM services WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE",
+          [id, t.organizationId],
+        )
+        if (!serviceQ.rowCount) throw new HttpError(404, "service_not_found", "Prestation introuvable.")
+
+        const productIds = input.items.map((item) => item.product_id)
+        if (new Set(productIds).size !== productIds.length) {
+          throw new HttpError(400, "duplicate_product", "Un même produit ne peut figurer qu'une fois dans la recette.")
+        }
+        if (productIds.length > 0) {
+          const connus = await client.query(
+            "SELECT id FROM products WHERE organization_id=$1::uuid AND id = ANY($2::uuid[])",
+            [t.organizationId, productIds],
+          )
+          if (connus.rowCount !== productIds.length) {
+            throw new HttpError(400, "invalid_product", "Produit inconnu dans cette station.")
+          }
+        }
+
+        await client.query(
+          "DELETE FROM service_consumables WHERE organization_id=$1::uuid AND service_id=$2::uuid",
+          [t.organizationId, id],
+        )
+        for (const item of input.items) {
+          await client.query(
+            `INSERT INTO service_consumables(organization_id, service_id, product_id, quantity_milli)
+             VALUES($1,$2,$3,$4)`,
+            [t.organizationId, id, item.product_id, item.quantity_milli],
+          )
+        }
+
+        await client.query(
+          `INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+           VALUES($1,$2,'service.consumables_updated','service',$3,$4)`,
+          [t.organizationId, t.userId, id, JSON.stringify({ count: input.items.length })],
+        )
+        await client.query("COMMIT")
+
+        const q = await client.query(
+          `SELECT sc.product_id, sc.quantity_milli, p.name AS product_name, p.unit, p.is_active
+           FROM service_consumables sc JOIN products p ON p.id = sc.product_id
+           WHERE sc.organization_id=$1::uuid AND sc.service_id=$2::uuid ORDER BY p.name`,
+          [t.organizationId, id],
+        )
+        res.json(q.rows)
       } catch (error) {
         await client.query("ROLLBACK")
         throw error

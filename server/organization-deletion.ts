@@ -38,7 +38,10 @@ const PURGE_ORDER: { table: string; where: string }[] = [
   { table: "wash_assignments", where: "wash_id IN (SELECT id FROM washes WHERE organization_id = $1::uuid)" },
   // Puis tout ce qui porte directement l'organisation.
   // Stock : les mouvements référencent les produits, qui référencent les
-  // catégories — l'ordre inverse de création est le seul qui tienne.
+  // catégories — l'ordre inverse de création est le seul qui tienne. La
+  // recette des prestations vient en tête : elle pointe à la fois vers les
+  // produits et vers les services.
+  { table: "service_consumables", where: "organization_id = $1::uuid" },
   { table: "stock_movements", where: "organization_id = $1::uuid" },
   { table: "products", where: "organization_id = $1::uuid" },
   { table: "product_categories", where: "organization_id = $1::uuid" },

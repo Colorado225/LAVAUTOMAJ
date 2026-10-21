@@ -57,6 +57,7 @@ export const EXPORT_QUERIES: { key: string; sql: string }[] = [
   { key: "product_categories", sql: "SELECT * FROM product_categories WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "products", sql: "SELECT * FROM products WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "stock_movements", sql: "SELECT * FROM stock_movements WHERE organization_id=$1::uuid ORDER BY created_at" },
+  { key: "service_consumables", sql: "SELECT * FROM service_consumables WHERE organization_id=$1::uuid ORDER BY created_at" },
   {
     key: "audit_logs",
     sql: `SELECT action, entity_type, entity_id, metadata, created_at FROM audit_logs

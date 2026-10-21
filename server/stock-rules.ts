@@ -35,11 +35,14 @@ export const MOVEMENT_LABELS: Record<MovementKind, string> = {
   reversal: "Contrepassation",
 }
 
-export const UNITS = ["unite", "litre", "kilogramme"] as const
+export const UNITS = ["unite", "sachet", "litre", "kilogramme"] as const
 export type Unit = (typeof UNITS)[number]
 
 export const UNIT_LABELS: Record<Unit, string> = {
   unite: "unité",
+  // Les stations ivoiriennes achètent la lessive en sachets : c'est l'unité
+  // de comptage réelle, celle que le gérant a sous les yeux dans sa réserve.
+  sachet: "sachet",
   litre: "litre",
   kilogramme: "kilogramme",
 }

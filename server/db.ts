@@ -240,6 +240,37 @@ CREATE INDEX IF NOT EXISTS stock_movements_product_idx ON stock_movements(organi
 -- Un mouvement ne peut etre contrepasse qu'une seule fois.
 CREATE UNIQUE INDEX IF NOT EXISTS stock_movements_reversal_idx ON stock_movements(reverses_movement_id) WHERE reverses_movement_id IS NOT NULL;
 
+-- En Cote d'Ivoire les stations achetent de la lessive en sachets : l'unite
+-- reelle de comptage est le sachet, pas le litre. Les contraintes posees a la
+-- creation des tables sont elargies ici, pour que les bases deja en service
+-- soient migrees au demarrage au lieu de refuser les nouvelles valeurs.
+ALTER TABLE products DROP CONSTRAINT IF EXISTS products_unit_check;
+ALTER TABLE products ADD CONSTRAINT products_unit_check
+  CHECK (unit IN ('unite','sachet','litre','kilogramme'));
+
+-- Genre << consumption >> : sortie automatique declenchee par l'enregistrement d'un
+-- lavage. Elle se distingue d'une sortie manuelle parce qu'elle n'est jamais
+-- refusee : le produit a reellement ete utilise.
+ALTER TABLE stock_movements DROP CONSTRAINT IF EXISTS stock_movements_kind_check;
+ALTER TABLE stock_movements ADD CONSTRAINT stock_movements_kind_check
+  CHECK (kind IN ('initial','entry','exit','inventory','reversal','consumption'));
+
+-- Ce qu'une prestation consomme. C'est une recette : << un lavage complet
+-- utilise 2 sachets d'Omo >>. Elle ne touche pas au prix du service, qui
+-- reste fixe a la main dans la fiche de prestation.
+CREATE TABLE IF NOT EXISTS service_consumables (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ service_id uuid NOT NULL REFERENCES services(id), product_id uuid NOT NULL REFERENCES products(id),
+ quantity_milli integer NOT NULL CHECK(quantity_milli > 0),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(service_id, product_id)
+);
+CREATE INDEX IF NOT EXISTS service_consumables_service_idx ON service_consumables(organization_id, service_id);
+-- Rattache un mouvement au lavage qui l'a provoque : indispensable pour
+-- contrepasser exactement ce qui a ete deduit quand le lavage est annule.
+ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS wash_id uuid REFERENCES washes(id);
+CREATE INDEX IF NOT EXISTS stock_movements_wash_idx ON stock_movements(wash_id) WHERE wash_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS wash_assignments (
  wash_id uuid NOT NULL REFERENCES washes(id), worker_id uuid NOT NULL REFERENCES workers(id), PRIMARY KEY(wash_id,worker_id)
 );

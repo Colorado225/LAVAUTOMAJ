@@ -4,6 +4,7 @@ import type { Pool } from "pg"
 import { getPool } from "./db.ts"
 import { asyncRoute, body, tenant, parseId, requirePermission, HttpError } from "./http.ts"
 import { fingerprint, withIdempotency } from "./idempotency.ts"
+import { consumeForWash, reverseWashConsumption } from "./stock.ts"
 import { initialPaymentStatus, resolvePaymentStatus, PAYMENT_METHODS } from "./payments.ts"
 import { assertSiteCapacity, assertSiteWritable, loadSiteLimitState } from "./plan-limits.ts"
 
@@ -578,6 +579,11 @@ export function createApiRouter() {
               [wash.id, item.service_id, service.name, item.quantity, unitPrice, unitPrice * item.quantity],
             )
           }
+          // Ce que le lavage a consommé sort du stock dans la même
+          // transaction : si le lavage échoue, rien n'est déduit. Jamais
+          // bloquant — le produit a réellement été utilisé.
+          await consumeForWash(client, t.organizationId, wash.id, input.items, t.userId)
+
           for (const workerId of new Set(input.worker_ids)) {
             await client.query("INSERT INTO wash_assignments(wash_id, worker_id) VALUES($1,$2)", [wash.id, workerId])
           }
@@ -650,6 +656,10 @@ export function createApiRouter() {
 
         const hadPayments = await client.query("SELECT 1 FROM payments WHERE wash_id=$1::uuid LIMIT 1", [id])
         await client.query("UPDATE payments SET status='refunded' WHERE wash_id=$1::uuid", [id])
+
+        // Le lavage n'a pas eu lieu : ce qu'il avait consommé revient au
+        // stock, par contrepassation et non par suppression.
+        await reverseWashConsumption(client, t.organizationId, id, t.userId)
 
         const q = await client.query(
           `UPDATE washes SET status='cancelled', payment_status=CASE WHEN $4 THEN 'refunded' ELSE payment_status END,
