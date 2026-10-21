@@ -16,6 +16,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Skeleton } from "@/components/ui/skeleton"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
 import { useAccess } from "@/lib/permissions"
+import { actionGate } from "@/lib/action-blocking"
+import { BlockedReason } from "@/components/access/blocked-reason"
 
 interface Wash {
   id: string
@@ -120,6 +122,19 @@ export default function WashDetailPage() {
   // Remettre au client la preuve de ce qu'il a paye appartient a qui voit
   // les encaissements : le serveur exige la meme permission.
   const readPayments = useAccess("payment:read")
+  // Confirmer une réception écrit aussitôt ; ouvrir le formulaire
+  // d'encaissement et la zone d'annulation n'écrivent rien.
+  const confirmReceipt = actionGate({
+    loading: managePayments.loading,
+    allowed: managePayments.allowed,
+    reason: managePayments.reason,
+    writesImmediately: true,
+  })
+  const paymentForm = actionGate({
+    loading: managePayments.loading,
+    allowed: managePayments.allowed,
+    reason: managePayments.reason,
+  })
   const [paymentOpen, setPaymentOpen] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState<string>("cash")
   const [paymentAmount, setPaymentAmount] = useState("")
@@ -233,6 +248,16 @@ export default function WashDetailPage() {
 
   const wash = detail?.wash
   const hasVerifiedPayment = detail?.payments.some((payment) => payment.status === "verified") ?? false
+  // Un paiement vérifié bloque l'annulation, mais ce n'est pas un refus de
+  // droit : le dire évite de faire croire à une permission manquante.
+  const cancelGate = actionGate({
+    loading: cancelCapability.loading,
+    allowed: cancelCapability.allowed,
+    reason: cancelCapability.reason,
+    blockedBy: hasVerifiedPayment
+      ? "Au moins un paiement est vérifié : remboursez-le avant d'annuler le lavage."
+      : null,
+  })
   const siteName = sites?.find((site) => site.id === wash?.site_id)?.name ?? "—"
   const vehicleCategoryName = categories?.find((category) => category.id === wash?.vehicle_category_id)?.name ?? "—"
 
@@ -388,8 +413,9 @@ export default function WashDetailPage() {
                             size="sm"
                             variant="outline"
                             className="mt-2 h-8"
-                            disabled={paymentBusy || !managePayments.allowed}
-                            title={managePayments.reason ?? undefined}
+                            disabled={paymentBusy || confirmReceipt.disabled}
+                            aria-busy={confirmReceipt.busy}
+                            title={confirmReceipt.reason ?? undefined}
                             onClick={() => void confirmPayment(payment.id)}
                           >
                             <BadgeCheck className="mr-1.5 size-3.5" /> Confirmer la réception
@@ -473,8 +499,9 @@ export default function WashDetailPage() {
                     ) : (
                       <Button
                         className="mt-2 h-11"
-                        disabled={!managePayments.allowed}
-                        title={managePayments.reason ?? undefined}
+                        disabled={paymentForm.disabled}
+                        aria-busy={paymentForm.busy}
+                        title={paymentForm.reason ?? undefined}
                         onClick={() => {
                           setMutationError(null)
                           setPaymentSuccess(null)
@@ -522,22 +549,26 @@ export default function WashDetailPage() {
                       <p className="mt-2 text-sm text-destructive">Au moins un paiement est vérifié; l’annulation est bloquée jusqu’au remboursement.</p>
                     )}
                   </div>
-                  <Button
-                    variant="destructive"
-                    disabled={hasVerifiedPayment || !cancelCapability.allowed}
-                    title={cancelCapability.reason ?? undefined}
-                    onClick={() => {
-                      setMutationError(null)
-                      setCancelOpen((open) => !open)
-                    }}
-                  >
-                    {cancelCapability.allowed ? (
-                      <Ban className="mr-2 size-4" />
-                    ) : (
-                      <Lock className="mr-2 size-4" />
-                    )}{" "}
-                    Annuler le lavage
-                  </Button>
+                  <div className="flex flex-col items-start gap-1.5">
+                    <Button
+                      variant="destructive"
+                      disabled={cancelGate.disabled}
+                      aria-busy={cancelGate.busy}
+                      title={cancelGate.reason ?? undefined}
+                      onClick={() => {
+                        setMutationError(null)
+                        setCancelOpen((open) => !open)
+                      }}
+                    >
+                      {cancelGate.denied ? (
+                        <Lock className="mr-2 size-4" />
+                      ) : (
+                        <Ban className="mr-2 size-4" />
+                      )}{" "}
+                      Annuler le lavage
+                    </Button>
+                    <BlockedReason reason={cancelGate.reason} className="max-w-72" />
+                  </div>
                 </div>
                 {cancelOpen && (
                   <div className="mt-4 space-y-3 border-t pt-4">

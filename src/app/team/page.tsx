@@ -3,6 +3,8 @@
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
+import { actionGate } from "@/lib/action-blocking"
+import { BlockedReason } from "@/components/access/blocked-reason"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -68,6 +70,10 @@ function roleLabel(worker: WorkerRecord) {
 
 export default function TeamPage() {
   const manageTeam = useAccess("worker:create", "team.manage")
+  // Le plafond de laveurs du forfait n'est pas un refus de droit : le
+  // distinguer évite de faire croire qu'on manque d'une permission.
+  const teamLimitReached = (limit: number | null | undefined, actifs: number) =>
+    limit !== null && limit !== undefined && actifs >= limit
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<WorkerRecord[]>(`/api/v1/workers?refresh=${refreshKey}`)
   const { data: accounts, loading: accountsLoading, error: accountsError } = useApi<OrganizationAccount[]>(`/api/v1/users?refresh=${refreshKey}`)
@@ -77,6 +83,29 @@ export default function TeamPage() {
   const activeWorkers = useMemo(() => workers.filter((worker) => worker.status === "active"), [workers])
   const inactiveWorkers = workers.length - activeWorkers.length
   const workerLimit = summary?.plan?.max_workers
+
+  // Ouvrir le formulaire n'écrit rien ; basculer un statut écrit tout de suite.
+  const teamForm = actionGate({
+    loading: manageTeam.loading,
+    allowed: manageTeam.allowed,
+    reason: manageTeam.reason,
+    blockedBy: teamLimitReached(workerLimit, activeWorkers.length)
+      ? `Votre forfait est limité à ${workerLimit} laveur${workerLimit === 1 ? "" : "s"} actif${workerLimit === 1 ? "" : "s"}. Désactivez-en un ou changez de forfait.`
+      : null,
+  })
+  // Modifier un laveur existant ne crée rien : le plafond du forfait n'a pas
+  // à s'y appliquer.
+  const teamEdit = actionGate({
+    loading: manageTeam.loading,
+    allowed: manageTeam.allowed,
+    reason: manageTeam.reason,
+  })
+  const teamWrite = actionGate({
+    loading: manageTeam.loading,
+    allowed: manageTeam.allowed,
+    reason: manageTeam.reason,
+    writesImmediately: true,
+  })
   const canManage = currentMember?.role === "owner" || currentMember?.role === "manager"
 
   const [search, setSearch] = useState("")
@@ -208,16 +237,17 @@ export default function TeamPage() {
             </p>
           </div>
           {canManage && (
+            <div className="flex flex-col items-start gap-1.5">
             <Button
               onClick={openCreateDialog}
-              title={manageTeam.reason ?? undefined}
-              disabled={
-                !manageTeam.allowed ||
-                (workerLimit !== null && workerLimit !== undefined && activeWorkers.length >= workerLimit)
-              }
+              title={teamForm.reason ?? undefined}
+              aria-busy={teamForm.busy}
+              disabled={teamForm.disabled}
             >
               <UserPlus className="mr-2 size-4" /> Ajouter un travailleur
             </Button>
+            <BlockedReason reason={teamForm.reason} className="max-w-72" />
+            </div>
           )}
         </div>
 
@@ -336,10 +366,10 @@ export default function TeamPage() {
                         {canManage && (
                           <TableCell>
                             <div className="flex justify-end gap-1">
-                              <Button variant="ghost" size="icon" disabled={!manageTeam.allowed} title={manageTeam.reason ?? undefined} aria-label={`Modifier ${worker.first_name} ${worker.last_name}`} onClick={() => openEditDialog(worker)}>
+                              <Button variant="ghost" size="icon" disabled={teamEdit.disabled} title={teamEdit.reason ?? undefined} aria-label={`Modifier ${worker.first_name} ${worker.last_name}`} onClick={() => openEditDialog(worker)}>
                                 <Pencil className="size-4" />
                               </Button>
-                              <Button variant="ghost" size="icon" title={manageTeam.reason ?? undefined} disabled={!manageTeam.allowed || busyWorkerId === worker.id || (worker.status !== "active" && workerLimit !== null && workerLimit !== undefined && activeWorkers.length >= workerLimit)} aria-label={worker.status === "active" ? `Désactiver ${worker.first_name} ${worker.last_name}` : `Réactiver ${worker.first_name} ${worker.last_name}`} onClick={() => void toggleWorkerStatus(worker)}>
+                              <Button variant="ghost" size="icon" title={teamWrite.reason ?? undefined} disabled={teamWrite.disabled || busyWorkerId === worker.id || (worker.status !== "active" && teamLimitReached(workerLimit, activeWorkers.length))} aria-label={worker.status === "active" ? `Désactiver ${worker.first_name} ${worker.last_name}` : `Réactiver ${worker.first_name} ${worker.last_name}`} onClick={() => void toggleWorkerStatus(worker)}>
                                 {busyWorkerId === worker.id ? <RefreshCw className="size-4 animate-spin" /> : worker.status === "active" ? <UserRoundX className="size-4" /> : <UserRoundCheck className="size-4" />}
                               </Button>
                             </div>

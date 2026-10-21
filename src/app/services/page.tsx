@@ -4,6 +4,8 @@ import type * as React from "react"
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
+import { actionGate } from "@/lib/action-blocking"
+import { BlockedReason } from "@/components/access/blocked-reason"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -95,6 +97,19 @@ function formatXof(cents: number) {
 
 export default function ServicesPage() {
   const manageCatalog = useAccess("service:manage", "catalog.manage")
+  // Ouvrir un formulaire n'écrit rien : on reste cliquable pendant que les
+  // droits chargent. Basculer un statut écrit tout de suite : on attend.
+  const catalogForm = actionGate({
+    loading: manageCatalog.loading,
+    allowed: manageCatalog.allowed,
+    reason: manageCatalog.reason,
+  })
+  const catalogWrite = actionGate({
+    loading: manageCatalog.loading,
+    allowed: manageCatalog.allowed,
+    reason: manageCatalog.reason,
+    writesImmediately: true,
+  })
   const [refreshKey, setRefreshKey] = useState(0)
   const { data: services, loading, error } = useApi<Service[]>(`/api/v1/services?refresh=${refreshKey}`)
   const { data: categories, loading: categoriesLoading, error: categoriesError } = useApi<ServiceCategory[]>(`/api/v1/service-categories?refresh=${refreshKey}`)
@@ -228,7 +243,12 @@ export default function ServicesPage() {
           <div>
             <p className="text-sm text-muted-foreground">Les modifications sont enregistrées dans l’organisation active. Les prix historiques restent figés sur chaque lavage.</p>
           </div>
-          {canManage && <Button onClick={openCreateDialog} disabled={!manageCatalog.allowed} title={manageCatalog.reason ?? undefined}><Plus className="mr-2 size-4" />Nouvelle prestation</Button>}
+          {canManage && (
+            <div className="flex flex-col items-start gap-1.5">
+              <Button onClick={openCreateDialog} disabled={catalogForm.disabled} aria-busy={catalogForm.busy} title={catalogForm.reason ?? undefined}><Plus className="mr-2 size-4" />Nouvelle prestation</Button>
+              <BlockedReason reason={catalogForm.reason} className="max-w-72" />
+            </div>
+          )}
         </div>
 
         {mutationSuccess && <p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">{mutationSuccess}</p>}
@@ -246,6 +266,7 @@ export default function ServicesPage() {
               <Input className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Rechercher une prestation…" aria-label="Rechercher une prestation" />
             </div>
             {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+            {canManage && <BlockedReason reason={catalogWrite.reason} />}
             {categoriesError && <p role="alert" className="text-sm text-destructive">Impossible de charger les catégories : {categoriesError}</p>}
             {(loading || categoriesLoading) && <TableSkeleton rows={5} cols={5} label="Synchronisation du catalogue" />}
             {!loading && !error && (
@@ -283,7 +304,7 @@ export default function ServicesPage() {
                         <TableCell>{service.duration_minutes ? `${service.duration_minutes} min` : "—"}</TableCell>
                         <TableCell className="text-right">{formatXof(service.price_cents)}</TableCell>
                         <TableCell><Badge variant={service.is_active ? "secondary" : "outline"}>{service.is_active ? "Active" : "Inactive"}</Badge></TableCell>
-                        {canManage && <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" disabled={!manageCatalog.allowed} title={manageCatalog.reason ?? undefined} aria-label={`Modifier ${service.name}`} onClick={() => openEditDialog(service)}><Pencil className="size-4" /></Button><Button variant="ghost" size="icon" title={manageCatalog.reason ?? undefined} disabled={!manageCatalog.allowed || busyServiceId === service.id} aria-label={service.is_active ? `Désactiver ${service.name}` : `Réactiver ${service.name}`} onClick={() => void toggleService(service)}>{busyServiceId === service.id ? <RefreshCw className="size-4 animate-spin" /> : service.is_active ? <ToggleLeft className="size-4" /> : <ToggleRight className="size-4" />}</Button></div></TableCell>}
+                        {canManage && <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" disabled={catalogForm.disabled} title={catalogForm.reason ?? undefined} aria-label={`Modifier ${service.name}`} onClick={() => openEditDialog(service)}><Pencil className="size-4" /></Button><Button variant="ghost" size="icon" title={catalogWrite.reason ?? undefined} disabled={catalogWrite.disabled || busyServiceId === service.id} aria-label={service.is_active ? `Désactiver ${service.name}` : `Réactiver ${service.name}`} onClick={() => void toggleService(service)}>{busyServiceId === service.id ? <RefreshCw className="size-4 animate-spin" /> : service.is_active ? <ToggleLeft className="size-4" /> : <ToggleRight className="size-4" />}</Button></div></TableCell>}
                       </TableRow>
                     ))}
                   </TableBody>

@@ -3,6 +3,8 @@
 import { useRef, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
+import { actionGate } from "@/lib/action-blocking"
+import { BlockedReason } from "@/components/access/blocked-reason"
 import { apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import {
@@ -114,6 +116,13 @@ interface CreateExpenseRequest {
 
 export default function ExpensesPage() {
   const manageExpenses = useAccess("expense:create", "expenses.manage")
+  // Le formulaire s'ouvre dans une boîte de dialogue : rien n'est écrit tant
+  // qu'on n'a pas validé, donc l'attente des droits ne grise pas le bouton.
+  const expenseForm = actionGate({
+    loading: manageExpenses.loading,
+    allowed: manageExpenses.allowed,
+    reason: manageExpenses.reason,
+  })
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<Expense[]>(`/api/v1/expenses?refresh=${refreshKey}`)
   const expenses = data ?? []
@@ -247,21 +256,25 @@ export default function ExpensesPage() {
             </p>
           </div>
           <Dialog open={open} onOpenChange={handleOpenChange}>
+            <div className="flex flex-col items-start gap-1.5">
             <DialogTrigger
               render={
                 <Button
-                  disabled={!manageExpenses.allowed}
-                  title={manageExpenses.reason ?? undefined}
+                  disabled={expenseForm.disabled}
+                  aria-busy={expenseForm.busy}
+                  title={expenseForm.reason ?? undefined}
                 />
               }
             >
-              {manageExpenses.allowed ? (
-                <Plus className="mr-2 h-4 w-4" />
-              ) : (
+              {expenseForm.denied ? (
                 <Lock className="mr-2 h-4 w-4" />
+              ) : (
+                <Plus className="mr-2 h-4 w-4" />
               )}{" "}
               Nouvelle dépense
             </DialogTrigger>
+            <BlockedReason reason={expenseForm.reason} className="max-w-72" />
+            </div>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Nouvelle dépense</DialogTitle>

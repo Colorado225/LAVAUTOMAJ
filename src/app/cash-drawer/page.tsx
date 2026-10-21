@@ -3,6 +3,8 @@
 import * as React from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
+import { actionGate } from "@/lib/action-blocking"
+import { BlockedReason } from "@/components/access/blocked-reason"
 import { motion } from "framer-motion"
 import { TRANSITION } from "@/lib/motion"
 import { useApi, apiFetch } from "@/lib/api"
@@ -88,6 +90,27 @@ export default function CashDrawerPage() {
     ? `/api/v1/cash-sessions/current?site_id=${encodeURIComponent(siteId)}&refresh=${refreshKey}`
     : ""
   const { data: session, loading, error } = useApi<CashSession | null>(sessionPath)
+
+  // Les quatre actions de caisse ouvrent toutes une boîte de dialogue : rien
+  // n'est écrit avant validation, donc l'attente des droits ne les grise pas.
+  // L'ouverture a ses propres prérequis, qui ne sont pas des refus de droit.
+  const openSession = actionGate({
+    loading: manageCash.loading,
+    allowed: manageCash.allowed,
+    reason: manageCash.reason,
+    blockedBy: sitesLoading || loading
+      ? null
+      : !siteId
+        ? "Choisissez une station pour ouvrir une session."
+        : session
+          ? "Une session est déjà ouverte sur cette station. Clôturez-la avant d'en ouvrir une autre."
+          : null,
+  })
+  const cashAction = actionGate({
+    loading: manageCash.loading,
+    allowed: manageCash.allowed,
+    reason: manageCash.reason,
+  })
   const movementPath = session
     ? `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/movements?refresh=${refreshKey}`
     : ""
@@ -255,16 +278,18 @@ export default function CashDrawerPage() {
                 setMutationError(null)
                 setOpenDialog(true)
               }}
-              disabled={!siteId || !!session || loading || sitesLoading || !manageCash.allowed}
-              title={manageCash.reason ?? undefined}
+              disabled={openSession.disabled || loading || sitesLoading}
+              aria-busy={openSession.busy || loading || sitesLoading}
+              title={openSession.reason ?? undefined}
             >
-              {manageCash.allowed ? (
-                <Plus className="mr-2 size-4" />
-              ) : (
+              {openSession.denied ? (
                 <Lock className="mr-2 size-4" />
+              ) : (
+                <Plus className="mr-2 size-4" />
               )}
               {session ? "Session ouverte" : "Nouvelle session"}
             </Button>
+            <BlockedReason reason={openSession.reason} className="max-w-72" />
           </div>
         </div>
 
@@ -353,8 +378,9 @@ export default function CashDrawerPage() {
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="outline"
-                    disabled={!manageCash.allowed}
-                    title={manageCash.reason ?? undefined}
+                    disabled={cashAction.disabled}
+                    aria-busy={cashAction.busy}
+                    title={cashAction.reason ?? undefined}
                     onClick={() => {
                       setMovementType("entry")
                       setMutationError(null)
@@ -365,8 +391,9 @@ export default function CashDrawerPage() {
                   </Button>
                   <Button
                     variant="outline"
-                    disabled={!manageCash.allowed}
-                    title={manageCash.reason ?? undefined}
+                    disabled={cashAction.disabled}
+                    aria-busy={cashAction.busy}
+                    title={cashAction.reason ?? undefined}
                     onClick={() => {
                       setMovementType("exit")
                       setMutationError(null)
@@ -376,8 +403,9 @@ export default function CashDrawerPage() {
                     <ArrowUpFromLine className="mr-2 size-4" /> Sortie
                   </Button>
                   <Button
-                    disabled={!manageCash.allowed}
-                    title={manageCash.reason ?? undefined}
+                    disabled={cashAction.disabled}
+                    aria-busy={cashAction.busy}
+                    title={cashAction.reason ?? undefined}
                     onClick={() => {
                       setCountedAmount("")
                       setDiscrepancyReason("")
@@ -388,6 +416,7 @@ export default function CashDrawerPage() {
                     <WalletCards className="mr-2 size-4" /> Clôturer
                   </Button>
                 </div>
+                <BlockedReason reason={cashAction.reason} />
               </div>
               <div className="overflow-x-auto">
                 <Table>

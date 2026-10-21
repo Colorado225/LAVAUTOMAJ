@@ -10,6 +10,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
 import { usePermission, ROLE_LABELS, type Permission, type Role } from "@/lib/permissions"
+import { actionGate } from "@/lib/action-blocking"
+import { BlockedReason } from "@/components/access/blocked-reason"
 import { cn } from "cn"
 
 interface MemberOverride {
@@ -43,6 +45,14 @@ const STATUS_LABELS: Record<string, string> = {
 
 export default function AccessSettingsPage() {
   const manage = usePermission("user:manage")
+  // Changer un rôle ou un droit part aussitôt en requête : on attend de
+  // connaître les droits plutôt que d'envoyer un PATCH voué au refus.
+  const manageAccess = actionGate({
+    loading: manage.loading,
+    allowed: manage.allowed,
+    reason: manage.reason,
+    writesImmediately: true,
+  })
   const [refreshKey, setRefreshKey] = React.useState(0)
   const { data, loading, error } = useApi<{ members: AccessMember[] }>(
     `/api/v1/access/members?refresh=${refreshKey}`,
@@ -126,6 +136,7 @@ export default function AccessSettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
+            <BlockedReason reason={manageAccess.reason} />
             {notice && (
               <p role="status" className="rounded-md border border-emerald-600/30 bg-emerald-600/5 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400">
                 {notice}
@@ -186,7 +197,7 @@ export default function AccessSettingsPage() {
                           id={`role-${member.user_id}`}
                           className="h-10 rounded-md border border-input bg-background px-3 text-sm"
                           value={member.role}
-                          disabled={!manage.allowed || member.is_self || busy !== null}
+                          disabled={manageAccess.disabled || member.is_self || busy !== null}
                           title={member.is_self ? "Vous ne pouvez pas modifier votre propre rôle." : undefined}
                           onChange={(event) =>
                             void send(
@@ -208,7 +219,7 @@ export default function AccessSettingsPage() {
                           type="button"
                           variant={disabled ? "default" : "outline"}
                           className="h-10"
-                          disabled={!manage.allowed || member.is_self || busy !== null}
+                          disabled={manageAccess.disabled || member.is_self || busy !== null}
                           title={member.is_self ? "Vous ne pouvez pas désactiver votre propre accès." : undefined}
                           onClick={() =>
                             void send(
@@ -297,7 +308,7 @@ export default function AccessSettingsPage() {
                                     size="sm"
                                     variant="ghost"
                                     className="h-8"
-                                    disabled={!manage.allowed || busy !== null}
+                                    disabled={manageAccess.disabled || busy !== null}
                                     onClick={() =>
                                       void send(
                                         `/api/v1/access/members/${member.user_id}/permissions/${permission.code}`,

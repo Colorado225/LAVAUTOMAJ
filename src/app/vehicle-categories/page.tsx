@@ -5,6 +5,8 @@ import type * as React from "react"
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
+import { actionGate } from "@/lib/action-blocking"
+import { BlockedReason } from "@/components/access/blocked-reason"
 import { Badge } from "@/components/ui/badge"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
 import { Button } from "@/components/ui/button"
@@ -46,6 +48,19 @@ interface VehicleCategory {
 
 export default function VehicleCategoriesPage() {
   const manageCatalog = useAccess("service:manage", "catalog.manage")
+  // Ouvrir un formulaire n'écrit rien : on reste cliquable pendant que les
+  // droits chargent. Basculer un statut écrit tout de suite : on attend.
+  const catalogForm = actionGate({
+    loading: manageCatalog.loading,
+    allowed: manageCatalog.allowed,
+    reason: manageCatalog.reason,
+  })
+  const catalogWrite = actionGate({
+    loading: manageCatalog.loading,
+    allowed: manageCatalog.allowed,
+    reason: manageCatalog.reason,
+    writesImmediately: true,
+  })
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<VehicleCategory[]>(`/api/v1/vehicle-categories?refresh=${refreshKey}`)
   const { data: member } = useApi<CurrentMember>(`/api/v1/auth/me?refresh=${refreshKey}`)
@@ -139,7 +154,12 @@ export default function VehicleCategoriesPage() {
       <div className="space-y-6 p-4">
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
           <div><p className="text-sm text-muted-foreground">La désactivation masque une catégorie des nouveaux lavages sans effacer les anciens enregistrements.</p></div>
-          {canManage && <Button onClick={openCreateDialog} disabled={!manageCatalog.allowed} title={manageCatalog.reason ?? undefined}><Plus className="mr-2 size-4" />Nouvelle catégorie</Button>}
+          {canManage && (
+            <div className="flex flex-col items-start gap-1.5">
+              <Button onClick={openCreateDialog} disabled={catalogForm.disabled} aria-busy={catalogForm.busy} title={catalogForm.reason ?? undefined}><Plus className="mr-2 size-4" />Nouvelle catégorie</Button>
+              <BlockedReason reason={catalogForm.reason} className="max-w-72" />
+            </div>
+          )}
         </div>
         {mutationSuccess && <p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">{mutationSuccess}</p>}
         {mutationError && !dialogOpen && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{mutationError}</p>}
@@ -149,6 +169,7 @@ export default function VehicleCategoriesPage() {
           <CardHeader><CardTitle>Catégories</CardTitle><CardDescription>{activeCount} active{activeCount === 1 ? "" : "s"} sur {categories.length} enregistrée{categories.length === 1 ? "" : "s"}.</CardDescription></CardHeader>
           <CardContent>
             {error && <p role="alert" className="mb-3 text-sm text-destructive">{error}</p>}
+            {canManage && <BlockedReason reason={catalogWrite.reason} />}
             {loading && <div className="mb-3"><TableSkeleton rows={4} cols={3} label="Synchronisation des catégories" /></div>}
             {!loading && !error && (
               <div className="overflow-x-auto rounded-lg border">
@@ -160,7 +181,7 @@ export default function VehicleCategoriesPage() {
                       <TableRow key={category.id} className="row-in" style={{ "--row": Math.min(index, 10) } as React.CSSProperties}>
                         <TableCell className="font-medium">{category.name}</TableCell>
                         <TableCell><Badge variant={category.is_active ? "secondary" : "outline"}>{category.is_active ? "Active" : "Inactive"}</Badge></TableCell>
-                        {canManage && <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" disabled={!manageCatalog.allowed} title={manageCatalog.reason ?? undefined} aria-label={`Modifier ${category.name}`} onClick={() => openEditDialog(category)}><Pencil className="size-4" /></Button><Button variant="ghost" size="icon" title={manageCatalog.reason ?? undefined} disabled={!manageCatalog.allowed || busyCategoryId === category.id} aria-label={category.is_active ? `Désactiver ${category.name}` : `Réactiver ${category.name}`} onClick={() => void toggleCategory(category)}>{busyCategoryId === category.id ? <RefreshCw className="size-4 animate-spin" /> : category.is_active ? <ToggleLeft className="size-4" /> : <ToggleRight className="size-4" />}</Button></div></TableCell>}
+                        {canManage && <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" disabled={catalogForm.disabled} title={catalogForm.reason ?? undefined} aria-label={`Modifier ${category.name}`} onClick={() => openEditDialog(category)}><Pencil className="size-4" /></Button><Button variant="ghost" size="icon" title={catalogWrite.reason ?? undefined} disabled={catalogWrite.disabled || busyCategoryId === category.id} aria-label={category.is_active ? `Désactiver ${category.name}` : `Réactiver ${category.name}`} onClick={() => void toggleCategory(category)}>{busyCategoryId === category.id ? <RefreshCw className="size-4 animate-spin" /> : category.is_active ? <ToggleLeft className="size-4" /> : <ToggleRight className="size-4" />}</Button></div></TableCell>}
                       </TableRow>
                     ))}
                   </TableBody>

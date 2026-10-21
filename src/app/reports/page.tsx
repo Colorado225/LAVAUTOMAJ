@@ -27,6 +27,8 @@ import {
 import { MotionCard } from "@/components/ui/motion"
 import { useApi } from "@/lib/api"
 import { useAccess } from "@/lib/permissions"
+import { actionGate } from "@/lib/action-blocking"
+import { BlockedReason } from "@/components/access/blocked-reason"
 import { useCapability } from "@/lib/subscription"
 import type { ChartConfig } from "@/components/ui/chart"
 import type { ReportGranularity, ReportResponse } from "@/lib/reporting-api"
@@ -245,6 +247,22 @@ export default function ReportsPage() {
       }`
     : ""
   const { data, loading, error } = useApi<ReportResponse>(reportPath)
+
+  // L'export ne modifie rien, mais il lui faut des données : la raison du
+  // blocage n'est alors pas un droit, et le dire évite de faire croire à un
+  // refus de permission.
+  const reportExport = actionGate({
+    loading: exportReports.loading,
+    allowed: exportReports.allowed,
+    reason: exportReports.reason,
+    blockedBy: !hasValidRange
+      ? "Choisissez une période valide : la date de début doit précéder la date de fin."
+      : loading
+        ? "Rapport en cours de chargement…"
+        : !data
+          ? "Aucun rapport à exporter pour cette période."
+          : null,
+  })
   // Le serveur renvoie null sur les champs financiers quand le rôle n'y a pas
   // droit : l'interface s'aligne sur sa décision plutôt que de la deviner.
   const financialAccess = data?.financial_access ?? false
@@ -382,11 +400,12 @@ export default function ReportsPage() {
             <Button
               type="button"
               variant="outline"
-              disabled={!data || loading || !exportReports.allowed}
-              title={exportReports.reason ?? undefined}
+              disabled={reportExport.disabled}
+              aria-busy={reportExport.busy}
+              title={reportExport.reason ?? undefined}
               onClick={() => data && exportReports.allowed && downloadReport(data)}
             >
-              {exportReports.allowed ? (
+              {!reportExport.denied ? (
                 <Download className="mr-2 size-4" />
               ) : (
                 <Lock className="mr-2 size-4" />
@@ -395,6 +414,7 @@ export default function ReportsPage() {
             </Button>
           </div>
         </div>
+        <BlockedReason reason={reportExport.reason} />
 
         {data?.restriction && (
           <p

@@ -19,6 +19,8 @@ import {
 } from "@/components/ui/table"
 import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
 import { useAccess } from "@/lib/permissions"
+import { actionGate } from "@/lib/action-blocking"
+import { BlockedReason } from "@/components/access/blocked-reason"
 import {
   PAYMENT_METHODS,
   PAYMENT_STATUS_LABELS,
@@ -41,6 +43,14 @@ export default function PaymentsPage() {
   // Le remboursement est réservé au propriétaire : il touche la caisse et la
   // comptabilité, et ne peut pas être délégué.
   const refundPayments = useAccess("payment:cancel", "payments.manage")
+  // Confirmer écrit immédiatement : on attend de connaître les droits plutôt
+  // que de laisser partir une requête vouée au refus.
+  const confirmGate = actionGate({
+    loading: managePayments.loading,
+    allowed: managePayments.allowed,
+    reason: managePayments.reason,
+    writesImmediately: true,
+  })
   const [status, setStatus] = React.useState<(typeof STATUS_FILTERS)[number]["value"]>("all")
   const [method, setMethod] = React.useState<string>("all")
   const [refreshKey, setRefreshKey] = React.useState(0)
@@ -266,6 +276,7 @@ export default function PaymentsPage() {
             )}
           </CardHeader>
           <CardContent className="p-0">
+            <BlockedReason reason={confirmGate.reason} className="px-6 pb-3" />
             {loading && !data ? (
               <TableSkeleton rows={6} cols={6} label="Chargement des encaissements" />
             ) : (
@@ -325,8 +336,9 @@ export default function PaymentsPage() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                disabled={busyId === payment.id || !managePayments.allowed}
-                                title={managePayments.reason ?? undefined}
+                                disabled={busyId === payment.id || confirmGate.disabled}
+                                aria-busy={confirmGate.busy}
+                                title={confirmGate.reason ?? undefined}
                                 onClick={() => void confirmPayment(payment.id)}
                               >
                                 {busyId === payment.id ? "…" : "Confirmer"}

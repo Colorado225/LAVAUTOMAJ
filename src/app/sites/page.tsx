@@ -3,6 +3,8 @@
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
+import { actionGate } from "@/lib/action-blocking"
+import { BlockedReason } from "@/components/access/blocked-reason"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -53,6 +55,18 @@ import {
 
 export default function SitesPage() {
   const canManage = useAccess("settings:manage")
+  // Modifier ouvre un formulaire ; désactiver et supprimer écrivent aussitôt.
+  const siteForm = actionGate({
+    loading: canManage.loading,
+    allowed: canManage.allowed,
+    reason: canManage.reason,
+  })
+  const siteWrite = actionGate({
+    loading: canManage.loading,
+    allowed: canManage.allowed,
+    reason: canManage.reason,
+    writesImmediately: true,
+  })
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<SiteRecord[]>(`/api/v1/sites?refresh=${refreshKey}`)
   const { state: subscription } = useSubscription()
@@ -62,6 +76,16 @@ export default function SitesPage() {
   const siteLimit = subscription?.limits?.sites.limit
   const limitState = subscription?.limits?.sites
   const limitReached = limitState?.creation_blocked ?? false
+
+  // Le plafond de stations du forfait n'est pas un refus de droit.
+  const createSite = actionGate({
+    loading: canManage.loading,
+    allowed: canManage.allowed,
+    reason: canManage.reason,
+    blockedBy: limitReached
+      ? `Votre forfait autorise ${siteLimit} station${(siteLimit ?? 0) > 1 ? "s" : ""} active${(siteLimit ?? 0) > 1 ? "s" : ""}. Désactivez-en une ou changez de forfait.`
+      : null,
+  })
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingSite, setEditingSite] = useState<SiteRecord | null>(null)
@@ -212,19 +236,17 @@ export default function SitesPage() {
             C’est ce rattachement qui permet de comparer les points de vente dans
             les rapports.
           </p>
-          <Button
-            onClick={openCreateDialog}
-            title={
-              !canManage.allowed
-                ? (canManage.reason ?? undefined)
-                : limitReached
-                  ? `Votre forfait autorise ${siteLimit} station${(siteLimit ?? 0) > 1 ? "s" : ""} active${(siteLimit ?? 0) > 1 ? "s" : ""}.`
-                  : undefined
-            }
-            disabled={!canManage.allowed || limitReached}
-          >
-            <Plus className="mr-2 size-4" /> Ajouter une station
-          </Button>
+          <div className="flex flex-col items-start gap-1.5">
+            <Button
+              onClick={openCreateDialog}
+              title={createSite.reason ?? undefined}
+              aria-busy={createSite.busy}
+              disabled={createSite.disabled}
+            >
+              <Plus className="mr-2 size-4" /> Ajouter une station
+            </Button>
+            <BlockedReason reason={createSite.reason} className="max-w-80" />
+          </div>
         </div>
 
         {mutationSuccess && (
@@ -322,6 +344,7 @@ export default function SitesPage() {
             </CardDescription>
           </CardHeader>
           <CardContent aria-busy={loading}>
+            <BlockedReason reason={siteWrite.reason} className="mb-3" />
             {loading ? (
               <TableSkeleton rows={3} cols={4} label="Chargement des stations" />
             ) : sites.length === 0 ? (
@@ -385,8 +408,8 @@ export default function SitesPage() {
                               variant="ghost"
                               size="icon"
                               aria-label={`Modifier ${site.name}`}
-                              title={canManage.reason ?? undefined}
-                              disabled={!canManage.allowed || busySiteId === site.id}
+                              title={siteForm.reason ?? undefined}
+                              disabled={siteForm.disabled || busySiteId === site.id}
                               onClick={() => openEditDialog(site)}
                             >
                               <Pencil className="size-4" />
@@ -399,8 +422,8 @@ export default function SitesPage() {
                                   ? `Désactiver ${site.name}`
                                   : `Réactiver ${site.name}`
                               }
-                              title={canManage.reason ?? undefined}
-                              disabled={!canManage.allowed || busySiteId === site.id}
+                              title={siteWrite.reason ?? undefined}
+                              disabled={siteWrite.disabled || busySiteId === site.id}
                               onClick={() => toggleSite(site)}
                             >
                               {site.is_active ? (
@@ -413,8 +436,8 @@ export default function SitesPage() {
                               variant="ghost"
                               size="icon"
                               aria-label={`Supprimer ${site.name}`}
-                              title={canManage.reason ?? undefined}
-                              disabled={!canManage.allowed || busySiteId === site.id}
+                              title={siteWrite.reason ?? undefined}
+                              disabled={siteWrite.disabled || busySiteId === site.id}
                               onClick={() => deleteSite(site)}
                             >
                               <Trash2 className="size-4 text-destructive" />

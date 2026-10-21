@@ -143,3 +143,73 @@ export function washSubmitBlockedReason(input: WashSubmitInput): string | null {
   }
   return null
 }
+
+/* ------------------------------------------------------------------ *
+ * Porte générique, pour tous les écrans
+ * ------------------------------------------------------------------ */
+
+export interface ActionGateInput {
+  /** Les droits (rôle + forfait) sont-ils encore en cours de chargement ? */
+  loading: boolean
+  allowed: boolean
+  /** Motif du refus fourni par `useAccess`. */
+  reason: string | null
+  /**
+   * Obstacle propre à l'écran, évalué une fois les droits connus : quota
+   * atteint, ligne déjà en cours de traitement, prérequis manquant. Porte son
+   * propre motif, car l'utilisateur n'a pas à deviner lequel des deux joue.
+   */
+  blockedBy?: string | null
+  /**
+   * L'action écrit-elle immédiatement, sans étape intermédiaire ?
+   *
+   * La distinction change le traitement de l'attente :
+   *   • **ouverture d'un formulaire** (défaut) : on reste cliquable pendant
+   *     le chargement. Rien n'est écrit, et griser pour une incertitude d'une
+   *     seconde punit tout le monde.
+   *   • **écriture immédiate** (`true`) : on attend de connaître les droits.
+   *     Laisser partir une requête vouée au 403 ne gagne rien et fait
+   *     apparaître une erreur que l'utilisateur n'a pas provoquée.
+   */
+  writesImmediately?: boolean
+}
+
+export interface ActionGate {
+  disabled: boolean
+  /** Attente en cours : indicateur d'activité, jamais de cadenas. */
+  busy: boolean
+  /** Refus de droit avéré : le cadenas est alors honnête. */
+  denied: boolean
+  /** Motif à afficher visiblement. */
+  reason: string | null
+}
+
+/**
+ * État d'une action soumise à un droit.
+ *
+ * Même principe que `washButtonState`, généralisé aux autres écrans : on ne
+ * confond pas une attente avec un refus, et tout état désactivé hors attente
+ * porte un motif affichable.
+ */
+export function actionGate(input: ActionGateInput): ActionGate {
+  if (input.loading) {
+    return {
+      disabled: input.writesImmediately === true,
+      busy: true,
+      denied: false,
+      reason: null,
+    }
+  }
+  if (!input.allowed) {
+    return {
+      disabled: true,
+      busy: false,
+      denied: true,
+      reason: input.reason ?? "Vous n'avez pas le droit d'effectuer cette action.",
+    }
+  }
+  if (input.blockedBy) {
+    return { disabled: true, busy: false, denied: false, reason: input.blockedBy }
+  }
+  return { disabled: false, busy: false, denied: false, reason: null }
+}

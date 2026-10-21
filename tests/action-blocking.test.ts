@@ -1,10 +1,12 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
+  actionGate,
   isWashButtonClickable,
   resolvePendingOpen,
   washButtonState,
   washSubmitBlockedReason,
+  type ActionGateInput,
   type WashButtonInput,
   type WashSubmitInput,
 } from "../src/lib/action-blocking.ts"
@@ -221,5 +223,79 @@ test("clic anticipé : jamais d'ouverture sans motif connu", () => {
   for (const c of cas) {
     const state = washButtonState(bouton(c))
     assert.notEqual(resolvePendingOpen(state), "ouvrir", JSON.stringify(c))
+  }
+})
+
+/* ---------------------------------------------------------------- *
+ * Porte générique appliquée aux autres écrans
+ * ---------------------------------------------------------------- */
+
+function porte(overrides: Partial<ActionGateInput> = {}): ActionGateInput {
+  return { loading: false, allowed: true, reason: null, ...overrides }
+}
+
+test("porte : rien ne bloque une action permise", () => {
+  const g = actionGate(porte())
+  assert.equal(g.disabled, false)
+  assert.equal(g.reason, null)
+  assert.equal(g.denied, false)
+})
+
+test("porte : ouvrir un formulaire reste cliquable pendant le chargement", () => {
+  const g = actionGate(porte({ loading: true, allowed: false }))
+  assert.equal(g.disabled, false, "rien n'est écrit en ouvrant un formulaire")
+  assert.equal(g.busy, true)
+  assert.equal(g.denied, false, "aucun cadenas tant que le droit est inconnu")
+  assert.equal(g.reason, null, "on n'invente pas de motif")
+})
+
+test("porte : une écriture immédiate attend de connaître les droits", () => {
+  const g = actionGate(porte({ loading: true, allowed: false, writesImmediately: true }))
+  assert.equal(g.disabled, true, "une requête vouée au 403 ne part pas")
+  assert.equal(g.busy, true, "mais c'est une attente, pas un refus")
+  assert.equal(g.denied, false)
+})
+
+test("porte : un refus avéré porte toujours un motif", () => {
+  const g = actionGate(porte({ allowed: false, reason: "Essai terminé." }))
+  assert.equal(g.disabled, true)
+  assert.equal(g.denied, true)
+  assert.equal(g.reason, "Essai terminé.")
+
+  const sansMotif = actionGate(porte({ allowed: false, reason: null }))
+  assert.ok(sansMotif.reason, "une phrase de repli est garantie")
+})
+
+test("porte : un obstacle propre à l'écran s'annonce sans cadenas", () => {
+  // Quota de laveurs atteint : le droit est là, c'est la limite qui bloque.
+  const g = actionGate(porte({ blockedBy: "Limite de 3 laveurs atteinte." }))
+  assert.equal(g.disabled, true)
+  assert.equal(g.denied, false, "ce n'est pas un refus de droit")
+  assert.equal(g.reason, "Limite de 3 laveurs atteinte.")
+})
+
+test("porte : le refus de droit prime sur l'obstacle d'écran", () => {
+  const g = actionGate(porte({ allowed: false, reason: "Réservé.", blockedBy: "Quota atteint." }))
+  assert.equal(g.reason, "Réservé.")
+  assert.equal(g.denied, true)
+})
+
+test("porte : l'attente ne laisse jamais filtrer un motif inventé", () => {
+  const g = actionGate(porte({ loading: true, allowed: false, reason: "Réservé.", blockedBy: "Quota." }))
+  assert.equal(g.reason, null)
+  assert.equal(g.busy, true)
+})
+
+test("porte : tout état désactivé hors attente porte un motif", () => {
+  const cas: Partial<ActionGateInput>[] = [
+    { allowed: false },
+    { allowed: false, reason: "x" },
+    { blockedBy: "y" },
+    { allowed: false, blockedBy: "y" },
+  ]
+  for (const c of cas) {
+    const g = actionGate(porte(c))
+    assert.equal(g.disabled, true, JSON.stringify(c))
+    assert.ok(g.reason, `cas muet : ${JSON.stringify(c)}`)
   }
 })
