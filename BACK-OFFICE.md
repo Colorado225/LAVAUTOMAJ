@@ -69,9 +69,16 @@ place du client. Le détail au §7.
 
 ### 1.5 Surveiller
 
-Journal de toutes les interventions de l'éditeur, filtrable par station, et
-détection des stations **dormantes** (aucun lavage depuis 14 jours) — le
-meilleur signal avancé d'un client qui s'en va.
+Deux surveillances distinctes, qu'il ne faut pas confondre.
+
+**Le signal métier** : journal de toutes les interventions de l'éditeur,
+filtrable par station, et détection des stations **dormantes** (aucun lavage
+depuis 14 jours) — le meilleur signal avancé d'un client qui s'en va.
+
+**La santé technique** : taux d'erreur, latence, pannes regroupées par cause,
+requêtes anormalement lentes. Mesurés sur **tout** le trafic, pas seulement
+sur les incidents, parce qu'un nombre d'erreurs sans dénominateur ne veut rien
+dire. Le détail au §8.
 
 ### Le modèle économique que cela suppose
 
@@ -514,7 +521,7 @@ endroit du produit où une note interne sort.
 Le compteur de messages renvoyé au client **exclut** lui aussi les notes :
 sans cela, le client verrait qu'on lui cache un message, ce qui est pire que
 de ne rien lui montrer. Quatre mutations distinctes vérifient cette
-étanchéité (§10).
+étanchéité (§11).
 
 ### 7.5 Le diagnostic, à la place de l'usurpation
 
@@ -549,11 +556,127 @@ ajouterait un champ de montant le ferait tomber.
   question sans ouvrir la porte.
 - **Pas de notification au client.** Une réponse ne déclenche aucun e-mail :
   le client la découvre en revenant, ou parce qu'on lui a écrit sur WhatsApp.
-  C'est la limite la plus gênante de cette version — voir §11.
+  C'est la limite la plus gênante de cette version — voir §12.
 - **Pas de pièces jointes.** Une capture d'écran vaut souvent dix lignes de
   description ; elle passe aujourd'hui par WhatsApp.
 
-## 8. Les routes
+## 8. La surveillance
+
+### 8.1 Le problème, dit franchement
+
+Avant cette version, une erreur 500 partait dans `console.error` et
+disparaissait avec le processus. Ce n'est pas une crainte théorique : la route
+de suspension d'un membre a répondu 500 pendant toute une version sans que
+personne ne le sache. Ce n'est pas la production qui l'a révélée, c'est un
+test écrit après coup. Entre-temps, le seul moyen d'apprendre qu'une chose
+était cassée, c'était qu'un client appelle.
+
+Un client qui appelle est déjà un client mécontent. Et tous n'appellent pas :
+la plupart réessaient, renoncent, et s'en vont sans rien dire.
+
+### 8.2 Tout le trafic, pas seulement les incidents
+
+La console enregistre **chaque requête**, et pas uniquement celles qui
+échouent. La raison tient en une phrase : sans dénominateur, un nombre
+d'erreurs ne veut rien dire. Douze erreurs sur douze requêtes et douze sur
+cent mille décrivent deux situations sans aucun rapport, et seule la seconde
+autorise à dormir.
+
+Le coût habituel de cette exhaustivité, c'est une table qui grossit aussi vite
+que le trafic. Elle est évitée par deux mécanismes :
+
+**L'agrégation.** Les requêtes sont comptées par tranche de cinq minutes,
+croisée avec la route, la méthode et la classe de statut. Une tranche porte un
+nombre d'appels, une durée cumulée et une durée maximale. Mille requêtes sur
+la même route en cinq minutes tiennent en une ligne. Le volume est donc borné
+par le nombre de routes, pas par le trafic.
+
+**La normalisation des chemins.** `/api/v1/washes/<identifiant>` devient
+`/api/v1/washes/:id` avant d'être compté. Sans cela, chaque lavage créerait sa
+propre ligne et la table de supervision grossirait exactement comme les
+données qu'elle est censée surveiller. C'est ce qui rend l'agrégation possible.
+
+Conséquence utile : les taux affichés sont des **comptages exacts**, pas des
+estimations. « 0,3 % d'erreurs » est le résultat d'une division entre deux
+nombres entiers connus. Un échantillonnage aurait été moins coûteux à écrire
+et aurait donné un chiffre qu'on n'aurait pas pu opposer à un client.
+
+### 8.3 Deux registres, deux usages
+
+| Table | Contenu | Rétention | Répond à |
+|---|---|---|---|
+| `request_metrics` | compteurs agrégés par tranche de 5 min | 90 jours | « Est-ce que ça va ? » |
+| `error_events` | détail des pannes et des lenteurs | 30 jours | « Pourquoi ? » |
+
+Les compteurs vivent plus longtemps que les détails, parce qu'ils pèsent
+infiniment moins et qu'une comparaison d'un trimestre à l'autre a du sens.
+Garder trois mois de corps de requête n'en aurait aucun.
+
+Une requête est considérée **lente** au-delà de 2 secondes. Une lenteur est
+enregistrée comme un incident à part entière, même quand la requête réussit :
+c'est elle qu'on retrouvera derrière « l'application rame le vendredi soir »,
+et elle ne laisse aucune trace ailleurs.
+
+### 8.4 Les corps de requête, et la seule chose qu'on refuse d'y mettre
+
+Le corps des requêtes est conservé. C'est un choix assumé : sans lui,
+reproduire un bug suppose de redemander au client ce qu'il avait tapé, ce
+qu'il ne sait généralement plus. Le corps contient donc des montants et des
+noms de clients.
+
+**Les identifiants de connexion en sont exclus.** Un corps de
+`POST /auth/login` contient un mot de passe en clair ; l'écrire dans une table
+de supervision transformerait un outil de diagnostic en fuite de données. Et
+aucun mot de passe n'est jamais nécessaire pour comprendre une erreur : on a
+besoin de savoir *qu'un* mot de passe a été envoyé, jamais lequel.
+
+Le masquage s'applique avant écriture, récursivement, à tout champ dont le nom
+évoque un identifiant — `password`, `new_password`, `secret`, tout ce qui se
+termine par `token` ou `_key`, plus une liste de refus explicite (`pin`,
+`cvv`, `card_number`, `apikey`, `authorization`, `cookie`). La valeur est
+remplacée par `[masqué]`.
+
+Deux garde-fous automatiques l'accompagnent :
+
+- un test relit **le code source du serveur** et échoue si un nouveau champ
+  d'identifiant y apparaît sans être reconnu comme sensible ;
+- un autre vérifie chaque entrée de la liste de refus individuellement, avec
+  la liste réécrite en dur dans le test. Itérer sur la constante exportée
+  aurait été une tautologie : supprimer une entrée l'aurait aussi retirée du
+  test, qui aurait continué à passer.
+
+**Ouvrir un corps laisse une trace.** La consultation du détail d'un incident
+écrit une ligne `monitoring.error.read` dans `platform_audit_logs`, avec
+l'opérateur, la station et la route. Consulter des compteurs agrégés n'engage
+personne ; lire ce qu'un gérant a saisi, si. La journalisation a lieu *avant*
+la réponse : si elle échoue, la lecture échoue aussi.
+
+### 8.5 La console seule, pas d'alerte
+
+Aucun e-mail, aucun message automatique quand le taux d'erreur monte. C'est un
+arbitrage, pas un oubli.
+
+Une alerte mal réglée se neutralise toute seule : après la troisième fausse
+alerte à deux heures du matin, on crée un filtre et plus personne ne les lit.
+Les seuils ne peuvent être réglés honnêtement qu'après avoir observé le
+comportement normal du service, et ce comportement n'est pas encore connu — la
+première mesure date de cette version. L'écran existe maintenant ; les seuils
+viendront quand il y aura des semaines de chiffres à regarder.
+
+### 8.6 Ce que la surveillance ne fait pas
+
+- **Pas d'alerte, pas d'astreinte.** Il faut ouvrir la console pour voir l'état
+  du service (§8.5).
+- **Pas de trace des requêtes réussies au détail.** Seuls les compteurs
+  agrégés les décrivent. Un succès n'a pas besoin d'être reproduit.
+- **Pas de rapprochement entre un incident et une demande d'assistance.** Si un
+  client écrit « ça ne marche pas » à 14 h et qu'une panne a eu lieu à 14 h, le
+  lien se fait à l'œil. L'automatiser demanderait de deviner, et une
+  association fausse coûterait plus cher que l'absence d'association.
+- **Pas de mesure côté navigateur.** Tout est mesuré côté serveur : une page
+  lente à cause du réseau du client reste invisible ici.
+
+## 9. Les routes
 
 Toutes sous `/api/v1/console`, toutes derrière `requireOperator`.
 
@@ -566,7 +689,9 @@ Toutes sous `/api/v1/console`, toutes derrière `requireOperator`.
 `GET /revenue?months=` · `GET /revenue/export?format=detail|journal&from=&to=` ·
 `GET /accounts?q=&limit=` · `GET /accounts/:userId` ·
 `GET /support?status=&limit=` · `GET /support/:id` ·
-`GET /organizations/:id/members/:userId/diagnostic`
+`GET /organizations/:id/members/:userId/diagnostic` ·
+`GET /monitoring?hours=` · `GET /monitoring/errors?kind=&route=&limit=` ·
+`GET /monitoring/errors/:id`
 
 **Écriture** — `POST /organizations/:id/activate {plan_code, months≤36,
 payment_reference?, note?}` · `/suspend {reason}` · `/extend-trial {days≤90,
@@ -597,7 +722,7 @@ l'adresse de l'opérateur.
 
 ---
 
-## 9. Ce que la console ne fait pas, volontairement
+## 10. Ce que la console ne fait pas, volontairement
 
 - **Pas d'usurpation d'identité.** Aucun « se connecter en tant que ». Voir
   les données d'un client est une chose, agir en son nom une autre.
@@ -614,13 +739,17 @@ l'adresse de l'opérateur.
   en revenant dans l'application, ou parce qu'on lui a écrit sur WhatsApp.
 - **Pas de notification automatique au client.** Les gestes de l'éditeur ne
   déclenchent pas d'e-mail ; seules les relances d'échéance en envoient.
+- **Pas d'alerte quand le service va mal.** La surveillance s'affiche, elle ne
+  réveille personne. Une alerte mal réglée se neutralise toute seule : après
+  la troisième fausse alerte nocturne, on crée un filtre. Les seuils seront
+  posés quand il y aura des semaines de mesures à regarder (§8.5).
 
 ---
 
-## 10. Vérification
+## 11. Vérification
 
 ```bash
-# Suite complète (333 tests)
+# Suite complète (359 tests)
 NODE_ENV=test npm test
 
 # Ciblé
@@ -631,6 +760,7 @@ NODE_ENV=test npx tsx --test tests/console-accounts.test.ts  # 20 tests
 NODE_ENV=test npx tsx --test tests/support-sla.test.ts       # 20 tests
 NODE_ENV=test npx tsx --test tests/support-requests.test.ts  # 23 tests
 NODE_ENV=test npx tsx --test tests/pricing-promises.test.ts  #  5 tests
+NODE_ENV=test npx tsx --test tests/monitoring.test.ts        # 26 tests
 ```
 
 Parcours manuel utile, serveur lancé :
@@ -665,6 +795,24 @@ file par date d'arrivée plutôt que par échéance, ouvrir les demandes d'un
 collègue à tout le monde, ou compter les notes internes dans le compteur
 affiché au client.
 
+La surveillance a été éprouvée sur **sept mutations, toutes détectées** :
+désactiver le masquage, retirer une seule entrée de la liste de refus, cesser
+de normaliser les identifiants dans les chemins, arrondir le taux d'erreur à
+l'entier, ne plus journaliser la lecture d'un corps, purger sans respecter la
+rétention, et revenir au `console.error` seul.
+
+La deuxième mérite un mot, parce qu'elle a d'abord **échappé** à la suite. La
+première version de la mutation ne neutralisait que la liste de refus, et les
+règles par sous-chaîne rattrapaient tout : les tests passaient. En cherchant
+pourquoi, sept champs sont apparus — `pwd`, `pin`, `cvv`, `card_number`,
+`apikey`, `authorization`, `cookie` — que seule la liste protégeait, et
+qu'aucun test ne couvrait. Deux tests ont été ajoutés avant de poursuivre. La
+mutation qui ne tue personne est celle qui apprend quelque chose.
+
+Le masquage est également vérifié **de bout en bout** sur un serveur réel : une
+requête portant un vrai mot de passe provoque une vraie panne, puis la table
+entière est fouillée pour s'assurer que la chaîne n'y figure nulle part.
+
 L'arithmétique des heures ouvrées est couverte autrement : `addBusinessHours`
 consomme un solde, `businessHoursBetween` balaie les journées. Deux
 raisonnements indépendants, confrontés sur **six mille tirages**. C'est ce
@@ -673,7 +821,7 @@ lui-même.
 
 ---
 
-## 11. Prochaines marches
+## 12. Prochaines marches
 
 1. **Brancher un agrégateur** (CinetPay couvre Wave, Orange, MTN et Moov en
    une intégration) : le webhook appellera `activateSubscription()`, la file de
@@ -686,9 +834,10 @@ lui-même.
    un message WhatsApp sortant suffirait, mais c'est la première fois que
    l'éditeur écrirait au client de sa propre initiative — décision à prendre
    avant de coder.
-4. **Supervision technique** — la famille qui reste : santé du service,
-   erreurs, lenteurs, alerte quand une station cesse d'émettre. Aujourd'hui un
-   incident se découvre par l'appel d'un client.
+4. **Régler des seuils d'alerte**, maintenant que la mesure existe (§8.5).
+   Il faut d'abord quelques semaines de chiffres pour savoir ce qu'est un
+   comportement normal ; alerter sur un seuil deviné produirait du bruit, et
+   du bruit produit des filtres.
 5. **Second opérateur avec droits restreints** — lecture seule pour une
    personne au support, écriture réservée au créateur. Aujourd'hui tous les
    opérateurs sont égaux ; il faudrait ajouter une colonne `role` à

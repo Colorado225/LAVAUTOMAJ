@@ -53,6 +53,9 @@ const PURGE_ORDER: { table: string; where: string }[] = [
   { table: "member_permissions", where: "organization_id = $1::uuid" },
   { table: "subscription_reminders", where: "organization_id = $1::uuid" },
   { table: "payment_intents", where: "organization_id = $1::uuid" },
+  // Les corps de requete captures appartiennent au client : les conserver
+  // apres sa suppression viderait la suppression de son sens.
+  { table: "error_events", where: "organization_id = $1::uuid" },
   { table: "support_messages", where: "request_id IN (SELECT id FROM support_requests WHERE organization_id = $1::uuid)" },
   { table: "support_requests", where: "organization_id = $1::uuid" },
   { table: "audit_logs", where: "organization_id = $1::uuid" },

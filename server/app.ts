@@ -18,6 +18,7 @@ import { createAuditLogRouter } from "./audit-log.ts"
 import { createAdminRouter } from "./admin.ts"
 import { createConsoleAuthRouter, requireOperator } from "./console-auth.ts"
 import { attachSubscription, blockWritesWhenReadOnly } from "./entitlements.ts"
+import { captureIncident, monitorRequests } from "./monitoring-middleware.ts"
 
 // ---------------------------------------------------------------------------
 // Montage de l'API
@@ -48,6 +49,11 @@ import { attachSubscription, blockWritesWhenReadOnly } from "./entitlements.ts"
  * débloquerait réellement quelque chose.
  */
 export function mountApi(app: Express) {
+  // Chronométrage de tout le trafic, console comprise. En tête, pour qu'un
+  // rejet par un middleware amont soit compté lui aussi : une vague de 401
+  // est un signal, et elle serait invisible depuis les routes.
+  app.use(monitorRequests())
+
   app.use("/api/v1/auth", createAuthRouter())
 
   // -------------------------------------------------------------------------
@@ -92,7 +98,7 @@ export function mountApi(app: Express) {
 }
 
 /** Gestionnaire d'erreurs commun : une erreur ne fuit jamais de détail interne. */
-export function apiErrorHandler(error: unknown, _req: Request, res: Response, next: NextFunction) {
+export function apiErrorHandler(error: unknown, req: Request, res: Response, next: NextFunction) {
   void next
   let status = error instanceof HttpError ? error.status : 500
   let code = error instanceof HttpError ? error.code : "internal_error"
@@ -111,6 +117,15 @@ export function apiErrorHandler(error: unknown, _req: Request, res: Response, ne
   }
   if (status >= 500) {
     console.error("[api] Request failed:", error instanceof Error ? error.message : error)
+    // Et surtout : on en garde la trace. Un `console.error` seul disparait
+    // avec le processus, et c'est exactement ainsi qu'une route a pu rester
+    // cassee en production sans que personne ne le sache.
+    captureIncident(req, {
+      status,
+      code,
+      message: error instanceof Error ? error.message : String(message),
+      stack: error instanceof Error ? (error.stack ?? null) : null,
+    })
   }
   res.status(status).json({ error: { code, message } })
 }

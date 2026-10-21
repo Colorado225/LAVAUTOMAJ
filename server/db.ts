@@ -359,6 +359,56 @@ CREATE TABLE IF NOT EXISTS support_messages (
  created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS support_messages_thread_idx ON support_messages(request_id, created_at);
+
+-- Supervision : compteurs agreges de toutes les requetes.
+--
+-- Agreger par tranche de cinq minutes plutot qu'echantillonner donne des taux
+-- exacts pour un volume borne par le nombre de routes, et non par le trafic.
+-- C'est la normalisation des chemins (voir normalizeRoute) qui rend cette
+-- borne possible : sans elle, chaque identifiant creerait sa propre ligne.
+CREATE TABLE IF NOT EXISTS request_metrics (
+ bucket_start timestamptz NOT NULL,
+ method text NOT NULL,
+ route text NOT NULL,
+ status_class text NOT NULL,
+ requests bigint NOT NULL DEFAULT 0,
+ total_duration_ms bigint NOT NULL DEFAULT 0,
+ max_duration_ms integer NOT NULL DEFAULT 0,
+ slow_requests integer NOT NULL DEFAULT 0,
+ PRIMARY KEY (bucket_start, method, route, status_class)
+);
+CREATE INDEX IF NOT EXISTS request_metrics_when_idx ON request_metrics(bucket_start DESC);
+
+-- Supervision : detail des pannes et des lenteurs.
+--
+-- 'request_body' est masque avant ecriture (voir redactBody) : aucun mot de
+-- passe n'y entre jamais. Le reste du corps est conserve, parce que c'est ce
+-- qui permet de reproduire un bug a l'identique.
+--
+-- Pas de cle etrangere sur organization_id : l'ecriture a lieu dans le
+-- gestionnaire d'erreurs, ou une contrainte qui echoue ferait perdre la trace
+-- de l'incident qu'on essaie justement d'enregistrer. La purge d'une station
+-- supprime ses lignes (voir PURGE_ORDER).
+CREATE TABLE IF NOT EXISTS error_events (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ kind text NOT NULL DEFAULT 'error',
+ method text NOT NULL,
+ route text NOT NULL,
+ path text NOT NULL,
+ status integer NOT NULL,
+ code text NOT NULL,
+ message text NOT NULL,
+ stack text,
+ duration_ms integer NOT NULL DEFAULT 0,
+ organization_id uuid,
+ user_id uuid,
+ operator_email text,
+ request_body jsonb,
+ occurred_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS error_events_when_idx ON error_events(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS error_events_route_idx ON error_events(route, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS error_events_org_idx ON error_events(organization_id, occurred_at DESC);
 -- Une ligne ne peut etre contrepassee qu'une fois.
 CREATE UNIQUE INDEX IF NOT EXISTS subscription_payments_reverses_idx
  ON subscription_payments(reverses_id) WHERE reverses_id IS NOT NULL;

@@ -1,6 +1,7 @@
 import * as React from "react"
 import { NavLink, Outlet } from "react-router-dom"
 import {
+  Activity,
   LifeBuoy,
   Users,
   Building2,
@@ -34,6 +35,7 @@ const NAV = [
   { to: "/console/comptes", end: false, label: "Comptes", icon: Users },
   { to: "/console/revenus", end: false, label: "Revenus", icon: TrendingUp },
   { to: "/console/paiements", end: false, label: "Paiements", icon: Wallet },
+  { to: "/console/surveillance", end: false, label: "Surveillance", icon: Activity },
   { to: "/console/journal", end: false, label: "Journal", icon: FileClock },
 ]
 

@@ -136,7 +136,8 @@ tests/               # Tests unitaires (node:test via tsx)
 Application **séparée** réservée au créateur, servie sous `/console` : suivi du
 parc, registre des encaissements avec exports comptables, recherche de comptes
 dans tout le parc avec rôles et sessions, file d'assistance avec délai de
-réponse mesuré par forfait, suppression d'une organisation en deux temps.
+réponse mesuré par forfait, surveillance technique du service (taux d'erreur,
+latence, pannes regroupées), suppression d'une organisation en deux temps.
 
 ```bash
 # .env — puis redémarrer le serveur

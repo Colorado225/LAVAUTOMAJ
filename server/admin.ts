@@ -25,6 +25,7 @@ import {
 import { createPasswordResetToken } from "./auth.ts"
 import { registerAccountRoutes } from "./console-accounts.ts"
 import { registerSupportRoutes } from "./console-support.ts"
+import { registerMonitoringRoutes } from "./console-monitoring.ts"
 
 // ---------------------------------------------------------------------------
 // Back-office de l'éditeur
@@ -1169,6 +1170,7 @@ export function createAdminRouter() {
 
   registerAccountRoutes(r)
   registerSupportRoutes(r)
+  registerMonitoringRoutes(r)
 
   return r
 }

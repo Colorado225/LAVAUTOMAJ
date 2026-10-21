@@ -317,3 +317,80 @@ export interface MemberDiagnostic {
   recent_activity: Array<{ action: string; entity_type: string | null; created_at: string }>
   server_time: string
 }
+
+// ---------------------------------------------------------------------------
+// Surveillance
+// ---------------------------------------------------------------------------
+
+export interface MonitoringBucket {
+  bucket_start: string
+  requests: number
+  errors: number
+  slow: number
+  avg_duration_ms: number
+}
+
+export interface MonitoringRoute {
+  method: string
+  route: string
+  requests: number
+  errors?: number
+  avg_duration_ms?: number
+  max_duration_ms?: number
+}
+
+export interface ErrorGroup {
+  method: string
+  route: string
+  code: string
+  message: string
+  occurrences: number
+  organizations: number
+  first_seen: string
+  last_seen: string
+  latest_id: string
+}
+
+export interface MonitoringOverview {
+  window_hours: number
+  totals: {
+    requests: number
+    server_errors: number
+    client_errors: number
+    slow: number
+    error_rate: number
+    avg_duration_ms: number
+    max_duration_ms: number
+  }
+  series: MonitoringBucket[]
+  failing_routes: MonitoringRoute[]
+  slowest_routes: MonitoringRoute[]
+  error_groups: ErrorGroup[]
+  thresholds: {
+    slow_request_ms: number
+    error_retention_days: number
+    metrics_retention_days: number
+  }
+  server_time: string
+}
+
+export interface ErrorEvent {
+  id: string
+  kind: "error" | "slow"
+  method: string
+  route: string
+  path: string
+  status: number
+  code: string
+  message: string
+  stack?: string | null
+  duration_ms: number
+  organization_id: string | null
+  organization_name: string | null
+  user_id: string | null
+  user_name?: string | null
+  user_email?: string | null
+  operator_email: string | null
+  request_body?: unknown
+  occurred_at: string
+}

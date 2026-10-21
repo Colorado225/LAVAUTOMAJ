@@ -21,5 +21,7 @@ export const consoleRoutes: RouteObject[] = [
   { path: "comptes/:userId", lazy: page(() => import("@/console/pages/account-detail")) },
   { path: "revenus", lazy: page(() => import("@/console/pages/revenue")) },
   { path: "paiements", lazy: page(() => import("@/console/pages/payments")) },
+  { path: "surveillance", lazy: page(() => import("@/console/pages/monitoring")) },
+  { path: "surveillance/:id", lazy: page(() => import("@/console/pages/monitoring-error")) },
   { path: "journal", lazy: page(() => import("@/console/pages/journal")) },
 ]
