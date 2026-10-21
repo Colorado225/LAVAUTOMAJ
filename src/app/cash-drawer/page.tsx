@@ -7,7 +7,8 @@ import { actionGate } from "@/lib/action-blocking"
 import { BlockedReason } from "@/components/access/blocked-reason"
 import { motion } from "framer-motion"
 import { TRANSITION } from "@/lib/motion"
-import { useApi, apiFetch } from "@/lib/api"
+import { useApi } from "@/lib/api"
+import { useMutation } from "@/lib/use-mutation"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import {
   Table,
@@ -67,6 +68,9 @@ function xofToCents(value: string, requirePositive = false): number | null {
   return cents
 }
 
+/** Clé d'occupation des formulaires de caisse. */
+const FORM_KEY = "formulaire"
+
 export default function CashDrawerPage() {
   const manageCash = useAccess("cash_session:manage", "cash.manage")
   const { data: sites, loading: sitesLoading, error: sitesError } = useApi<Site[]>("/api/v1/sites")
@@ -84,8 +88,9 @@ export default function CashDrawerPage() {
   const [countedAmount, setCountedAmount] = React.useState("")
   const [discrepancyReason, setDiscrepancyReason] = React.useState("")
   const [refreshKey, setRefreshKey] = React.useState(0)
-  const [saving, setSaving] = React.useState(false)
-  const [mutationError, setMutationError] = React.useState<string | null>(null)
+  // Un contrôleur unique pour les trois écritures de caisse.
+  const mutation = useMutation()
+  const saving = mutation.busyKey === FORM_KEY
   const sessionPath = siteId
     ? `/api/v1/cash-sessions/current?site_id=${encodeURIComponent(siteId)}&refresh=${refreshKey}`
     : ""
@@ -119,7 +124,7 @@ export default function CashDrawerPage() {
   async function openCashSession() {
     const amountCents = xofToCents(openingAmount)
     if (!siteId || amountCents == null) {
-      setMutationError("Sélectionnez un site et saisissez un montant valide.")
+      mutation.fail("Sélectionnez un site et saisissez un montant valide.")
       return
     }
 
@@ -131,36 +136,26 @@ export default function CashDrawerPage() {
       openingRequestKeys.current.set(fingerprint, requestKey)
     }
 
-    setSaving(true)
-    setMutationError(null)
-    try {
-      const response = await apiFetch(
-        "/api/v1/cash-sessions/open",
-        {
-          method: "POST",
-          headers: { "Idempotency-Key": requestKey },
-          body: JSON.stringify(body),
-        }
-      )
-      if (!response.ok) {
-        throw new Error((await response.text()) || `Erreur ${response.status}`)
-      }
-      setOpenDialog(false)
-      setOpeningAmount("0")
-      openingRequestKeys.current.clear()
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Impossible d’ouvrir la caisse.")
-    } finally {
-      setSaving(false)
-    }
+    const outcome = await mutation.run({
+      url: "/api/v1/cash-sessions/open",
+      method: "POST",
+      headers: { "Idempotency-Key": requestKey },
+      body,
+      failure: "Impossible d’ouvrir la caisse.",
+      busyKey: FORM_KEY,
+    })
+    if (!outcome.ok) return
+    setOpenDialog(false)
+    setOpeningAmount("0")
+    openingRequestKeys.current.clear()
+    setRefreshKey((key) => key + 1)
   }
 
   async function addMovement() {
     if (!session) return
     const amountCents = xofToCents(movementAmount, true)
     if (amountCents == null) {
-      setMutationError("Saisissez un montant positif valide.")
+      mutation.fail("Saisissez un montant positif valide.")
       return
     }
 
@@ -176,70 +171,50 @@ export default function CashDrawerPage() {
       movementRequestKeys.current.set(fingerprint, requestKey)
     }
 
-    setSaving(true)
-    setMutationError(null)
-    try {
-      const response = await apiFetch(
-        `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/movements`,
-        {
-          method: "POST",
-          headers: { "Idempotency-Key": requestKey },
-          body: JSON.stringify(body),
-        }
-      )
-      if (!response.ok) {
-        throw new Error((await response.text()) || `Erreur ${response.status}`)
-      }
-      setMovementDialogOpen(false)
-      setMovementAmount("")
-      setMovementDescription("")
-      movementRequestKeys.current.clear()
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Impossible d’enregistrer le mouvement.")
-    } finally {
-      setSaving(false)
-    }
+    const outcome = await mutation.run({
+      url: `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/movements`,
+      method: "POST",
+      headers: { "Idempotency-Key": requestKey },
+      body,
+      failure: "Impossible d’enregistrer le mouvement.",
+      busyKey: FORM_KEY,
+    })
+    if (!outcome.ok) return
+    setMovementDialogOpen(false)
+    setMovementAmount("")
+    setMovementDescription("")
+    movementRequestKeys.current.clear()
+    setRefreshKey((key) => key + 1)
   }
 
   async function closeCashSession() {
     if (!session) return
     const countedAmountCents = xofToCents(countedAmount)
     if (countedAmountCents == null) {
-      setMutationError("Saisissez le montant réellement compté.")
+      mutation.fail("Saisissez le montant réellement compté.")
       return
     }
     const hasDiscrepancy = countedAmountCents !== session.theoretical_balance_cents
     if (hasDiscrepancy && !discrepancyReason.trim()) {
-      setMutationError("Justifiez l’écart avant de clôturer la session.")
+      mutation.fail("Justifiez l’écart avant de clôturer la session.")
       return
     }
 
-    setSaving(true)
-    setMutationError(null)
-    try {
-      const response = await apiFetch(
-        `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/close`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            counted_amount_cents: countedAmountCents,
-            discrepancy_reason: discrepancyReason.trim() || null,
-          }),
-        }
-      )
-      if (!response.ok) {
-        throw new Error((await response.text()) || `Erreur ${response.status}`)
-      }
-      setCloseDialogOpen(false)
-      setCountedAmount("")
-      setDiscrepancyReason("")
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Impossible de clôturer la caisse.")
-    } finally {
-      setSaving(false)
-    }
+    const outcome = await mutation.run({
+      url: `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/close`,
+      method: "POST",
+      body: {
+        counted_amount_cents: countedAmountCents,
+        discrepancy_reason: discrepancyReason.trim() || null,
+      },
+      failure: "Impossible de clôturer la caisse.",
+      busyKey: FORM_KEY,
+    })
+    if (!outcome.ok) return
+    setCloseDialogOpen(false)
+    setCountedAmount("")
+    setDiscrepancyReason("")
+    setRefreshKey((key) => key + 1)
   }
 
   const parsedCountedAmount = xofToCents(countedAmount)
@@ -275,7 +250,7 @@ export default function CashDrawerPage() {
             </label>
             <Button
               onClick={() => {
-                setMutationError(null)
+                mutation.reset()
                 setOpenDialog(true)
               }}
               disabled={openSession.disabled || loading || sitesLoading}
@@ -383,7 +358,7 @@ export default function CashDrawerPage() {
                     title={cashAction.reason ?? undefined}
                     onClick={() => {
                       setMovementType("entry")
-                      setMutationError(null)
+                      mutation.reset()
                       setMovementDialogOpen(true)
                     }}
                   >
@@ -396,7 +371,7 @@ export default function CashDrawerPage() {
                     title={cashAction.reason ?? undefined}
                     onClick={() => {
                       setMovementType("exit")
-                      setMutationError(null)
+                      mutation.reset()
                       setMovementDialogOpen(true)
                     }}
                   >
@@ -409,7 +384,7 @@ export default function CashDrawerPage() {
                     onClick={() => {
                       setCountedAmount("")
                       setDiscrepancyReason("")
-                      setMutationError(null)
+                      mutation.reset()
                       setCloseDialogOpen(true)
                     }}
                   >
@@ -491,7 +466,7 @@ export default function CashDrawerPage() {
                 disabled={saving}
               />
             </label>
-            {mutationError && <p className="text-sm text-destructive">{mutationError}</p>}
+            {mutation.error && <p className="text-sm text-destructive">{mutation.error}</p>}
             <DialogFooter>
               <Button variant="outline" onClick={() => setOpenDialog(false)} disabled={saving}>
                 Annuler
@@ -534,7 +509,7 @@ export default function CashDrawerPage() {
                 disabled={saving}
               />
             </label>
-            {mutationError && <p className="text-sm text-destructive">{mutationError}</p>}
+            {mutation.error && <p className="text-sm text-destructive">{mutation.error}</p>}
             <DialogFooter>
               <Button variant="outline" onClick={() => setMovementDialogOpen(false)} disabled={saving}>
                 Annuler
@@ -588,7 +563,7 @@ export default function CashDrawerPage() {
                 />
               </motion.label>
             )}
-            {mutationError && <p className="text-sm text-destructive">{mutationError}</p>}
+            {mutation.error && <p className="text-sm text-destructive">{mutation.error}</p>}
             <DialogFooter>
               <Button variant="outline" onClick={() => setCloseDialogOpen(false)} disabled={saving}>
                 Annuler

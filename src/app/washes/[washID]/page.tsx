@@ -5,7 +5,8 @@ import { useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { ArrowLeft, Ban, BadgeCheck, Lock, RefreshCw, Wallet } from "lucide-react"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
+import { useApi } from "@/lib/api"
+import { useMutation } from "@/lib/use-mutation"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { Input } from "@/components/ui/input"
 import { PAYMENT_METHODS, paymentMethodLabel as methodLabel } from "@/lib/payments-api"
@@ -106,6 +107,10 @@ function paymentStatusLabel(status: string): string {
   return labels[status] ?? status
 }
 
+/** Clés d'occupation : l'annulation et l'encaissement n'occupent pas la même zone. */
+const CANCEL_KEY = "annulation"
+const PAYMENT_KEY = "encaissement"
+
 export default function WashDetailPage() {
   const cancelCapability = useAccess("wash:cancel", "washes.cancel")
   const { washID } = useParams<{ washID: string }>()
@@ -116,8 +121,10 @@ export default function WashDetailPage() {
   const { data: categories } = useApi<VehicleCategory[]>("/api/v1/vehicle-categories")
   const [cancelOpen, setCancelOpen] = useState(false)
   const [reason, setReason] = useState("")
-  const [saving, setSaving] = useState(false)
-  const [mutationError, setMutationError] = useState<string | null>(null)
+  // Un contrôleur unique : l'annulation et les encaissements se distinguent
+  // par leur clé d'occupation, pas par quatre états séparés.
+  const mutation = useMutation()
+  const saving = mutation.busyKey === CANCEL_KEY
   const managePayments = useAccess("payment:create", "payments.manage")
   // Remettre au client la preuve de ce qu'il a paye appartient a qui voit
   // les encaissements : le serveur exige la meme permission.
@@ -139,8 +146,8 @@ export default function WashDetailPage() {
   const [paymentMethod, setPaymentMethod] = useState<string>("cash")
   const [paymentAmount, setPaymentAmount] = useState("")
   const [paymentReference, setPaymentReference] = useState("")
-  const [paymentBusy, setPaymentBusy] = useState(false)
-  const [paymentSuccess, setPaymentSuccess] = useState<string | null>(null)
+  const paymentBusy = mutation.busyKey === PAYMENT_KEY
+  const paymentSuccess = mutation.success
   const { data: cashSession } = useApi<CurrentCashSession | null>(
     paymentMethod === "cash" && detail?.wash?.site_id
       ? `/api/v1/cash-sessions/current?site_id=${encodeURIComponent(detail.wash.site_id)}&refresh=${refreshKey}`
@@ -149,28 +156,20 @@ export default function WashDetailPage() {
 
   async function cancelWash() {
     if (!washID || !reason.trim()) {
-      setMutationError("Indiquez le motif de l’annulation.")
+      mutation.fail("Indiquez le motif de l’annulation.")
       return
     }
-    setSaving(true)
-    setMutationError(null)
-    try {
-      const response = await apiFetch(
-        `/api/v1/washes/${encodeURIComponent(washID)}/cancel`,
-        {
-          method: "POST",
-          body: JSON.stringify({ reason: reason.trim() }),
-        }
-      )
-      if (!response.ok) throw new Error((await response.text()) || `Erreur ${response.status}`)
-      setCancelOpen(false)
-      setReason("")
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Impossible d’annuler ce lavage.")
-    } finally {
-      setSaving(false)
-    }
+    const outcome = await mutation.run({
+      url: `/api/v1/washes/${encodeURIComponent(washID)}/cancel`,
+      method: "POST",
+      body: { reason: reason.trim() },
+      failure: "Impossible d’annuler ce lavage.",
+      busyKey: CANCEL_KEY,
+    })
+    if (!outcome.ok) return
+    setCancelOpen(false)
+    setReason("")
+    setRefreshKey((key) => key + 1)
   }
 
   const paidCents = (detail?.payments ?? [])
@@ -183,67 +182,49 @@ export default function WashDetailPage() {
     if (!washID) return
     const amountCents = parseXofAmount(paymentAmount)
     if (amountCents == null) {
-      setMutationError("Saisissez un montant valide.")
+      mutation.fail("Saisissez un montant valide.")
       return
     }
     if (amountCents > remainingCents) {
-      setMutationError("Le montant dépasse le solde restant.")
+      mutation.fail("Le montant dépasse le solde restant.")
       return
     }
     if (paymentMethod === "cash" && !cashSession?.id) {
-      setMutationError("Ouvrez une session de caisse pour encaisser des espèces.")
+      mutation.fail("Ouvrez une session de caisse pour encaisser des espèces.")
       return
     }
-    setPaymentBusy(true)
-    setMutationError(null)
-    setPaymentSuccess(null)
-    try {
-      const response = await apiFetch(`/api/v1/washes/${encodeURIComponent(washID)}/payments`, {
-        method: "POST",
-        headers: { "Idempotency-Key": createIdempotencyKey() },
-        body: JSON.stringify({
-          method: paymentMethod,
-          amount_cents: amountCents,
-          reference: paymentReference.trim() || undefined,
-          cash_session_id: paymentMethod === "cash" ? cashSession?.id : undefined,
-        }),
-      })
-      if (!response.ok) {
-        setMutationError(await apiErrorMessage(response))
-        return
-      }
-      setPaymentOpen(false)
-      setPaymentAmount("")
-      setPaymentReference("")
-      setPaymentSuccess("Encaissement enregistré.")
-      setRefreshKey((key) => key + 1)
-    } catch {
-      setMutationError("Encaissement impossible : serveur injoignable.")
-    } finally {
-      setPaymentBusy(false)
-    }
+    const outcome = await mutation.run({
+      url: `/api/v1/washes/${encodeURIComponent(washID)}/payments`,
+      method: "POST",
+      headers: { "Idempotency-Key": createIdempotencyKey() },
+      body: {
+        method: paymentMethod,
+        amount_cents: amountCents,
+        reference: paymentReference.trim() || undefined,
+        cash_session_id: paymentMethod === "cash" ? cashSession?.id : undefined,
+      },
+      success: "Encaissement enregistré.",
+      failure: "Encaissement impossible : serveur injoignable.",
+      busyKey: PAYMENT_KEY,
+    })
+    if (!outcome.ok) return
+    setPaymentOpen(false)
+    setPaymentAmount("")
+    setPaymentReference("")
+    setRefreshKey((key) => key + 1)
   }
 
   /** Confirme la réception d'un paiement mobile money. */
   async function confirmPayment(paymentId: string) {
-    setPaymentBusy(true)
-    setMutationError(null)
-    try {
-      const response = await apiFetch(`/api/v1/payments/${paymentId}/verify`, {
-        method: "POST",
-        body: JSON.stringify({}),
-      })
-      if (!response.ok) {
-        setMutationError(await apiErrorMessage(response))
-        return
-      }
-      setPaymentSuccess("Paiement confirmé.")
-      setRefreshKey((key) => key + 1)
-    } catch {
-      setMutationError("Confirmation impossible : serveur injoignable.")
-    } finally {
-      setPaymentBusy(false)
-    }
+    const outcome = await mutation.run({
+      url: `/api/v1/payments/${paymentId}/verify`,
+      method: "POST",
+      body: {},
+      success: "Paiement confirmé.",
+      failure: "Confirmation impossible : serveur injoignable.",
+      busyKey: PAYMENT_KEY,
+    })
+    if (outcome.ok) setRefreshKey((key) => key + 1)
   }
 
   const wash = detail?.wash
@@ -503,8 +484,8 @@ export default function WashDetailPage() {
                         aria-busy={paymentForm.busy}
                         title={paymentForm.reason ?? undefined}
                         onClick={() => {
-                          setMutationError(null)
-                          setPaymentSuccess(null)
+                          mutation.reset()
+                          mutation.reset()
                           setPaymentAmount(String(remainingCents / 100))
                           setPaymentOpen(true)
                         }}
@@ -521,9 +502,9 @@ export default function WashDetailPage() {
                     {paymentSuccess}
                   </p>
                 )}
-                {mutationError && !cancelOpen && (
+                {mutation.error && !cancelOpen && (
                   <p role="alert" className="mt-3 text-sm text-destructive">
-                    {mutationError}
+                    {mutation.error}
                   </p>
                 )}
               </div>
@@ -556,7 +537,7 @@ export default function WashDetailPage() {
                       aria-busy={cancelGate.busy}
                       title={cancelGate.reason ?? undefined}
                       onClick={() => {
-                        setMutationError(null)
+                        mutation.reset()
                         setCancelOpen((open) => !open)
                       }}
                     >
@@ -581,7 +562,7 @@ export default function WashDetailPage() {
                         placeholder="Ex. erreur de saisie, véhicule non pris en charge…"
                       />
                     </label>
-                    {mutationError && <p role="alert" className="text-sm text-destructive">{mutationError}</p>}
+                    {mutation.error && <p role="alert" className="text-sm text-destructive">{mutation.error}</p>}
                     <div className="flex justify-end gap-2">
                       <Button variant="outline" onClick={() => setCancelOpen(false)}>Garder le lavage</Button>
                       <Button variant="destructive" disabled={saving || !reason.trim()} onClick={cancelWash}>
