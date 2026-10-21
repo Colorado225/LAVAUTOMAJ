@@ -33,7 +33,8 @@ import {
 } from "@/components/ui/table"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
-import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
+import { useApi } from "@/lib/api"
+import { useMutation } from "@/lib/use-mutation"
 import { DowngradeNotice } from "@/components/subscription/plan-gate"
 import { useSubscription } from "@/lib/subscription"
 import {
@@ -52,6 +53,9 @@ import {
   RefreshCw,
   Trash2,
 } from "lucide-react"
+
+/** Clé d'occupation du formulaire. */
+const FORM_KEY = "formulaire"
 
 export default function SitesPage() {
   const canManage = useAccess("settings:manage")
@@ -90,31 +94,29 @@ export default function SitesPage() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingSite, setEditingSite] = useState<SiteRecord | null>(null)
   const [form, setForm] = useState<SiteInput>(emptySiteInput)
-  const [saving, setSaving] = useState(false)
-  const [busySiteId, setBusySiteId] = useState<string | null>(null)
-  const [mutationError, setMutationError] = useState<string | null>(null)
-  const [mutationSuccess, setMutationSuccess] = useState<string | null>(null)
+  // Un contrôleur unique : occupation, ligne concernée et deux messages.
+  const mutation = useMutation()
+  const saving = mutation.busyKey === FORM_KEY
+  const busySiteId = mutation.busyKey
 
   function openCreateDialog() {
     setEditingSite(null)
     setForm(emptySiteInput())
-    setMutationError(null)
-    setMutationSuccess(null)
+    mutation.reset()
     setDialogOpen(true)
   }
 
   function openEditDialog(site: SiteRecord) {
     setEditingSite(site)
     setForm(siteInputFrom(site))
-    setMutationError(null)
-    setMutationSuccess(null)
+    mutation.reset()
     setDialogOpen(true)
   }
 
   function handleDialogChange(open: boolean) {
     if (!open && !saving) {
       setDialogOpen(false)
-      setMutationError(null)
+      mutation.reset()
     } else if (open) {
       setDialogOpen(true)
     }
@@ -122,7 +124,7 @@ export default function SitesPage() {
 
   async function saveSite(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setMutationError(null)
+    mutation.reset()
     const input: SiteInput = {
       ...form,
       name: form.name.trim(),
@@ -133,29 +135,21 @@ export default function SitesPage() {
       description: form.description?.trim() || null,
     }
     if (!input.name || !input.city) {
-      setMutationError("Le nom et la ville de la station sont obligatoires.")
+      mutation.fail("Le nom et la ville de la station sont obligatoires.")
       return
     }
 
-    setSaving(true)
-    try {
-      const response = await apiFetch(
-        editingSite ? `/api/v1/sites/${encodeURIComponent(editingSite.id)}` : "/api/v1/sites",
-        { method: editingSite ? "PATCH" : "POST", body: JSON.stringify(input) },
-      )
-      if (!response.ok) throw new Error(await apiErrorMessage(response))
-      setDialogOpen(false)
-      setMutationSuccess(
-        editingSite ? "La station a été mise à jour." : "La station a été ajoutée.",
-      )
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(
-        err instanceof Error ? err.message : "Impossible d’enregistrer la station.",
-      )
-    } finally {
-      setSaving(false)
-    }
+    const outcome = await mutation.run({
+      url: editingSite ? `/api/v1/sites/${encodeURIComponent(editingSite.id)}` : "/api/v1/sites",
+      method: editingSite ? "PATCH" : "POST",
+      body: input,
+      success: editingSite ? "La station a été mise à jour." : "La station a été ajoutée.",
+      failure: "Impossible d’enregistrer la station.",
+      busyKey: FORM_KEY,
+    })
+    if (!outcome.ok) return
+    setDialogOpen(false)
+    setRefreshKey((key) => key + 1)
   }
 
   /**
@@ -164,32 +158,18 @@ export default function SitesPage() {
    */
   async function toggleSite(site: SiteRecord) {
     const next = !site.is_active
-    if (
-      !next &&
-      !window.confirm(
-        `Désactiver « ${site.name} » ? Elle disparaîtra des nouveaux enregistrements, mais son historique reste dans les rapports.`,
-      )
-    ) {
-      return
-    }
-    setBusySiteId(site.id)
-    setMutationError(null)
-    setMutationSuccess(null)
-    try {
-      const response = await apiFetch(`/api/v1/sites/${encodeURIComponent(site.id)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ is_active: next }),
-      })
-      if (!response.ok) throw new Error(await apiErrorMessage(response))
-      setMutationSuccess(next ? "La station a été réactivée." : "La station a été désactivée.")
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(
-        err instanceof Error ? err.message : "Impossible de modifier la station.",
-      )
-    } finally {
-      setBusySiteId(null)
-    }
+    const outcome = await mutation.run({
+      url: `/api/v1/sites/${encodeURIComponent(site.id)}`,
+      method: "PATCH",
+      body: { is_active: next },
+      confirm: next
+        ? undefined
+        : `Désactiver « ${site.name} » ? Elle disparaîtra des nouveaux enregistrements, mais son historique reste dans les rapports.`,
+      success: next ? "La station a été réactivée." : "La station a été désactivée.",
+      failure: "Impossible de modifier la station.",
+      busyKey: site.id,
+    })
+    if (outcome.ok) setRefreshKey((key) => key + 1)
   }
 
   /**
@@ -198,30 +178,15 @@ export default function SitesPage() {
    * désactivation — on relaie son message tel quel.
    */
   async function deleteSite(site: SiteRecord) {
-    if (
-      !window.confirm(
-        `Supprimer définitivement « ${site.name} » ? Cette action n’est possible que si aucune activité n’y est rattachée.`,
-      )
-    ) {
-      return
-    }
-    setBusySiteId(site.id)
-    setMutationError(null)
-    setMutationSuccess(null)
-    try {
-      const response = await apiFetch(`/api/v1/sites/${encodeURIComponent(site.id)}`, {
-        method: "DELETE",
-      })
-      if (!response.ok) throw new Error(await apiErrorMessage(response))
-      setMutationSuccess("La station a été supprimée.")
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(
-        err instanceof Error ? err.message : "Impossible de supprimer la station.",
-      )
-    } finally {
-      setBusySiteId(null)
-    }
+    const outcome = await mutation.run({
+      url: `/api/v1/sites/${encodeURIComponent(site.id)}`,
+      method: "DELETE",
+      confirm: `Supprimer définitivement « ${site.name} » ? Cette action n’est possible que si aucune activité n’y est rattachée.`,
+      success: "La station a été supprimée.",
+      failure: "Impossible de supprimer la station.",
+      busyKey: site.id,
+    })
+    if (outcome.ok) setRefreshKey((key) => key + 1)
   }
 
   return (
@@ -249,20 +214,20 @@ export default function SitesPage() {
           </div>
         </div>
 
-        {mutationSuccess && (
+        {mutation.success && (
           <p
             role="status"
             className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200"
           >
-            {mutationSuccess}
+            {mutation.success}
           </p>
         )}
-        {mutationError && !dialogOpen && (
+        {mutation.error && !dialogOpen && (
           <p
             role="alert"
             className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
           >
-            {mutationError}
+            {mutation.error}
           </p>
         )}
 
@@ -549,9 +514,9 @@ export default function SitesPage() {
                 />
               </label>
             </div>
-            {mutationError && (
+            {mutation.error && (
               <p role="alert" className="text-sm text-destructive">
-                {mutationError}
+                {mutation.error}
               </p>
             )}
             <DialogFooter>
