@@ -241,10 +241,27 @@ qu'on l'aura écouté.
 
 ## Enregistrer un lavage — revu le 21 octobre 2026
 
-### Ce qui a été cherché, et ce qui a été trouvé
+### Le vrai défaut : une station neuve ne peut rien encaisser
 
-Le bouton « Nouveau lavage » était signalé comme non fonctionnel. L'examen
-n'a trouvé **aucun défaut à l'ouverture** du formulaire : la station est
+Signalé deux fois, le bouton a fini par être reproduit — en créant un compte
+comme le ferait un nouveau gérant. Une organisation qui vient de s'inscrire
+n'a **ni station, ni prestation, ni employé**. Le bouton « Nouveau lavage »
+est alors grisé à juste titre, avec pour seule indication : « Créez d'abord
+une station dans **Réglages › Stations** ».
+
+Or ce menu n'existe pas. La barre latérale affiche « Configuration » et
+« Paramètres ». Le gérant cherchait « Réglages », ne trouvait rien, et
+concluait que le bouton était cassé. Il ne l'était pas : il était sans issue.
+
+| | Avant | Maintenant |
+| --- | --- | --- |
+| Nom du menu cité | « Réglages › Stations », introuvable | « Configuration › Stations », tel qu'il s'appelle |
+| Ce qui manque | Seule la station était mentionnée | Les trois manques listés : station, prestation, employé |
+| Comment y aller | Une phrase à déchiffrer | Un lien par manque, dans l'ordre où on les règle |
+
+### Ce qui avait déjà été vérifié, et reste vrai
+
+L'examen précédent n'avait trouvé **aucun défaut à l'ouverture** du formulaire : la station est
 active, le droit `wash:create` est accordé, le forfait autorise
 `washes.create`, les deux chargements de droits se terminent toujours, et le
 service worker sert bien la dernière version. Un refus `cash_session_required`

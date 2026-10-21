@@ -55,7 +55,7 @@ export function washButtonState(input: WashButtonInput): BlockedState {
       disabled: true,
       preparing: false,
       denied: false,
-      reason: "Aucune station active. Créez d'abord une station dans Réglages › Stations.",
+      reason: "Aucune station active. Créez d'abord une station dans Configuration › Stations.",
     }
   }
   if (!input.allowed) {
@@ -224,4 +224,65 @@ export function actionGate(input: ActionGateInput): ActionGate {
     return { disabled: true, busy: false, denied: false, reason: input.blockedBy }
   }
   return { disabled: false, busy: false, denied: false, reason: null }
+}
+
+
+/* ------------------------------------------------------------------ *
+ * Mise en route : ce qu'il faut avoir avant de pouvoir vendre
+ * ------------------------------------------------------------------ */
+
+export interface WashPrerequisiteInput {
+  activeSiteCount: number
+  activeServiceCount: number
+  activeWorkerCount: number
+}
+
+/** Un prérequis manquant, et l'écran où le créer. */
+export interface WashPrerequisite {
+  /** Ce qui manque, dit comme au comptoir. */
+  label: string
+  /** Pourquoi c'est nécessaire. */
+  why: string
+  /** Où aller le créer. */
+  to: string
+  /** Libellé du lien. */
+  action: string
+}
+
+/**
+ * Ce qui manque encore pour pouvoir enregistrer un lavage.
+ *
+ * Une station neuve n'a ni station, ni prestation, ni employé. Le bouton
+ * « Nouveau lavage » est alors grisé à juste titre — mais un bouton gris ne
+ * dit pas quoi faire, et le gérant conclut que le logiciel est cassé. On
+ * énumère donc les manques dans l'ordre où on les règle, chacun avec son
+ * lien : la mise en route devient une liste à cocher, pas une devinette.
+ */
+export function washPrerequisites(input: WashPrerequisiteInput): WashPrerequisite[] {
+  const missing: WashPrerequisite[] = []
+  if (input.activeSiteCount === 0) {
+    missing.push({
+      label: "Aucune station",
+      why: "C'est le lieu où la vente est encaissée.",
+      to: "/sites",
+      action: "Créer une station",
+    })
+  }
+  if (input.activeServiceCount === 0) {
+    missing.push({
+      label: "Aucune prestation au catalogue",
+      why: "C'est elle qui porte le prix appliqué au client.",
+      to: "/services",
+      action: "Ajouter une prestation",
+    })
+  }
+  if (input.activeWorkerCount === 0) {
+    missing.push({
+      label: "Aucun employé actif",
+      why: "Chaque lavage doit dire qui l'a fait.",
+      to: "/team",
+      action: "Ajouter un employé",
+    })
+  }
+  return missing
 }

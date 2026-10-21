@@ -9,13 +9,14 @@ import {
   isWashButtonClickable,
   resolvePendingOpen,
   washButtonState,
+  washPrerequisites,
   washSubmitBlockedReason,
 } from "@/lib/action-blocking"
 import { apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { isNetworkError } from "@/lib/offline-queue"
 import { enqueueMutation } from "@/lib/offline-sync"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { plateKey } from "@/lib/plate"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -229,12 +230,22 @@ export default function WashesPage() {
   const activeCategories = (categories ?? []).filter((item) => item.is_active)
   const activeServices = (serviceCatalog ?? []).filter((item) => item.is_active)
   const activeWorkers = (workers ?? []).filter((worker) => worker.status === "active")
+
   const washes = washesData ?? []
 
   const selectedServices = useMemo(
     () => activeServices.filter((service) => (quantities[service.id] ?? 0) > 0),
     [activeServices, quantities]
   )
+  // Tant qu'une de ces listes charge, on ne conclut rien : annoncer « aucune
+  // station » pendant une seconde ferait croire à une installation vide.
+  const setupLoading = sitesLoading || servicesLoading || workersLoading
+  const missingSetup = washPrerequisites({
+    activeSiteCount: activeSites.length,
+    activeServiceCount: activeServices.length,
+    activeWorkerCount: activeWorkers.length,
+  })
+
   const totalCents = selectedServices.reduce(
     (total, service) => total + service.price_cents * (quantities[service.id] ?? 0),
     0
@@ -465,6 +476,37 @@ export default function WashesPage() {
             </div>
           </div>
         </div>
+
+        {!setupLoading && missingSetup.length > 0 && (
+          <section
+            className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4"
+            aria-labelledby="mise-en-route"
+          >
+            <h2 id="mise-en-route" className="text-sm font-semibold">
+              Avant d&apos;enregistrer un premier lavage
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Il manque {missingSetup.length === 1 ? "une chose" : `${missingSetup.length} choses`} pour
+              pouvoir encaisser. Chaque point se règle en une minute.
+            </p>
+            <ul className="mt-3 space-y-2">
+              {missingSetup.map((item) => (
+                <li
+                  key={item.to}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background px-3 py-2"
+                >
+                  <span className="text-sm">
+                    <span className="font-medium">{item.label}</span>{" "}
+                    <span className="text-muted-foreground">{item.why}</span>
+                  </span>
+                  <Link to={item.to} className={buttonVariants({ size: "sm", variant: "outline" })}>
+                    {item.action}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         {(sitesError || categoriesError || servicesError || workersError) && (
           <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
