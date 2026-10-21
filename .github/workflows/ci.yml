@@ -1,0 +1,87 @@
+# =============================================================================
+# Contrôle automatique à chaque envoi de code.
+#
+# Les tests de ce projet ne servent à rien s'ils ne tournent qu'à la main :
+# on finit par les lancer de moins en moins, puis plus du tout, et la garantie
+# s'évapore sans que personne ne le remarque. Ce fichier existe pour que leur
+# échec soit visible avant la fusion, pas après la mise en production.
+# =============================================================================
+name: Contrôle
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # Un nouvel envoi annule le contrôle précédent de la même branche : inutile
+  # de payer pour vérifier un état déjà remplacé.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verifier:
+    name: Types, style, construction et tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Vérifier les types
+        run: npx tsc -b
+
+      - name: Vérifier le style
+        run: npm run lint
+
+      - name: Construire l'interface
+        run: npm run build
+
+      - name: Exécuter la suite de tests
+        # La base de test est embarquée et vit en mémoire : aucun service
+        # externe n'est nécessaire, chaque fichier part d'une base vierge.
+        run: npm test
+        env:
+          NODE_ENV: test
+
+  image:
+    name: Construction de l'image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # L'image est construite mais pas publiée. Le but n'est pas de livrer
+      # ici, c'est de détecter tout de suite qu'un déploiement serait cassé —
+      # le genre de panne qu'on découvre d'habitude le jour où l'on est pressé.
+      - name: Construire l'image de production
+        run: docker build -t washpilot-ci:${{ github.sha }} .
+
+      - name: Vérifier que le conteneur refuse de démarrer sans base
+        # Garde-fou de déploiement : en production, l'application ne doit
+        # jamais se rabattre sur la base embarquée, qui disparaîtrait au
+        # redéploiement en emportant la caisse.
+        run: |
+          set +e
+          sortie=$(docker run --rm -e NODE_ENV=production washpilot-ci:${{ github.sha }} 2>&1)
+          code=$?
+          set -e
+          echo "$sortie"
+          if [ "$code" -eq 0 ]; then
+            echo "::error::Le conteneur a démarré sans DATABASE_URL : le garde-fou a sauté."
+            exit 1
+          fi
+          echo "$sortie" | grep -q "DATABASE_URL est obligatoire en production" || {
+            echo "::error::Le conteneur a échoué, mais pas pour la bonne raison."
+            exit 1
+          }
+          echo "Garde-fou vérifié : refus net et message explicite."

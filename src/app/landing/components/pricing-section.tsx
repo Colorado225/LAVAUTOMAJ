@@ -7,10 +7,10 @@ import { motion } from "framer-motion"
 import { Reveal, SectionHeading } from "./landing-motion"
 import {
   PRICING_PLANS,
-  PUBLIC_TRIAL_DAYS,
   formatXofPrice,
   type PricingPlan,
 } from "@/config/pricing"
+import { useLivePricing } from "@/lib/public-pricing"
 import { SPRING } from "@/lib/motion"
 import { cn } from "@/lib/utils"
 
@@ -26,6 +26,10 @@ import { cn } from "@/lib/utils"
  * et afficher un sélecteur qui ne change rien détruit la confiance.
  */
 export function PricingSection() {
+  // Les prix réellement facturés, avec repli sur la grille du code si l'API
+  // ne répond pas. Voir src/lib/public-pricing.ts.
+  const pricing = useLivePricing()
+
   return (
     <section
       id="tarifs"
@@ -36,7 +40,7 @@ export function PricingSection() {
           <SectionHeading
             eyebrow="Tarifs"
             title="Trois forfaits, un prix clair, aucun engagement caché."
-            description={`Essayez gratuitement pendant ${PUBLIC_TRIAL_DAYS} jours, sans carte bancaire. Vous ne payez que si WashPilot vous fait gagner du temps.`}
+            description={`Essayez gratuitement pendant ${pricing.trialDays} jours, sans carte bancaire. Vous ne payez que si WashPilot vous fait gagner du temps.`}
           />
         </Reveal>
 
@@ -45,19 +49,33 @@ export function PricingSection() {
             dépasse, et c'est voulu. */}
         <div className="mt-12 grid gap-5 sm:mt-16 lg:grid-cols-3">
           {PRICING_PLANS.map((plan, index) => (
-            <PlanCard key={plan.code} plan={plan} index={index} />
+            <PlanCard
+              key={plan.code}
+              plan={plan}
+              index={index}
+              priceXof={pricing.priceByCode[plan.code] ?? plan.priceXof}
+            />
           ))}
         </div>
 
         <Reveal delay={0.1}>
-          <TrialNote />
+          <TrialNote trialDays={pricing.trialDays} />
         </Reveal>
       </div>
     </section>
   )
 }
 
-function PlanCard({ plan, index }: { plan: PricingPlan; index: number }) {
+function PlanCard({
+  plan,
+  index,
+  priceXof,
+}: {
+  plan: PricingPlan
+  index: number
+  /** Prix facturé, qui prime sur celui du catalogue local. */
+  priceXof: number
+}) {
   const featured = plan.featured === true
 
   return (
@@ -97,7 +115,7 @@ function PlanCard({ plan, index }: { plan: PricingPlan; index: number }) {
             se lit d'un bloc, alors qu'un « /mois » décroché se perd. */}
         <p className="mt-5 flex flex-wrap items-baseline gap-x-2">
           <span className="text-4xl font-extrabold tracking-[-0.04em] text-[#102342] tabular-nums">
-            {formatXofPrice(plan.priceXof)}
+            {formatXofPrice(priceXof)}
           </span>
           <span className="text-sm font-semibold text-slate-500">/ mois</span>
         </p>
@@ -155,7 +173,7 @@ function PlanCard({ plan, index }: { plan: PricingPlan; index: number }) {
  * Rappel de l'essai. Placé après la grille : le visiteur a vu les prix, c'est
  * le moment de lever l'objection du paiement, pas avant.
  */
-function TrialNote() {
+function TrialNote({ trialDays }: { trialDays: number }) {
   return (
     <div className="elev-1 mx-auto mt-10 flex max-w-3xl flex-col items-start gap-4 rounded-2xl border border-blue-100 bg-white p-5 sm:flex-row sm:items-center sm:p-6">
       <span className="edge-3d grid size-11 shrink-0 place-items-center rounded-2xl bg-blue-50 text-blue-700">
@@ -163,7 +181,7 @@ function TrialNote() {
       </span>
       <div>
         <p className="text-sm font-bold text-[#102342]">
-          {PUBLIC_TRIAL_DAYS} jours d’essai accompagné, sans carte bancaire.
+          {trialDays} jours d’essai accompagné, sans carte bancaire.
         </p>
         <p className="mt-1 text-sm leading-6 text-slate-500">
           Vous gardez l’accès complet pendant l’essai. À l’échéance, votre

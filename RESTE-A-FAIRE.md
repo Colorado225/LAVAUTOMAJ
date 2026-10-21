@@ -112,7 +112,18 @@ s'exécutent qu'à la main finissent par ne plus s'exécuter du tout.
 
 ---
 
-## 3. Bloquant terrain — Aucun mode hors ligne
+## 3. ~~Bloquant terrain — Aucun mode hors ligne~~ — RÉSOLU le 21/10/2026
+
+> **Traité.** L'application est installable, s'ouvre sans réseau, et les lavages
+> encaissés pendant une coupure repartent seuls au retour du réseau, sans
+> doublon possible. Voir **`HORS-CONNEXION.md`** pour les règles, les
+> exclusions volontaires (ouverture de caisse, annulations, modifications) et
+> les limites assumées. 25 tests : `tests/offline-queue.test.ts` et
+> `tests/pwa.test.ts`.
+>
+> Le constat initial, conservé pour mémoire :
+
+## 3 bis. Constat d'origine — Aucun mode hors ligne
 
 Recherche sur `serviceWorker|manifest.json|workbox|indexedDB|offline` dans
 `src/`, `public/` et `index.html` : **aucun résultat**.
@@ -227,3 +238,175 @@ client réel puisse s'inscrire, payer et être servi.
 
 Tout le reste peut attendre ce premier client — et sera mieux conçu une fois
 qu'on l'aura écouté.
+
+## Enregistrer un lavage — revu le 21 octobre 2026
+
+### Le vrai défaut : une station neuve ne peut rien encaisser
+
+Signalé deux fois, le bouton a fini par être reproduit — en créant un compte
+comme le ferait un nouveau gérant. Une organisation qui vient de s'inscrire
+n'a **ni station, ni prestation, ni employé**. Le bouton « Nouveau lavage »
+est alors grisé à juste titre, avec pour seule indication : « Créez d'abord
+une station dans **Réglages › Stations** ».
+
+Or ce menu n'existe pas. La barre latérale affiche « Configuration » et
+« Paramètres ». Le gérant cherchait « Réglages », ne trouvait rien, et
+concluait que le bouton était cassé. Il ne l'était pas : il était sans issue.
+
+| | Avant | Maintenant |
+| --- | --- | --- |
+| Nom du menu cité | « Réglages › Stations », introuvable | « Configuration › Stations », tel qu'il s'appelle |
+| Ce qui manque | Seule la station était mentionnée | Les trois manques listés : station, prestation, employé |
+| Comment y aller | Une phrase à déchiffrer | Un lien par manque, dans l'ordre où on les règle |
+
+### Ce qui avait déjà été vérifié, et reste vrai
+
+L'examen précédent n'avait trouvé **aucun défaut à l'ouverture** du formulaire : la station est
+active, le droit `wash:create` est accordé, le forfait autorise
+`washes.create`, les deux chargements de droits se terminent toujours, et le
+service worker sert bien la dernière version. Un refus `cash_session_required`
+observé en ligne de commande venait de l'appel d'essai lui-même, qui omettait
+la session de caisse — le formulaire, lui, la transmet.
+
+Le blocage réel était **à la validation**, pas à l'ouverture : le bouton
+« Enregistrer » restait grisé sans que la raison saute aux yeux.
+
+### Ce qui a changé
+
+| Point | Avant | Maintenant |
+| --- | --- | --- |
+| Laveur | Case « Employés affectés (facultatif) », souvent laissée vide | « Qui lave ce véhicule ? » — **obligatoire**, la validation l'exige |
+| Aucun employé actif | « Aucun employé actif à affecter. », sans issue | Lien direct vers **Équipe** pour en ajouter un |
+| Reçu | Accessible seulement en rouvrant la fiche du lavage | Proposé **immédiatement après une vente intégralement réglée** |
+| Plaque sur le reçu | Absente | Ligne « Plaque », le client reconnaît sa voiture |
+| Station fermée | Restait proposée dans le formulaire | Écartée du formulaire, mais toujours nommée dans l'historique |
+
+### Deux choix assumés
+
+**L'exigence du laveur porte sur le formulaire, pas sur le serveur.** Un
+lavage ressaisi après coup, ou rejoué depuis la file hors ligne, peut
+légitimement n'avoir personne de nommé ; le refuser côté serveur ferait
+perdre des ventes déjà encaissées. Au comptoir, en revanche, le caissier a le
+laveur sous les yeux : c'est le seul moment où l'information est encore sûre.
+
+**Le reçu n'est pas émis tout seul.** Une ligne d'émission signifie qu'un
+papier est sorti ; l'émettre automatiquement fausserait le compte des copies.
+Il est donc proposé en un clic, pendant que le client est encore au comptoir.
+
+### Ce que cela laisse ouvert
+
+- Le reçu reste un reçu commercial, **jamais une facture normalisée** : aucune
+  mention TVA, FNE ou DGI, et les tests l'interdisent explicitement.
+- Un lavage enregistré sans laveur depuis la file hors ligne n'apparaîtra dans
+  aucune part de rendement. C'est la contrepartie du choix ci-dessus.
+
+## Recensement du câblage — 21 octobre 2026
+
+Comparaison croisée entre les pages, les routes, le menu et l'API.
+
+**Pages et menus : rien ne manque.** Toute page de `src/app/` a une route, et
+toute route a une entrée de menu. Le grief « des pages non branchées » ne porte
+pas sur l'interface.
+
+**L'écart était ailleurs : sept routes d'API construites, testées, et qu'aucun
+écran n'appelait.** Sur 117 routes, sept étaient inatteignables :
+
+| Route | Conséquence concrète | Suite donnée |
+|---|---|---|
+| `GET/POST/DELETE /work-schedules` | Aucune heure de référence saisissable, donc **personne n'était jamais déclaré en retard** | Écran « Horaires » |
+| `GET /attendance/history` | Les présences passées n'étaient consultables nulle part | Section « Historique de présence » |
+| `GET/POST /product-categories` | Tout produit restait « Sans catégorie », sans moyen d'y remédier | Champ dans la fiche produit |
+| `POST /support/upgrade-request` | — | **Laissée débranchée, volontairement** (voir ci-dessous) |
+
+### Pourquoi `/support/upgrade-request` reste débranchée
+
+Trois chemins mènent déjà au même besoin, et deux sont branchés :
+
+- **acheter un forfait** → `/subscription/checkout`, avec déclaration de
+  paiement et suivi ; c'est le parcours réel ;
+- **poser une question** → `/support/requests`, qui crée un ticket que le
+  client peut suivre.
+
+`/support/upgrade-request` ne fait ni l'un ni l'autre : elle journalise et
+envoie un courriel à l'opérateur, **sans laisser au client la moindre trace
+consultable**. La brancher ajouterait un troisième bouton pour un résultat
+invisible. Le choix est donc de la laisser de côté et de signaler qu'elle est
+supplantée — sa suppression est une décision à prendre, pas un oubli.
+
+### Ce qui reste ouvert
+
+- ~~Le client n'existe toujours pas~~ — **tranché le 21 octobre 2026 : on suit
+  le véhicule, pas la personne.** On note la plaque, rien d'autre : pas de nom,
+  pas de téléphone, pas de fichier client à tenir. Elle sert à retrouver
+  l'historique d'un véhicule qui revient. La table `customers` reste donc vide
+  et sans emploi ; `washes.customer_id` n'est plus alimenté.
+- `clerk_webhook_events` : table morte, héritée d'une architecture abandonnée.
+- Deuxième instance impossible (limitation en mémoire, `setInterval`).
+- `wash_quality_events` absente.
+
+### Messages de validation — réglés le 21 octobre 2026
+
+Une saisie refusée renvoyait le message brut de la bibliothèque de validation :
+« Invalid option: expected one of "cash"|"orange_money" ». Inutilisable pour un
+caissier, qui ne sait ni ce qui est refusé, ni quoi corriger.
+
+Basculer la bibliothèque en français ne suffisait pas : elle produit alors
+« Entrée invalide : chaîne de caractères attendu, indéfini reçu ». Il manquait
+surtout **le nom du champ en cause**, qui est l'information la plus utile.
+
+Avant / après :
+
+| Avant | Après |
+|---|---|
+| `Invalid option: expected one of "cash"\|"orange_money"` | Le mode de paiement ne fait pas partie des choix possibles. |
+| `Invalid UUID` | La station n'est pas valide. Reprenez la sélection dans la liste. |
+| `Too small: expected number to be >=1` | Ligne 2 : la quantité doit être au moins 1. |
+| `Too big: expected number to be <=100000000` | Le montant ne peut pas dépasser 1 000 000 F. |
+| `Too big: expected number to be <=1439` | L'heure de début ne peut pas dépasser 23:59. |
+
+Les règles retenues :
+
+- **un message écrit à la main dans un validateur l'emporte toujours.**
+  « Sélectionnez au moins une prestation. » vaut mieux que toute phrase
+  générique ;
+- **aucune tournure ne s'accorde en genre**, puisque le libellé peut être
+  masculin ou féminin : « ne fait pas partie des choix possibles » plutôt que
+  « n'est pas reconnu » ;
+- **les bornes se relisent dans l'unité du métier** : les centimes en francs,
+  les millièmes en unités, les minutes depuis minuit en heures ;
+- **une borne exclusive ne se dit pas comme une borne inclusive** :
+  `.positive()` donne « doit dépasser 0 », jamais « au moins 0 » ;
+- un champ absent du lexique reste lisible : `widget_id` devient « widget ».
+
+### Coût de référence d'un produit — réglé le 21 octobre 2026
+
+Acheter un produit ne touchait pas à sa fiche. Le gérant saisissait « 300 F le
+sachet » le premier jour, le prix montait à 350 au marché, et la fiche affichait
+toujours 300. Comme chaque lavage valorise sa consommation au coût de la fiche,
+**la marge affichée était fausse, et toujours dans le sens flatteur.**
+
+Désormais, **le dernier prix payé devient le coût de référence.**
+
+Pas une moyenne pondérée, pour deux raisons. D'abord le stock peut être négatif
+dans ce produit — une rupture n'a jamais le droit de bloquer un lavage — et une
+moyenne pondérée par une quantité négative ne veut plus rien dire. Ensuite
+c'est le chiffre que le gérant reconnaît : il a payé 350, sa fiche doit
+afficher 350. La valeur du stock se lit alors comme un coût de reconstitution,
+ce qui est la bonne question pour décider, et non comme une valeur comptable
+historique — la comptabilité, elle, part de l'export.
+
+Trois garde-fous :
+
+- **un prix nul n'écrase rien.** Recevoir un échantillon gratuit ne doit pas
+  faire croire que le produit ne coûte plus rien, ce qui rendrait toutes les
+  marges parfaites ;
+- **l'historique n'est jamais réécrit.** Chaque mouvement déjà enregistré garde
+  le coût qui était vrai ce jour-là ;
+- **le réalignement est tracé** (`product.cost_changed` : ancien prix, nouveau
+  prix, achat en cause), et l'écran dit d'où vient le chiffre — « prix payé le
+  21/10/2026 » ou « saisi à la main ». Corriger le coût à la main efface la
+  mention, pour que l'écran ne mente pas.
+
+**Limite assumée :** annuler un achat reprend la marchandise mais ne restaure
+pas l'ancien coût de référence. Un prix payé par erreur se corrige à la main
+sur la fiche produit.

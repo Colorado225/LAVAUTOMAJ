@@ -44,7 +44,16 @@ export function isDatabaseReady(): boolean {
   return ready && pool !== null;
 }
 
-const schemaSql = `
+/**
+ * SQL exécuté à chaque démarrage : création des tables si absentes, puis
+ * alignement du catalogue des forfaits.
+ *
+ * Exporté pour être rejouable en test sur une base déjà peuplée. C'est le
+ * seul moyen honnête de vérifier qu'un tarif décidé en console survit à un
+ * redémarrage : en test, réinitialiser le schéma crée une base neuve, ce qui
+ * effacerait la question au lieu d'y répondre.
+ */
+export const schemaSql = `
 CREATE TABLE IF NOT EXISTS users (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), clerk_user_id text UNIQUE,
  organization_id uuid, email text NOT NULL, first_name text, last_name text, phone text,
@@ -68,6 +77,14 @@ ALTER TABLE plans ADD COLUMN IF NOT EXISTS price_cents integer NOT NULL DEFAULT 
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS billing_cycle text NOT NULL DEFAULT 'monthly';
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_services integer;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS sort_order integer NOT NULL DEFAULT 0;
+-- Date de la derniere modification de prix decidee depuis la console.
+--
+-- Sans cette colonne, le seed ci-dessous ecraserait a chaque demarrage le
+-- tarif qu'un operateur vient de changer : il se serait recouche sur la
+-- valeur ecrite en dur, et personne n'aurait compris pourquoi. Tant qu'elle
+-- est nulle, le forfait suit les valeurs livrees avec le produit ; des
+-- qu'un operateur fixe un prix, c'est le sien qui fait foi.
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS price_overridden_at timestamptz;
 -- Migration du forfait d'entrée : « free » (0 F) devient « starter » (10 000 F),
 -- pour coller à la grille publique. Le renommage se fait AVANT le seed, sinon
 -- ON CONFLICT(code) insérerait un doublon en laissant « free » orphelin —
@@ -81,7 +98,11 @@ INSERT INTO plans(code,name,description,price_cents,billing_cycle,max_users,max_
  ('pro','Pro','Pour les stations qui ont plusieurs laveurs et veulent mieux contrôler leurs opérations.',2000000,'monthly',10,20,1,NULL,2,'{"reports.advanced":true,"reports.export":true,"reports.consolidated":false,"audit.read":true,"sites.multiple":false,"stock.manage":true,"team.tracking":true}'::jsonb),
  ('business','Business','Pour les stations importantes ou les propriétaires qui gèrent plusieurs sites.',3500000,'monthly',NULL,NULL,NULL,NULL,3,'{"reports.advanced":true,"reports.export":true,"reports.consolidated":true,"audit.read":true,"sites.multiple":true,"stock.manage":true,"team.tracking":true}'::jsonb)
 ON CONFLICT(code) DO UPDATE SET
- name=EXCLUDED.name, description=EXCLUDED.description, price_cents=EXCLUDED.price_cents,
+ name=EXCLUDED.name, description=EXCLUDED.description,
+ -- Un prix fixe depuis la console survit au redemarrage ; les autres suivent
+ -- la grille livree avec le produit.
+ price_cents=CASE WHEN plans.price_overridden_at IS NULL
+                  THEN EXCLUDED.price_cents ELSE plans.price_cents END,
  billing_cycle=EXCLUDED.billing_cycle, max_users=EXCLUDED.max_users, max_workers=EXCLUDED.max_workers,
  max_sites=EXCLUDED.max_sites, max_services=EXCLUDED.max_services, sort_order=EXCLUDED.sort_order,
  features=EXCLUDED.features;
@@ -219,7 +240,17 @@ CREATE TABLE IF NOT EXISTS washes (
 ALTER TABLE washes ADD COLUMN IF NOT EXISTS reference text;
 ALTER TABLE washes ADD COLUMN IF NOT EXISTS payment_status text NOT NULL DEFAULT 'pending';
 ALTER TABLE washes ADD COLUMN IF NOT EXISTS cancelled_by uuid REFERENCES users(id);
+-- Plaque du vehicule lave.
+--
+-- Le produit ne tient pas de fichier client : c'est la plaque, et elle seule,
+-- qui permet de reconnaitre un vehicule qui revient. Deux colonnes : la forme
+-- affichee, proche de ce qui a ete tape, et la cle reduite aux lettres et aux
+-- chiffres, qui sert a regrouper. Sans elle, " 1234 ab 01 " et "1234-AB-01"
+-- seraient deux vehicules differents.
+ALTER TABLE washes ADD COLUMN IF NOT EXISTS plate text;
+ALTER TABLE washes ADD COLUMN IF NOT EXISTS plate_key text;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_washes_org_reference ON washes(organization_id,reference);
+CREATE INDEX IF NOT EXISTS idx_washes_org_plate ON washes(organization_id,plate_key,created_at DESC);
 CREATE TABLE IF NOT EXISTS wash_items (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), wash_id uuid NOT NULL REFERENCES washes(id),
  service_id uuid REFERENCES services(id), service_name text NOT NULL, quantity integer NOT NULL CHECK(quantity > 0),
@@ -267,6 +298,11 @@ CREATE TABLE IF NOT EXISTS products (
  created_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(),
  UNIQUE(organization_id,name)
 );
+-- Date du dernier realignement du cout de reference sur un prix reellement
+-- paye. Sert a dire a l'ecran d'ou vient le chiffre : un cout saisi a la main
+-- il y a six mois et un cout confirme par l'achat de mardi ne meritent pas la
+-- meme confiance.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS unit_cost_updated_at timestamptz;
 CREATE TABLE IF NOT EXISTS stock_movements (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  product_id uuid NOT NULL REFERENCES products(id), site_id uuid REFERENCES sites(id),
@@ -673,6 +709,35 @@ ALTER TABLE organizations ADD COLUMN IF NOT EXISTS deletion_scheduled_for timest
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS deletion_reason text;
 CREATE INDEX IF NOT EXISTS organizations_deletion_idx ON organizations(deletion_scheduled_for)
  WHERE deletion_scheduled_for IS NOT NULL;
+
+-- Demandes de cloture emises par le client lui-meme.
+--
+-- A distinguer de la suppression ci-dessus, qui est une decision de
+-- l'editeur et coupe l'acces aussitot. Ici le gerant signale qu'il veut
+-- partir : rien ne s'arrete, il continue d'encaisser normalement. C'est
+-- l'editeur qui programmera la cloture, ou qui refusera en expliquant
+-- pourquoi. Le client peut se raviser tant que personne n'a tranche.
+--
+-- Une seule demande ouverte a la fois, garantie par l'index partiel plus bas :
+-- deux demandes en attente pour la meme station n'auraient aucun sens et
+-- feraient apparaitre la station deux fois dans la file de l'editeur.
+CREATE TABLE IF NOT EXISTS closure_requests (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+ requested_by uuid REFERENCES users(id) ON DELETE SET NULL,
+ requested_by_email text NOT NULL,
+ reason text NOT NULL,
+ status text NOT NULL DEFAULT 'pending'
+   CHECK (status IN ('pending','cancelled','accepted','declined')),
+ resolution_note text,
+ resolved_by_email text,
+ resolved_at timestamptz,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS closure_requests_one_pending
+ ON closure_requests(organization_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS closure_requests_feed_idx
+ ON closure_requests(status, created_at DESC);
 CREATE TABLE IF NOT EXISTS clerk_webhook_events (
  id text PRIMARY KEY, event_type text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -1052,7 +1117,34 @@ async function backfillRevenueLedger(
   if (n) console.log(`[revenu] ${n} encaissement(s) repris depuis le journal d'audit.`)
 }
 
+/**
+ * La base embarquée a-t-elle le droit de prendre le relais ?
+ *
+ * En développement, oui : c'est ce qui permet de lancer le projet sans rien
+ * installer. **En production, jamais.**
+ *
+ * PGlite écrit dans le système de fichiers du serveur. Dans un conteneur, ce
+ * système de fichiers disparaît au redéploiement. Un démarrage silencieux sur
+ * la base embarquée donnerait une application parfaitement fonctionnelle, qui
+ * encaisserait de l'argent réel pendant des semaines, puis perdrait tout à la
+ * première mise à jour — sans qu'aucune alerte n'ait été levée.
+ *
+ * Le cas le plus traître n'est pas l'oubli de configuration : c'est la base
+ * externe momentanément injoignable au démarrage. Se rabattre alors sur une
+ * base vide ferait repartir la station à zéro, caisse comprise. Mieux vaut
+ * refuser de démarrer : un service arrêté se remarque, une base vide non.
+ */
+export function embeddedFallbackAllowed(nodeEnv: string): boolean {
+  return nodeEnv !== "production"
+}
+
 export async function initDatabaseSchema(): Promise<boolean> {
+  if (!embeddedFallbackAllowed(env.NODE_ENV) && !env.DATABASE_URL) {
+    throw new Error(
+      "DATABASE_URL est obligatoire en production. Sans elle, l'application démarrerait sur la base " +
+        "embarquée, à l'intérieur du serveur : les données seraient perdues au premier redéploiement.",
+    )
+  }
   if (env.DATABASE_URL) {
     try {
       const externalPool = new Pool({
@@ -1074,10 +1166,18 @@ export async function initDatabaseSchema(): Promise<boolean> {
       console.info("[db] Connecté à PostgreSQL via DATABASE_URL");
       return true;
     } catch (error) {
-      console.warn(
-        "[db] Connexion DATABASE_URL échouée, basculement sur PostgreSQL embarqué (PGlite):",
-        error instanceof Error ? error.message : "unknown",
-      );
+      const detail = error instanceof Error ? error.message : "unknown";
+      if (!embeddedFallbackAllowed(env.NODE_ENV)) {
+        throw new Error(
+          `Connexion à DATABASE_URL impossible (${detail}). L'application refuse de démarrer sur la base ` +
+            "embarquée : elle repartirait d'une base vide, caisse comprise.",
+          // L'erreur d'origine reste attachée : sans elle, l'exploitant lirait
+          // « connexion impossible » sans savoir si c'est le mot de passe, le
+          // réseau ou le certificat.
+          { cause: error },
+        );
+      }
+      console.warn("[db] Connexion DATABASE_URL échouée, basculement sur PostgreSQL embarqué (PGlite):", detail);
     }
   }
 

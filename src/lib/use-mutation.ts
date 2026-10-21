@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react"
 import { apiFetch } from "@/lib/api"
+import { enqueueMutation } from "@/lib/offline-sync"
 import {
   performMutation,
   type MutationOutcome,
@@ -67,6 +68,9 @@ export function useMutation(): MutationController {
       const outcome = await performMutation<T>(request, {
         fetch: apiFetch,
         confirm: (question) => window.confirm(question),
+        // Seules les écritures qui l'ont demandé explicitement atterrissent
+        // dans la file ; voir le champ `offline` de MutationRequest.
+        enqueue: enqueueMutation,
       })
 
       inFlight.current -= 1

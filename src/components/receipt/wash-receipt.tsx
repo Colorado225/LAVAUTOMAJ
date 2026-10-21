@@ -53,7 +53,13 @@ export interface WashReceipt {
   copy_number: number
   duplicate: boolean
   station: { name: string; site: string; city: string; address: string | null; phone: string | null }
-  wash: { reference: string; created_at: string; vehicle: string | null; customer: string | null }
+  wash: {
+    reference: string
+    created_at: string
+    vehicle: string | null
+    plate: string | null
+    customer: string | null
+  }
   cashier: string | null
   workers: string[]
   items: ReceiptItem[]
@@ -127,6 +133,7 @@ export function ReceiptPaper({ receipt }: { receipt: WashReceipt }) {
       <Row label="Date" value={dateTime(receipt.wash.created_at)} />
       {receipt.cashier && <Row label="Caissier" value={receipt.cashier} />}
       {receipt.wash.vehicle && <Row label="Véhicule" value={receipt.wash.vehicle} />}
+      {receipt.wash.plate && <Row label="Plaque" value={receipt.wash.plate} />}
       {receipt.wash.customer && <Row label="Client" value={receipt.wash.customer} />}
 
       <Separator />

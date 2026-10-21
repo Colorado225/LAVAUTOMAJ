@@ -6,6 +6,8 @@
  */
 import * as React from "react"
 import { API_BASE_URL, apiErrorMessage, authHeaders, storeSessionToken } from "@/lib/api"
+import { clearOfflineApiCache } from "@/lib/register-sw"
+import { setQueueOwner, startOfflineSync } from "@/lib/offline-sync"
 
 export interface AuthUser {
   id: string
@@ -169,8 +171,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       storeSessionToken(null)
       setState(SIGNED_OUT)
+      // Sur un téléphone partagé entre deux caissiers, le catalogue et les
+      // tarifs de la station n'ont pas à rester lisibles après le départ du
+      // premier. Les opérations encore en attente, elles, sont conservées :
+      // elles appartiennent à leur auteur et repartiront à sa prochaine
+      // connexion (voir la règle 5 de offline-queue.ts).
+      setQueueOwner("")
+      clearOfflineApiCache()
     }
   }, [])
+
+  // Le propriétaire de la file d'attente, et le démarrage de la
+  // resynchronisation automatique. Sans propriétaire déclaré, rien ne part :
+  // une vente ne doit jamais être envoyée sous le compte de quelqu'un
+  // d'autre.
+  const userId = state.user?.id ?? ""
+  React.useEffect(() => {
+    if (!userId) return
+    setQueueOwner(userId)
+    return startOfflineSync()
+  }, [userId])
 
   const value = React.useMemo<AuthContextValue>(
     () => ({

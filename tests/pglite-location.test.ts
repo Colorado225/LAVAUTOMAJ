@@ -102,3 +102,24 @@ test("le mode et le drapeau éphémère ne se contredisent jamais", () => {
     )
   }
 })
+
+// ---------------------------------------------------------------------------
+// Le garde-fou du déploiement
+//
+// Il ne protège pas d'une erreur de code mais d'une mise en production
+// silencieuse sur la mauvaise base. Le symptôme serait indétectable : une
+// application qui marche, encaisse pendant des semaines, et perd tout au
+// premier redéploiement.
+// ---------------------------------------------------------------------------
+
+test("la base embarquée est refusée en production", async () => {
+  const { embeddedFallbackAllowed } = await import("../server/db.ts")
+  assert.equal(embeddedFallbackAllowed("production"), false)
+})
+
+test("la base embarquée reste permise partout ailleurs", async () => {
+  const { embeddedFallbackAllowed } = await import("../server/db.ts")
+  // C'est ce qui permet de lancer le projet sans rien installer.
+  assert.equal(embeddedFallbackAllowed("development"), true)
+  assert.equal(embeddedFallbackAllowed("test"), true)
+})

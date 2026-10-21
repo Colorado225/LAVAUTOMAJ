@@ -21,6 +21,16 @@ const schema = z.object({
   APP_URL: z.string().trim().optional().default(""),
   /** Durée de validité d'un lien de réinitialisation de mot de passe. */
   PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
+  /**
+   * Durée de l'essai gratuit offert à l'inscription, en jours.
+   *
+   * 14 par défaut. Le plancher à 1 interdit l'essai de zéro jour, qui
+   * afficherait « essayez gratuitement » à un visiteur déjà expiré. Le
+   * plafond à 90 interdit l'essai perpétuel : un produit qu'on n'achète
+   * jamais n'est pas un produit. La vitrine annonce cette même valeur,
+   * qu'elle lit sur l'API — elle n'est donc jamais démentie par la réalité.
+   */
+  TRIAL_DAYS: z.coerce.number().int().min(1).max(90).default(14),
   /** Transport e-mail (Resend). Sans clé, les liens sont journalisés côté serveur. */
   RESEND_API_KEY: z.string().trim().optional().default(""),
   MAIL_FROM: z.string().trim().optional().default("WashPilot CI <onboarding@resend.dev>"),

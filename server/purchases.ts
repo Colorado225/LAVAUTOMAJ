@@ -355,17 +355,20 @@ export function createPurchaseRouter() {
           // simultanés portant sur les mêmes produits ne peuvent pas
           // s'interbloquer en les prenant dans des sens opposés.
           const ordered = [...input.items].sort((a, b) => a.product_id.localeCompare(b.product_id))
-          const produits = new Map<string, { name: string }>()
+          const produits = new Map<string, { name: string; unitCostCents: number }>()
           for (const item of ordered) {
             const productQ = await client.query(
-              "SELECT id, name, is_active FROM products WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE",
+              "SELECT id, name, is_active, unit_cost_cents FROM products WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE",
               [item.product_id, t.organizationId],
             )
             if (!productQ.rowCount) throw new HttpError(404, "product_not_found", "Produit introuvable.")
             if (!productQ.rows[0].is_active) {
               throw new HttpError(409, "product_archived", "Un produit de cet achat est archivé. Réactivez-le avant de l'approvisionner.")
             }
-            produits.set(item.product_id, { name: String(productQ.rows[0].name) })
+            produits.set(item.product_id, {
+              name: String(productQ.rows[0].name),
+              unitCostCents: Number(productQ.rows[0].unit_cost_cents),
+            })
           }
 
           const purchaseQ = await client.query(
@@ -407,6 +410,47 @@ export function createPurchaseRouter() {
                VALUES($1,$2,$3,$4,'entry',$5,$6,'Réception d''un achat',$7)`,
               [t.organizationId, item.product_id, siteId, purchaseId, item.received_milli, item.unit_cost_cents, t.userId],
             )
+
+            // Le prix qu'on vient de payer devient le cout de reference du
+            // produit. Sans cela, la fiche gardait indefiniment un chiffre
+            // saisi a la main le premier jour, et chaque lavage valorisait sa
+            // consommation a ce vieux prix : la marge affichee etait fausse,
+            // toujours dans le sens flatteur.
+            //
+            // C'est le DERNIER PRIX PAYE qui est retenu, pas une moyenne.
+            // Deux raisons. D'abord le stock peut etre negatif dans ce produit
+            // — une rupture n'a jamais le droit de bloquer un lavage — et une
+            // moyenne ponderee par une quantite negative ne veut plus rien
+            // dire. Ensuite c'est le chiffre que le gerant reconnait : il a
+            // paye 350 le sachet, sa fiche doit afficher 350.
+            //
+            // L'historique n'est pas touche : chaque mouvement deja ecrit
+            // garde le cout qui etait vrai ce jour-la.
+            const ancienCout = produits.get(item.product_id)?.unitCostCents ?? 0
+            // Un cout nul n'ecrase rien : recevoir un echantillon gratuit ne
+            // doit pas faire croire que le produit ne coute plus rien, ce qui
+            // rendrait toutes les marges parfaites.
+            if (item.unit_cost_cents > 0 && item.unit_cost_cents !== ancienCout) {
+              await client.query(
+                "UPDATE products SET unit_cost_cents=$1, unit_cost_updated_at=now() WHERE id=$2::uuid AND organization_id=$3::uuid",
+                [item.unit_cost_cents, item.product_id, t.organizationId],
+              )
+              await client.query(
+                `INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+                 VALUES($1,$2,'product.cost_changed','product',$3::text,$4::jsonb)`,
+                [
+                  t.organizationId,
+                  t.userId,
+                  item.product_id,
+                  JSON.stringify({
+                    from_cents: ancienCout,
+                    to_cents: item.unit_cost_cents,
+                    purchase_id: purchaseId,
+                    purchase_reference: purchase.reference ?? null,
+                  }),
+                ],
+              )
+            }
           }
 
           // La dépense, écrite une fois pour toutes par l'achat lui-même.

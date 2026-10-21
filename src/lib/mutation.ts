@@ -44,6 +44,19 @@ export interface MutationRequest {
    * sur tout ce qui touche à l'argent.
    */
   headers?: Record<string, string>
+  /**
+   * Autorise cette écriture à être conservée puis renvoyée si le réseau
+   * manque au moment du clic.
+   *
+   * Volontairement **explicite** : une opération ne part en différé que si
+   * son appelant l'a prévu. Mettre tout le monde en file par défaut
+   * enverrait un jour en différé une action qui n'y survivrait pas, et
+   * personne ne saurait pourquoi.
+   *
+   * `label` est ce que le caissier lira dans sa liste d'attente — « Lavage
+   * 2 500 F », pas « POST /api/v1/washes ».
+   */
+  offline?: { label: string }
 }
 
 export interface MutationOutcome<T = unknown> {
@@ -54,6 +67,12 @@ export interface MutationOutcome<T = unknown> {
   success: string | null
   /** L'utilisateur a refusé la confirmation : rien n'a été envoyé. */
   cancelled: boolean
+  /**
+   * L'opération est enregistrée sur l'appareil et partira au retour du
+   * réseau. `ok` vaut alors `true` : du point de vue du caissier, la vente
+   * est prise en compte — ce qui est exact, elle ne sera pas perdue.
+   */
+  queued?: boolean
 }
 
 /** Message de repli, quand ni le serveur ni l'appelant n'en proposent. */
@@ -63,6 +82,11 @@ export interface MutationDeps {
   fetch: (url: string, options: RequestInit) => Promise<Response>
   /** Demande de confirmation. Rendre `true` quand il n'y a rien à demander. */
   confirm: (question: string) => boolean
+  /**
+   * Met l'opération de côté pour un envoi différé. Rend `true` si elle a bien
+   * été conservée. Absente en test ou quand le stockage est indisponible.
+   */
+  enqueue?: (request: MutationRequest) => Promise<boolean>
 }
 
 /**
@@ -120,7 +144,20 @@ export async function performMutation<T = unknown>(
       ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
     })
   } catch (err) {
-    // Réseau coupé, serveur injoignable : on le dit, sans jargon.
+    // Réseau coupé. Si l'appelant a prévu le cas, l'opération est conservée
+    // sur l'appareil et repartira seule : le caissier continue d'encaisser.
+    if (request.offline && deps.enqueue && (await deps.enqueue(request))) {
+      return {
+        ok: true,
+        data: null,
+        error: null,
+        success:
+          "Enregistré sur cet appareil. L'envoi se fera automatiquement au retour du réseau.",
+        cancelled: false,
+        queued: true,
+      }
+    }
+    // Sinon on le dit, sans jargon.
     return {
       ok: false,
       data: null,

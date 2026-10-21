@@ -49,6 +49,12 @@ import {
 } from "@/lib/quantity"
 import { AlertTriangle, ArrowDownLeft, ArrowUpRight, ClipboardList, Plus, RefreshCw } from "lucide-react"
 
+interface ProductCategory {
+  id: string
+  name: string
+  is_active: boolean
+}
+
 interface Product {
   id: string
   name: string
@@ -56,6 +62,7 @@ interface Product {
   category_name: string | null
   unit: string
   unit_cost_cents: number
+  unit_cost_updated_at: string | null
   low_stock_threshold_milli: number
   stock_milli: number
   low_stock: boolean
@@ -90,6 +97,7 @@ const KIND_LABELS: Record<string, string> = {
 }
 
 const PRODUCT_KEY = "produit"
+const CATEGORY_KEY = "categorie"
 const MOVEMENT_KEY = "mouvement"
 const INVENTORY_KEY = "inventaire"
 
@@ -120,6 +128,8 @@ export default function StockPage() {
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<Product[]>(`/api/v1/products?refresh=${refreshKey}`)
   const { data: movementData } = useApi<Movement[]>(`/api/v1/stock-movements?refresh=${refreshKey}`)
+  const { data: categoryData } = useApi<ProductCategory[]>(`/api/v1/product-categories?refresh=${refreshKey}`)
+  const categories = useMemo(() => (categoryData ?? []).filter((c) => c.is_active), [categoryData])
   const products = useMemo(() => data ?? [], [data])
   const movements = useMemo(() => (movementData ?? []).slice(0, 15), [movementData])
 
@@ -135,6 +145,7 @@ export default function StockPage() {
 
   const mutation = useMutation()
   const savingProduct = mutation.busyKey === PRODUCT_KEY
+  const savingCategory = mutation.busyKey === CATEGORY_KEY
   const savingMovement = mutation.busyKey === MOVEMENT_KEY
   const savingInventory = mutation.busyKey === INVENTORY_KEY
 
@@ -143,6 +154,9 @@ export default function StockPage() {
   const [editing, setEditing] = useState<Product | null>(null)
   const [name, setName] = useState("")
   const [unit, setUnit] = useState("unite")
+  const [categoryId, setCategoryId] = useState("")
+  const [newCategoryOpen, setNewCategoryOpen] = useState(false)
+  const [newCategoryName, setNewCategoryName] = useState("")
   const [unitCost, setUnitCost] = useState("")
   const [threshold, setThreshold] = useState("")
   const [initialQuantity, setInitialQuantity] = useState("")
@@ -151,6 +165,7 @@ export default function StockPage() {
     setEditing(null)
     setName("")
     setUnit("unite")
+    setCategoryId("")
     setUnitCost("")
     setThreshold("")
     setInitialQuantity("")
@@ -162,11 +177,36 @@ export default function StockPage() {
     setEditing(product)
     setName(product.name)
     setUnit(product.unit)
+    setCategoryId(product.category_id ?? "")
     setUnitCost(String(product.unit_cost_cents / 100))
     setThreshold(quantityToInput(product.low_stock_threshold_milli))
     setInitialQuantity("")
     mutation.reset()
     setProductOpen(true)
+  }
+
+  async function saveCategory() {
+    const cleanName = newCategoryName.trim()
+    if (!cleanName) {
+      mutation.fail("Donnez un nom à la catégorie.")
+      return
+    }
+    const outcome = await mutation.run({
+      url: "/api/v1/product-categories",
+      method: "POST",
+      body: { name: cleanName },
+      success: "Catégorie créée.",
+      failure: "Impossible de créer cette catégorie.",
+      busyKey: CATEGORY_KEY,
+    })
+    if (!outcome.ok) return
+    // Le serveur renvoie la catégorie créée : on la sélectionne aussitôt pour
+    // éviter de la chercher dans une liste qui vient seulement d'être rechargée.
+    const created = outcome.data as { id?: string } | null
+    if (created?.id) setCategoryId(created.id)
+    setNewCategoryName("")
+    setNewCategoryOpen(false)
+    setRefreshKey((key) => key + 1)
   }
 
   async function saveProduct(event: FormEvent<HTMLFormElement>) {
@@ -198,11 +238,13 @@ export default function StockPage() {
       body: editing
         ? {
             name: cleanName,
+            category_id: categoryId || null,
             unit_cost_cents: cost,
             low_stock_threshold_milli: thresholdMilli,
           }
         : {
             name: cleanName,
+            category_id: categoryId || null,
             unit,
             unit_cost_cents: cost,
             low_stock_threshold_milli: thresholdMilli,
@@ -438,7 +480,14 @@ export default function StockPage() {
                             </div>
                           )}
                         </TableCell>
-                        <TableCell>{formatXOF(product.unit_cost_cents)}</TableCell>
+                        <TableCell>
+                          {formatXOF(product.unit_cost_cents)}
+                          <div className="text-xs text-muted-foreground">
+                            {product.unit_cost_updated_at
+                              ? `Prix payé le ${new Date(product.unit_cost_updated_at).toLocaleDateString("fr-CI")}`
+                              : "Saisi à la main"}
+                          </div>
+                        </TableCell>
                         <TableCell>{formatXOF(stockValueCents(product.stock_milli, product.unit_cost_cents))}</TableCell>
                         <TableCell>
                           <div className="flex flex-wrap justify-end gap-1">
@@ -568,6 +617,51 @@ export default function StockPage() {
               Nom du produit
               <Input required autoFocus maxLength={200} value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex. Shampooing carrosserie" />
             </label>
+            <div className="flex flex-col gap-1.5 text-sm font-medium">
+              Catégorie
+              {newCategoryOpen ? (
+                <div className="flex gap-2">
+                  <Input
+                    autoFocus
+                    maxLength={120}
+                    value={newCategoryName}
+                    onChange={(e) => setNewCategoryName(e.target.value)}
+                    placeholder="Ex. Produits de lavage"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault()
+                        void saveCategory()
+                      }
+                    }}
+                  />
+                  <Button type="button" variant="secondary" onClick={() => void saveCategory()} disabled={savingCategory} aria-busy={savingCategory}>
+                    {savingCategory ? "…" : "Créer"}
+                  </Button>
+                  <Button type="button" variant="ghost" onClick={() => { setNewCategoryOpen(false); setNewCategoryName("") }} disabled={savingCategory}>
+                    Annuler
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <select
+                    className="h-9 flex-1 rounded-md border border-input bg-transparent px-3 text-sm"
+                    value={categoryId}
+                    onChange={(e) => setCategoryId(e.target.value)}
+                  >
+                    <option value="">Sans catégorie</option>
+                    {categories.map((category) => (
+                      <option key={category.id} value={category.id}>{category.name}</option>
+                    ))}
+                  </select>
+                  <Button type="button" variant="outline" onClick={() => setNewCategoryOpen(true)}>
+                    Nouvelle
+                  </Button>
+                </div>
+              )}
+              <span className="text-xs font-normal text-muted-foreground">
+                Sert à regrouper le stock dans les listes. Sans effet sur les quantités ni sur les prix.
+              </span>
+            </div>
             {!editing && (
               <label className="flex flex-col gap-1.5 text-sm font-medium">
                 Unité de mesure

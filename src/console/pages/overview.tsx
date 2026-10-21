@@ -1,6 +1,6 @@
 import * as React from "react"
 import { Link } from "react-router-dom"
-import { AlertTriangle, ArrowRight, Moon, Trash2 } from "lucide-react"
+import { AlertTriangle, ArrowRight, DoorOpen, Moon, Trash2 } from "lucide-react"
 
 import { LoadingSpinner } from "@/components/ui/loading-spinner"
 
@@ -20,9 +20,20 @@ interface Metrics {
   mrr_cents: number
 }
 
+/** Une station qui a annoncé son départ (voir server/closure.ts). */
+interface ClosureRequest {
+  id: string
+  organization_id: string
+  organization_name: string
+  reason: string
+  requested_by_email: string
+  created_at: string
+}
+
 export function ConsoleOverview() {
   const [metrics, setMetrics] = React.useState<Metrics | null>(null)
   const [organizations, setOrganizations] = React.useState<ConsoleOrganization[]>([])
+  const [closures, setClosures] = React.useState<ClosureRequest[]>([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -30,13 +41,15 @@ export function ConsoleOverview() {
     let cancelled = false
     ;(async () => {
       try {
-        const [m, o] = await Promise.all([
+        const [m, o, c] = await Promise.all([
           consoleRequest<Metrics>("/metrics"),
           consoleRequest<{ organizations: ConsoleOrganization[] }>("/organizations?limit=200"),
+          consoleRequest<{ requests: ClosureRequest[] }>("/closure-requests"),
         ])
         if (cancelled) return
         setMetrics(m)
         setOrganizations(o.organizations)
+        setClosures(c.requests)
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Chargement impossible.")
       } finally {
@@ -87,6 +100,33 @@ export function ConsoleOverview() {
           tone={pastDue.length ? "danger" : "default"}
         />
       </div>
+
+      {closures.length > 0 && (
+        <Panel
+          title="Départs annoncés"
+          description="Ces gérants ont demandé à clôturer leur compte. Rien n'est coupé : c'est à vous de répondre."
+        >
+          <ul className="divide-y divide-white/5">
+            {closures.map((request) => (
+              <li key={request.id} className="flex items-start gap-3 px-2 py-3">
+                <DoorOpen className="mt-0.5 size-4 shrink-0 text-amber-300" aria-hidden />
+                <div className="min-w-0 flex-1">
+                  <Link
+                    to={`/console/stations/${request.organization_id}`}
+                    className="text-sm font-medium text-white hover:underline"
+                  >
+                    {request.organization_name}
+                  </Link>
+                  <p className="text-xs text-slate-400">
+                    {request.requested_by_email} · {formatDate(request.created_at)}
+                  </p>
+                  <p className="mt-1 text-sm italic text-slate-300">« {request.reason} »</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
 
       {pastDue.length > 0 && (
         <Panel

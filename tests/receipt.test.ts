@@ -391,7 +391,7 @@ test("le reçu n'imite aucune mention fiscale", () => {
     copy_number: 1,
     duplicate: false,
     station: { name: "Lavage Cocody", site: "Riviera", city: "Abidjan", address: null, phone: null },
-    wash: { reference: "LAV-20261021-ABC123", created_at: "2026-10-21T14:30:00.000Z", vehicle: "Berline", customer: null },
+    wash: { reference: "LAV-20261021-ABC123", created_at: "2026-10-21T14:30:00.000Z", vehicle: "Berline", plate: "AA-123-BB", customer: null },
     cashier: "Yao Konan",
     workers: [],
     items: [{ service_name: "Lavage complet", quantity: 1, unit_price_cents: 250000, line_total_cents: 250000 }],
@@ -415,7 +415,7 @@ test("le mot « reçu » est employé, jamais « facture »", () => {
     copy_number: 1,
     duplicate: false,
     station: { name: "S", site: "S", city: "Abidjan", address: null, phone: null },
-    wash: { reference: "LAV-1", created_at: "2026-10-21T14:30:00.000Z", vehicle: null, customer: null },
+    wash: { reference: "LAV-1", created_at: "2026-10-21T14:30:00.000Z", vehicle: null, plate: null, customer: null },
     cashier: null,
     workers: [],
     items: [],
@@ -425,4 +425,67 @@ test("le mot « reçu » est employé, jamais « facture »", () => {
     remaining_cents: 0,
   })
   assert.match(source, /RECU/)
+})
+
+test("le reçu porte la plaque du véhicule", () => {
+  // Le client reconnaît sa voiture à sa plaque, pas à « Berline ». Et comme
+  // la station ne tient aucun fichier client, c'est la seule mention qui
+  // rattache ce papier à un véhicule précis.
+  const receipt: Receipt = {
+    number: "LAV-20261021-ABC123",
+    issued_at: "2026-10-21T14:32:00.000Z",
+    copy_number: 1,
+    duplicate: false,
+    station: { name: "Lavage Cocody", site: "Riviera", city: "Abidjan", address: null, phone: null },
+    wash: {
+      reference: "LAV-20261021-ABC123",
+      created_at: "2026-10-21T14:30:00.000Z",
+      vehicle: "Berline",
+      plate: "AA-123-BB",
+      customer: null,
+    },
+    cashier: "Yao Konan",
+    workers: ["Fatou Cissé"],
+    items: [{ service_name: "Lavage complet", quantity: 1, unit_price_cents: 250000, line_total_cents: 250000 }],
+    total_cents: 250000,
+    payments: [{ method: "cash", amount_cents: 250000, status: "verified", created_at: "2026-10-21T14:32:00.000Z" }],
+    paid_cents: 250000,
+    remaining_cents: 0,
+  }
+  const lines = renderReceiptText(receipt).split("\n")
+  const plateLine = lines.find((line) => line.startsWith("Plaque"))
+  assert.ok(plateLine, "la plaque ne figure pas sur le reçu")
+  assert.match(plateLine, /AA-123-BB$/)
+  // Le papier fait 48 colonnes : une mention qui déborde casse l'alignement
+  // de toute l'impression, pas seulement de sa propre ligne.
+  for (const line of lines) {
+    assert.ok(line.length <= 48, `ligne trop large (${line.length}) : ${line}`)
+  }
+})
+
+test("sans plaque relevée, le reçu n'affiche pas de ligne vide", () => {
+  // Une moto de passage peut repartir sans que personne n'ait noté la plaque.
+  // Le reçu ne doit pas pour autant porter un intitulé sans valeur.
+  const receipt: Receipt = {
+    number: "LAV-2",
+    issued_at: "2026-10-21T14:32:00.000Z",
+    copy_number: 1,
+    duplicate: false,
+    station: { name: "Lavage Cocody", site: "Riviera", city: "Abidjan", address: null, phone: null },
+    wash: {
+      reference: "LAV-2",
+      created_at: "2026-10-21T14:30:00.000Z",
+      vehicle: "Berline",
+      plate: null,
+      customer: null,
+    },
+    cashier: null,
+    workers: [],
+    items: [{ service_name: "Lavage simple", quantity: 1, unit_price_cents: 100000, line_total_cents: 100000 }],
+    total_cents: 100000,
+    payments: [],
+    paid_cents: 0,
+    remaining_cents: 100000,
+  }
+  assert.ok(!renderReceiptText(receipt).includes("Plaque"))
 })

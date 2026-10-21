@@ -5,6 +5,7 @@ import {
   isWashButtonClickable,
   resolvePendingOpen,
   washButtonState,
+  washPrerequisites,
   washSubmitBlockedReason,
   type ActionGateInput,
   type WashButtonInput,
@@ -37,6 +38,7 @@ function soumission(overrides: Partial<WashSubmitInput> = {}): WashSubmitInput {
     siteId: "site-1",
     vehicleCategoryId: "cat-1",
     selectedServiceCount: 1,
+    assignedWorkerCount: 1,
     amountIsValid: true,
     cashNeedsSession: false,
     cashSessionLoading: false,
@@ -79,7 +81,7 @@ test("bouton Nouveau lavage : sans station, on dit laquelle créer", () => {
   assert.equal(state.disabled, true)
   assert.equal(state.denied, false, "ce n'est pas un refus de droit")
   assert.match(state.reason ?? "", /station/i)
-  assert.match(state.reason ?? "", /Réglages/i, "on indique où aller")
+  assert.match(state.reason ?? "", /Configuration/i, "on indique où aller")
 })
 
 test("bouton Nouveau lavage : un refus de droit affiche son motif", () => {
@@ -119,6 +121,7 @@ test("enregistrement : chaque champ manquant est nommé", () => {
     [{ siteId: "" }, /station/i],
     [{ vehicleCategoryId: "" }, /catégorie/i],
     [{ selectedServiceCount: 0 }, /prestation/i],
+    [{ assignedWorkerCount: 0 }, /lave ce véhicule/i],
     [{ amountIsValid: false }, /montant/i],
   ]
   for (const [patch, motif] of attendus) {
@@ -298,4 +301,98 @@ test("porte : tout état désactivé hors attente porte un motif", () => {
     assert.equal(g.disabled, true, JSON.stringify(c))
     assert.ok(g.reason, `cas muet : ${JSON.stringify(c)}`)
   }
+})
+
+test("enregistrement : personne d'affecté, on ne valide pas", () => {
+  // La part de chacun se calcule sur cette affectation. Enregistrer sans
+  // laveur, c'est fabriquer une ligne que le rendement ne saura pas répartir.
+  const reason = washSubmitBlockedReason(soumission({ assignedWorkerCount: 0 }))
+  assert.equal(reason, "Indiquez qui lave ce véhicule.")
+})
+
+test("enregistrement : plusieurs laveurs passent aussi bien qu'un seul", () => {
+  // Deux personnes sur un 4x4, c'est courant : la part se partagera.
+  assert.equal(washSubmitBlockedReason(soumission({ assignedWorkerCount: 3 })), null)
+})
+
+test("enregistrement : la prestation manquante se signale avant le laveur", () => {
+  // On remonte le formulaire dans l'ordre où il se remplit, sinon le caissier
+  // corrige le bas pendant que le haut est encore vide.
+  const reason = washSubmitBlockedReason(
+    soumission({ selectedServiceCount: 0, assignedWorkerCount: 0 }),
+  )
+  assert.match(reason ?? "", /prestation/i)
+})
+
+test("enregistrement : le laveur manquant se signale avant la caisse", () => {
+  // Les deux manquent : on réclame d'abord ce qui se règle au comptoir.
+  const reason = washSubmitBlockedReason(
+    soumission({ assignedWorkerCount: 0, cashNeedsSession: true, hasCashSession: false }),
+  )
+  assert.match(reason ?? "", /lave ce véhicule/i)
+})
+
+/* ------------------------------------------------------------------ *
+ * Mise en route d'une station neuve
+ * ------------------------------------------------------------------ */
+
+test("mise en route : une station neuve dit les trois manques, dans l'ordre", () => {
+  // Le parcours réel d'une inscription : ni station, ni prestation, ni
+  // employé. Le bouton est grisé à juste titre, mais il faut dire quoi faire.
+  const manques = washPrerequisites({
+    activeSiteCount: 0,
+    activeServiceCount: 0,
+    activeWorkerCount: 0,
+  })
+  assert.equal(manques.length, 3)
+  assert.deepEqual(
+    manques.map((m) => m.to),
+    ["/sites", "/services", "/team"],
+    "l'ordre doit suivre celui dans lequel on règle les choses",
+  )
+})
+
+test("mise en route : une station équipée n'affiche aucun rappel", () => {
+  const manques = washPrerequisites({
+    activeSiteCount: 1,
+    activeServiceCount: 5,
+    activeWorkerCount: 3,
+  })
+  assert.deepEqual(manques, [])
+})
+
+test("mise en route : seul ce qui manque est listé", () => {
+  // Station et prestations en place, mais personne pour laver.
+  const manques = washPrerequisites({
+    activeSiteCount: 1,
+    activeServiceCount: 4,
+    activeWorkerCount: 0,
+  })
+  assert.equal(manques.length, 1)
+  assert.equal(manques[0].to, "/team")
+  assert.match(manques[0].label, /employé/i)
+})
+
+test("mise en route : chaque manque porte une destination réelle", () => {
+  // Un lien mort est pire qu'un bouton gris : l'utilisateur croit avancer.
+  // Ces trois chemins existent dans src/config/routes.tsx.
+  const routesConnues = ["/sites", "/services", "/team"]
+  const manques = washPrerequisites({
+    activeSiteCount: 0,
+    activeServiceCount: 0,
+    activeWorkerCount: 0,
+  })
+  for (const manque of manques) {
+    assert.ok(routesConnues.includes(manque.to), `chemin inconnu : ${manque.to}`)
+    assert.ok(manque.action.length > 0, "le lien doit porter un libellé")
+    assert.ok(manque.why.length > 0, "on explique pourquoi c'est nécessaire")
+  }
+})
+
+test("mise en route : le motif du bouton nomme le menu tel qu'il s'appelle", () => {
+  // « Réglages › Stations » n'existe pas dans la barre latérale : le groupe
+  // s'appelle « Configuration ». Envoyer quelqu'un à un endroit introuvable
+  // transforme un bouton gris en impasse.
+  const state = washButtonState(bouton({ activeSiteCount: 0 }))
+  assert.match(state.reason ?? "", /Configuration › Stations/)
 })

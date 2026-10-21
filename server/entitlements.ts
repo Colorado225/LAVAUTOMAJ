@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express"
 import type { Pool } from "pg"
 import { getPool } from "./db.ts"
 import { HttpError } from "./auth.ts"
+import { env } from "./env.ts"
 
 // ---------------------------------------------------------------------------
 // Essai gratuit de 14 jours
@@ -22,7 +23,14 @@ import { HttpError } from "./auth.ts"
 // La vérité est côté serveur : l'interface se contente de refléter cet état.
 // ---------------------------------------------------------------------------
 
-export const TRIAL_DAYS = 14
+/**
+ * Durée de l'essai, en jours. 14 par défaut, réglable par `TRIAL_DAYS` pour
+ * accorder davantage à un prospect important sans toucher au code. La valeur
+ * est lue une fois au démarrage : les essais déjà ouverts gardent l'échéance
+ * calculée à leur inscription, un changement ne raccourcit donc jamais
+ * rétroactivement l'essai de quelqu'un.
+ */
+export const TRIAL_DAYS = env.TRIAL_DAYS
 export const TRIAL_DURATION_MS = TRIAL_DAYS * 86_400_000
 /** Profondeur d'historique encore consultable une fois l'essai terminé. */
 export const EXPIRED_REPORT_WINDOW_DAYS = 7
