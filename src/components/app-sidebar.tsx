@@ -14,7 +14,7 @@ import {
   ShieldCheck,
   History,
   Building2,
-  Package, Truck, UserCheck, TrendingUp,
+  Package, Truck, UserCheck, TrendingUp, Clock,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { BrandBadge } from "@/components/brand"
@@ -90,6 +90,12 @@ const data = {
           title: "Équipe du jour",
           url: "/equipe",
           icon: UserCheck,
+          permission: "attendance:read" as Permission,
+        },
+        {
+          title: "Horaires",
+          url: "/horaires",
+          icon: Clock,
           permission: "attendance:read" as Permission,
         },
         {

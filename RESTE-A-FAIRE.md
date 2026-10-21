@@ -238,3 +238,46 @@ client réel puisse s'inscrire, payer et être servi.
 
 Tout le reste peut attendre ce premier client — et sera mieux conçu une fois
 qu'on l'aura écouté.
+
+## Recensement du câblage — 21 octobre 2026
+
+Comparaison croisée entre les pages, les routes, le menu et l'API.
+
+**Pages et menus : rien ne manque.** Toute page de `src/app/` a une route, et
+toute route a une entrée de menu. Le grief « des pages non branchées » ne porte
+pas sur l'interface.
+
+**L'écart était ailleurs : sept routes d'API construites, testées, et qu'aucun
+écran n'appelait.** Sur 117 routes, sept étaient inatteignables :
+
+| Route | Conséquence concrète | Suite donnée |
+|---|---|---|
+| `GET/POST/DELETE /work-schedules` | Aucune heure de référence saisissable, donc **personne n'était jamais déclaré en retard** | Écran « Horaires » |
+| `GET /attendance/history` | Les présences passées n'étaient consultables nulle part | Section « Historique de présence » |
+| `GET/POST /product-categories` | Tout produit restait « Sans catégorie », sans moyen d'y remédier | Champ dans la fiche produit |
+| `POST /support/upgrade-request` | — | **Laissée débranchée, volontairement** (voir ci-dessous) |
+
+### Pourquoi `/support/upgrade-request` reste débranchée
+
+Trois chemins mènent déjà au même besoin, et deux sont branchés :
+
+- **acheter un forfait** → `/subscription/checkout`, avec déclaration de
+  paiement et suivi ; c'est le parcours réel ;
+- **poser une question** → `/support/requests`, qui crée un ticket que le
+  client peut suivre.
+
+`/support/upgrade-request` ne fait ni l'un ni l'autre : elle journalise et
+envoie un courriel à l'opérateur, **sans laisser au client la moindre trace
+consultable**. La brancher ajouterait un troisième bouton pour un résultat
+invisible. Le choix est donc de la laisser de côté et de signaler qu'elle est
+supplantée — sa suppression est une décision à prendre, pas un oubli.
+
+### Ce qui reste ouvert
+
+- **Le client n'existe toujours pas** : la table `customers` est vide, aucune
+  plaque d'immatriculation n'est écrite nulle part. Arbitrage à rendre : suit-on
+  une **personne** ou un **véhicule** ?
+- `clerk_webhook_events` : table morte, héritée d'une architecture abandonnée.
+- Deuxième instance impossible (limitation en mémoire, `setInterval`).
+- `wash_quality_events` absente ; l'achat ne met pas à jour le coût de
+  référence ; messages de validation encore en anglais.
