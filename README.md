@@ -181,3 +181,32 @@ d'agrégateur, rattrapage — convergent tous sur `activateSubscription()`
 
 Workflow complet, pièges d'intégration et ordre recommandé :
 [`WORKFLOW-PAIEMENT.md`](WORKFLOW-PAIEMENT.md).
+
+## Mise en production
+
+Le guide complet est dans **[`DEPLOIEMENT.md`](DEPLOIEMENT.md)**. L'essentiel
+tient en trois points.
+
+**Une base PostgreSQL externe est obligatoire.** En `NODE_ENV=production`,
+l'application refuse de démarrer sans `DATABASE_URL`, et refuse de se rabattre
+sur la base embarquée si cette base est injoignable. C'est délibéré : un
+démarrage silencieux sur PGlite donnerait une application parfaitement
+fonctionnelle, qui encaisserait pendant des semaines puis perdrait tout au
+premier redéploiement.
+
+**Le plus court chemin**, pour héberger soi-même quelques stations :
+
+```bash
+cp .env.example .env     # renseigner POSTGRES_PASSWORD, APP_URL, CORS_ORIGINS
+docker compose up -d
+```
+
+**Surveillance** : un répartiteur doit interroger `/readyz`, qui attend que la
+base réponde. `/healthz` dirait « tout va bien » d'un serveur incapable de
+servir une page.
+
+### Contrôle automatique
+
+`.github/workflows/ci.yml` vérifie à chaque envoi les types, le style, la
+construction, **toute la suite de tests**, puis construit l'image et vérifie
+qu'elle refuse bien de démarrer sans base.

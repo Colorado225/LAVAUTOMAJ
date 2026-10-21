@@ -1052,7 +1052,34 @@ async function backfillRevenueLedger(
   if (n) console.log(`[revenu] ${n} encaissement(s) repris depuis le journal d'audit.`)
 }
 
+/**
+ * La base embarquée a-t-elle le droit de prendre le relais ?
+ *
+ * En développement, oui : c'est ce qui permet de lancer le projet sans rien
+ * installer. **En production, jamais.**
+ *
+ * PGlite écrit dans le système de fichiers du serveur. Dans un conteneur, ce
+ * système de fichiers disparaît au redéploiement. Un démarrage silencieux sur
+ * la base embarquée donnerait une application parfaitement fonctionnelle, qui
+ * encaisserait de l'argent réel pendant des semaines, puis perdrait tout à la
+ * première mise à jour — sans qu'aucune alerte n'ait été levée.
+ *
+ * Le cas le plus traître n'est pas l'oubli de configuration : c'est la base
+ * externe momentanément injoignable au démarrage. Se rabattre alors sur une
+ * base vide ferait repartir la station à zéro, caisse comprise. Mieux vaut
+ * refuser de démarrer : un service arrêté se remarque, une base vide non.
+ */
+export function embeddedFallbackAllowed(nodeEnv: string): boolean {
+  return nodeEnv !== "production"
+}
+
 export async function initDatabaseSchema(): Promise<boolean> {
+  if (!embeddedFallbackAllowed(env.NODE_ENV) && !env.DATABASE_URL) {
+    throw new Error(
+      "DATABASE_URL est obligatoire en production. Sans elle, l'application démarrerait sur la base " +
+        "embarquée, à l'intérieur du serveur : les données seraient perdues au premier redéploiement.",
+    )
+  }
   if (env.DATABASE_URL) {
     try {
       const externalPool = new Pool({
@@ -1074,10 +1101,18 @@ export async function initDatabaseSchema(): Promise<boolean> {
       console.info("[db] Connecté à PostgreSQL via DATABASE_URL");
       return true;
     } catch (error) {
-      console.warn(
-        "[db] Connexion DATABASE_URL échouée, basculement sur PostgreSQL embarqué (PGlite):",
-        error instanceof Error ? error.message : "unknown",
-      );
+      const detail = error instanceof Error ? error.message : "unknown";
+      if (!embeddedFallbackAllowed(env.NODE_ENV)) {
+        throw new Error(
+          `Connexion à DATABASE_URL impossible (${detail}). L'application refuse de démarrer sur la base ` +
+            "embarquée : elle repartirait d'une base vide, caisse comprise.",
+          // L'erreur d'origine reste attachée : sans elle, l'exploitant lirait
+          // « connexion impossible » sans savoir si c'est le mot de passe, le
+          // réseau ou le certificat.
+          { cause: error },
+        );
+      }
+      console.warn("[db] Connexion DATABASE_URL échouée, basculement sur PostgreSQL embarqué (PGlite):", detail);
     }
   }
 
