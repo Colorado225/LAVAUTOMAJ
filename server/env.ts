@@ -5,6 +5,17 @@ const schema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   DATABASE_URL: z.string().trim().optional().default(""),
   PG_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+  /**
+   * Dossier de la base PostgreSQL embarquée (PGlite), utilisée quand
+   * `DATABASE_URL` est vide ou injoignable.
+   *
+   * Vide (défaut) : les données sont écrites dans `.data/pglite` et
+   * survivent au redémarrage. La valeur `:memory:` demande explicitement une
+   * base volatile, par exemple pour une démonstration jetable. En
+   * `NODE_ENV=test`, la base est toujours en mémoire quelle que soit cette
+   * variable, pour que deux fichiers de tests ne se contaminent pas.
+   */
+  PGLITE_DATA_DIR: z.string().trim().optional().default(""),
   CORS_ORIGINS: z.string().optional().default("http://localhost:5173"),
   /** URL publique de l'application, utilisée pour construire les liens e-mail. */
   APP_URL: z.string().trim().optional().default(""),

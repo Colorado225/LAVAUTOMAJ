@@ -1,5 +1,7 @@
 import pg from "pg";
+import { mkdir } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
+import { resolvePgliteLocation, describePgliteLocation } from "./pglite-location.ts";
 import { env } from "./env.ts";
 import { migrateLegacyPlatformAdmins, syncPlatformOperators } from "./console-auth.ts";
 import { hashPassword } from "./auth.ts";
@@ -895,7 +897,20 @@ export async function initDatabaseSchema(): Promise<boolean> {
   }
 
   try {
-    pgliteInstance = new PGlite();
+    // Emplacement décidé par une fonction pure, testée à part : sans dossier,
+    // PGlite garde tout en mémoire et le travail de la journée disparaît au
+    // redémarrage. Le défaut est donc le disque, et une base volatile se
+    // signale bruyamment dans les journaux.
+    const location = resolvePgliteLocation({
+      nodeEnv: env.NODE_ENV,
+      dataDir: env.PGLITE_DATA_DIR,
+    });
+    if (location.dataDir) {
+      // PGlite ne crée que le dernier niveau : sans cela, un chemin imbriqué
+      // comme `.data/pglite` échoue avec ENOENT au tout premier démarrage.
+      await mkdir(location.dataDir, { recursive: true });
+    }
+    pgliteInstance = location.dataDir ? new PGlite(location.dataDir) : new PGlite();
     pool = createPglitePool(pgliteInstance);
     await pool.query(schemaSql);
     await seedDemoData(pool.query.bind(pool));
@@ -903,7 +918,7 @@ export async function initDatabaseSchema(): Promise<boolean> {
     await syncPlatformOperators(pool.query.bind(pool));
     await backfillRevenueLedger(pool.query.bind(pool));
     ready = true;
-    console.info("[db] PostgreSQL embarqué (PGlite) initialisé avec les données de démonstration");
+    console.info(describePgliteLocation(location, env.NODE_ENV));
     return true;
   } catch (error) {
     ready = false;

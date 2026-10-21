@@ -37,5 +37,8 @@ qa-signup.mjs
 backups/
 *.dump
 
+# Base PostgreSQL embarquee (PGlite) persistee sur disque
+.data/
+
 # Outil de génération des visuels de marque (Python)
 __pycache__/

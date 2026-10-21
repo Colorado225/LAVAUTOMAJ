@@ -20,8 +20,9 @@ interface DashboardMetricsData {
   total_washes: number
   total_revenue_cents: number
   completed_washes?: number
-  in_progress_washes?: number
   cancelled_washes?: number
+  pending_payments_cents?: number
+  pending_payments_count?: number
   monthly_revenue?: { month: string; revenue: number }[]
   recent_washes?: Array<{
     id: string
@@ -107,8 +108,9 @@ export function DashboardMetrics() {
         setData({
           ...result,
           completed_washes: result.completed_washes || 0,
-          in_progress_washes: result.in_progress_washes || 0,
           cancelled_washes: result.cancelled_washes || 0,
+          pending_payments_cents: result.pending_payments_cents || 0,
+          pending_payments_count: result.pending_payments_count || 0,
           monthly_revenue: result.monthly_revenue || [],
           recent_washes: result.recent_washes || []
         })
@@ -126,7 +128,6 @@ export function DashboardMetrics() {
     if (!data) return []
     return [
       { name: 'Terminés', value: data.completed_washes || 0, color: COLORS[0] },
-      { name: 'En cours', value: data.in_progress_washes || 0, color: COLORS[1] },
       { name: 'Annulés', value: data.cancelled_washes || 0, color: COLORS[2] },
     ].filter(item => item.value > 0)
   }, [data])
@@ -211,14 +212,18 @@ export function DashboardMetrics() {
           <Card interactive
             className="group relative rounded-xl border bg-card">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">En cours</CardTitle>
+              <CardTitle className="text-sm font-medium">À confirmer</CardTitle>
               <Clock className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-amber-500" />
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                <AnimatedNumber value={data?.in_progress_washes || 0} />
+                <AnimatedNumber value={data?.pending_payments_cents || 0} format={formatXOF} />
               </div>
-              <p className="text-xs text-muted-foreground">Lavages en cours</p>
+              <p className="text-xs text-muted-foreground">
+                {(data?.pending_payments_count || 0) === 1
+                  ? '1 encaissement en attente de confirmation'
+                  : `${data?.pending_payments_count || 0} encaissements en attente de confirmation`}
+              </p>
             </CardContent>
           </Card>
         </motion.div>

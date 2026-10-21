@@ -72,10 +72,14 @@ export function createReportsRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
 
+      // WashPilot est une caisse enregistreuse : un lavage est saisi une fois
+      // rendu, donc il naît « terminé ». Il n'existe volontairement pas de
+      // compteur « en cours » — il ne pourrait afficher que zéro. Ce qui
+      // mérite l'attention du gérant ici, c'est l'argent annoncé mais pas
+      // encore confirmé (mobile money), renvoyé sous `pending_payments_*`.
       const [
         totalWashes,
         completedWashes,
-        inProgressWashes,
         cancelledWashes,
         revenue,
         monthlyRevenue,
@@ -87,10 +91,6 @@ export function createReportsRouter() {
         ),
         db().query(
           "SELECT COUNT(*)::int AS count FROM washes WHERE organization_id=$1::uuid AND status = 'completed'",
-          [t.organizationId],
-        ),
-        db().query(
-          "SELECT COUNT(*)::int AS count FROM washes WHERE organization_id=$1::uuid AND status = 'in_progress'",
           [t.organizationId],
         ),
         db().query(
@@ -133,7 +133,6 @@ export function createReportsRouter() {
         financial_access: financial,
         total_washes: totalWashes.rows[0].count,
         completed_washes: completedWashes.rows[0].count,
-        in_progress_washes: inProgressWashes.rows[0].count,
         cancelled_washes: cancelledWashes.rows[0].count,
         total_revenue_cents: revenue.rows[0].total_cents,
         verified_revenue_cents: revenue.rows[0].verified_cents,

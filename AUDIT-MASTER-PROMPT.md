@@ -62,6 +62,10 @@ Pour situer le reste honnêtement. Ces points ont été vérifiés, pas supposé
 
 ## 2. Constat critique n° 1 — le lavage naît terminé
 
+> **Arbitré le 21/10/2026 — voir §9, décision 1.** WashPilot est assumé comme
+> une caisse enregistreuse : ce constat n'est plus un écart à combler. Seul le
+> faux indicateur qu'il entraînait a été corrigé (§14).
+
 C'est le défaut le plus grave de l'audit, et il touche le cœur même du produit.
 
 ```sql
@@ -123,6 +127,9 @@ pas construit.
 ---
 
 ## 3. Constat critique n° 2 — le rôle « agent de lavage » est une coquille vide
+
+> **Arbitré le 21/10/2026 — voir §9, décision 1.** L'écran « Mes lavages » est
+> abandonné. Seule subsiste la question de confidentialité (écart C4).
 
 Le rôle `washer` existe dans la matrice RBAC avec 2 permissions
 (`service:read`, `wash:read`). Mais :
@@ -242,6 +249,9 @@ Délégables par exception : `wash:cancel`, `expense:manage`, `service:manage`,
 
 ## 7. Transitions de statut — cible proposée
 
+> **Caduc depuis le 21/10/2026 — voir §9, décision 1.** La cible décrite
+> ci-dessous ne sera pas implémentée. Conservée pour mémoire du raisonnement.
+
 État actuel :
 
 ```
@@ -309,28 +319,46 @@ indépendant** du statut du lavage. Le §7 étape 7 est respecté sur ce point.
 
 ---
 
-## 9. Trois questions à trancher avant d'implémenter
+## 9. Décisions prises — 21 octobre 2026
 
-Ces choix engagent l'architecture. Je ne les prends pas seul.
+Les trois questions d'architecture ont été tranchées par le propriétaire du
+produit. Elles sont désormais **fermées** et engagent la suite.
 
-**Question 1 — Caisse enregistreuse ou suivi d'atelier ?**
-Aujourd'hui on saisit le lavage *après* l'encaissement. Le Master Prompt décrit
-un suivi *pendant* la prestation. Passer de l'un à l'autre change le parcours
-quotidien du gérant. Option (a) : ajouter le cycle de vie en gardant la saisie
-rapide pour les stations qui encaissent d'abord. Option (b) : imposer
-`pending → in_progress → completed`. **L'option (a) est recommandée** : elle
-n'oblige personne à changer d'habitude et rend l'indicateur honnête.
+### Décision 1 — WashPilot est une **caisse enregistreuse**, pas un suivi d'atelier
 
-**Question 2 — Quand déduire le stock ?**
-Le §7 étape 6 exige de choisir et de documenter. À la création, au démarrage ou
-à la fin ? **Recommandation : à la fin**, parce qu'un lavage annulé en cours ne
-doit pas avoir consommé, et que c'est le seul moment où la quantité réelle est
-connue.
+Un lavage est saisi **une fois rendu**. Il n'y a donc volontairement pas de
+cycle `EN_ATTENTE → EN_COURS → TERMINE`.
 
-**Question 3 — La base en mémoire est-elle un bloquant pour vous ?**
-Aucune station ne peut utiliser le produit tant qu'un redémarrage efface les
-données. C'est l'écart C5, et il est plus grave que tous les modules manquants
-réunis. Faut-il le traiter en premier ?
+Conséquences, toutes assumées :
+
+- Le §7 étapes 4, 5 et 8 du Master Prompt **ne sera pas implémenté**.
+- Les lots **L1 (cycle de vie)** et **L2 (écran agent)** sont **abandonnés**,
+  pas reportés.
+- L'écran « Mes lavages » de l'agent n'a plus d'objet : sans démarrage ni fin
+  à signaler, il n'aurait rien à afficher.
+- Les écarts **C1, C2, C3** ne sont plus des écarts : ils décrivaient un
+  manque par rapport à un produit que nous ne construisons pas.
+- **En revanche C2 devenait un mensonge** : le tableau de bord affichait une
+  carte « En cours » qui ne pouvait structurellement afficher que zéro.
+  **Corrigé** (voir §14).
+- L'écart **C4** (un laveur voit tous les lavages) reste ouvert mais change de
+  nature : ce n'est plus un défaut fonctionnel, c'est une question de
+  confidentialité à arbitrer plus tard.
+
+### Décision 2 — Le stock est déduit **à la fin du lavage**
+
+Retenu pour la raison attendue : un lavage annulé ne doit rien avoir consommé.
+
+**Précision importante dans le modèle « caisse enregistreuse »** : puisque le
+lavage est enregistré une fois rendu, « la fin du lavage » et « la saisie du
+lavage » sont **le même instant**. La déduction du stock se fera donc dans la
+transaction de création du lavage, et sera annulée par un mouvement inverse en
+cas d'annulation. C'est plus simple que prévu et cela supprime la dépendance
+du lot L4 envers un cycle de vie qui n'existera pas.
+
+### Décision 3 — La base volatile devait être corrigée en premier
+
+**Fait.** Voir §14.
 
 ---
 
@@ -338,22 +366,23 @@ réunis. Faut-il le traiter en premier ?
 
 Chaque lot est indépendant, livrable et testable séparément.
 
-| Lot | Contenu | Dépend de | Risque | Tests |
+Plan révisé après les décisions du §9.
+
+| Lot | Contenu | Dépend de | Risque | État |
 |---|---|---|---|---|
-| **L0** | **Persistance** : `dataDir` PGlite ou PostgreSQL réel + sauvegarde/restauration vérifiée | — | Moyen | Redémarrage sans perte |
-| **L1** | **Cycle de vie du lavage** : statuts, 2 routes `start`/`finish`, permissions `wash:start`/`wash:finish`, KPI rendu honnête | Q1 | Moyen | Transitions interdites, matrice |
-| **L2** | **Agent de lavage** : `workers.user_id`, écran « Mes lavages », filtre sur ses affectations | L1, E4 | Faible | Un laveur ne voit que les siens |
-| **L3** | **Produits et mouvements** : `products`, `product_categories`, `stock_movements`, écran Stocks, seuils | L0 | Élevé | Stock = somme des mouvements |
-| **L4** | **Consommables et coût direct** : `service_consumables`, déduction à la fin du lavage, coût moyen pondéré | L3, L1, Q2 | Élevé | Pas de double déduction |
-| **L5** | **Fournisseurs et achats** : `suppliers`, `purchases`, `purchase_items`, réception partielle, non-double-comptage avec les dépenses | L3 | Élevé | Commande ≠ stock disponible |
-| **L6** | **Marges et rapports** : coûts directs, marge estimée, distinction CA/encaissements affichée | L4 | Moyen | Calculs couverts par tests |
-| **L7** | **Confort** : remise autorisée, immatriculation, chronologie, messages zod en français | L1 | Faible | — |
+| **L0** | **Persistance** : `dataDir` PGlite, garde-fou des tests, journal explicite | — | Moyen | ✅ **Fait** (§14) |
+| ~~L1~~ | ~~Cycle de vie du lavage~~ | — | — | ❌ **Abandonné** (décision 1) |
+| ~~L2~~ | ~~Écran agent de lavage~~ | — | — | ❌ **Abandonné** (décision 1) |
+| **L3** | **Produits et mouvements** : `products`, `product_categories`, `stock_movements`, écran Stocks, seuils d'alerte | L0 | Élevé | À faire |
+| **L4** | **Consommables et coût direct** : `service_consumables`, déduction dans la transaction de saisie du lavage, mouvement inverse à l'annulation, coût moyen pondéré | L3 | Élevé | À faire |
+| **L5** | **Fournisseurs et achats** : `suppliers`, `purchases`, `purchase_items`, réception partielle, non-double-comptage avec les dépenses | L3 | Élevé | À faire |
+| **L6** | **Marges et rapports** : coûts directs, marge estimée, distinction CA / encaissements | L4 | Moyen | À faire |
+| **L7** | **Confort** : remise autorisée, immatriculation, messages zod en français | — | Faible | À faire |
 
-**Ordre recommandé : L0 → L1 → L2 → L3 → L4 → L5 → L6 → L7.**
+**Ordre : L0 ✅ → L3 → L4 → L5 → L6 → L7.**
 
-L0 d'abord parce qu'aucun des autres lots n'a de valeur sur une base qui
-s'efface. L1 et L2 avant le stock parce qu'ils réparent une promesse déjà
-affichée à l'écran — un indicateur faux est pire qu'un module absent.
+L'abandon de L1 et L2 raccourcit sensiblement le chemin vers le stock, qui
+devient le prochain chantier. L4 ne dépend plus que de L3.
 
 ---
 
@@ -361,15 +390,11 @@ affichée à l'écran — un indicateur faux est pire qu'un module absent.
 
 Par lot, le test qui prouve que c'est fait :
 
-- **L0** — redémarrer le serveur, les lavages de la veille sont toujours là.
-- **L1** — un lavage créé est `pending` ; `completed → in_progress` est refusé ;
-  le KPI « en cours » affiche une valeur non nulle après un démarrage.
-- **L2** — deux laveurs, deux affectations : chacun ne voit que la sienne ;
-  un laveur ne peut pas terminer le lavage d'un autre.
+- **L0** — redémarrer le serveur, les lavages de la veille sont toujours là. ✅
 - **L3** — le stock affiché égale la somme des mouvements ; aucune écriture
   directe de quantité n'est possible.
-- **L4** — un lavage annulé en cours n'a rien consommé ; rejouer la requête de
-  fin ne déduit pas deux fois.
+- **L4** — un lavage annulé produit un mouvement de stock inverse ; rejouer la
+  requête de saisie avec la même clé d'idempotence ne déduit pas deux fois.
 - **L5** — une commande non reçue n'augmente pas le stock ; un achat payé
   n'apparaît pas deux fois dans les charges.
 - **L6** — chiffre d'affaires, encaissements et marge sont trois nombres
@@ -395,20 +420,62 @@ Conventions en vigueur à respecter : `node:test` + `assert/strict`,
 
 ---
 
-## 13. Ce que je recommande pour la suite immédiate
+## 13. Prochain chantier
 
-Ne pas ouvrir le chantier « stock ». C'est le plus gros morceau du Master
-Prompt, mais ce n'est pas le plus urgent.
+L0 étant livré, le chemin est dégagé pour le **stock** (L3), qui est désormais
+le plus gros écart restant et celui qui débloque le plus de valeur : sans lui,
+trois des dix questions du §17 restent sans réponse.
 
-Commencer par **L0 + L1 + L2**. Trois raisons :
+Deux points à arbitrer à l'ouverture de L3, sans urgence :
 
-1. Une base qui s'efface rend tout le reste théorique.
-2. Un indicateur « lavages en cours » qui ne peut qu'afficher zéro est un
-   mensonge déjà visible à l'écran — c'est plus grave qu'un module absent, qui
-   au moins ne prétend rien.
-3. Le rôle « agent de lavage » est annoncé dans la matrice de permissions et
-   dans la documentation ; aujourd'hui, un agent qui se connecte voit les
-   lavages de toute la station et ne peut rien en faire.
+- **Écart C4** — un agent de lavage voit aujourd'hui tous les lavages de la
+  station. Ce n'est plus un défaut fonctionnel depuis la décision 1, mais cela
+  reste une question de confidentialité.
+- **Écart M5** — les messages de validation remontent en anglais brut
+  (« Invalid input: expected string, received undefined »). Constaté à nouveau
+  pendant les essais du 21 octobre.
 
-Ces trois lots rendent vrai ce qui est déjà affiché. Le stock pourra ensuite
-être construit sur des fondations qui tiennent.
+---
+
+## 14. Journal des corrections
+
+### 21 octobre 2026 — L0, persistance de la base *(écart C5)*
+
+**Avant** : `new PGlite()` sans `dataDir`. Le serveur démarrait normalement et
+perdait l'intégralité des lavages, encaissements et sessions de caisse à
+chaque arrêt, **sans le moindre avertissement**.
+
+**Après** :
+
+- `server/pglite-location.ts` — fonction pure décidant de l'emplacement,
+  testable sans démarrer PostgreSQL (même esprit que `action-blocking.ts`).
+- Défaut : `.data/pglite`, sur disque. `PGLITE_DATA_DIR` permet de changer de
+  chemin ; `:memory:` demande explicitement une base volatile.
+- **`NODE_ENV=test` force la mémoire et n'est pas surchargeable** : deux
+  fichiers de tests partageant un dossier se contamineraient. Vérifié avec une
+  variable hostile — le dossier n'est jamais créé.
+- Une base volatile hors test se signale par `ATTENTION` dans les journaux.
+- `mkdir recursive` avant ouverture : PGlite ne crée pas les chemins
+  imbriqués et échouait en `ENOENT` au premier démarrage.
+- `.data/` ajouté au `.gitignore` (41 Mo).
+- `NEON_DATABASE_URL`, configuration morte, retirée de `.env.example`.
+
+**Preuve, pas seulement compilation** : lavage `LAV-20261021-D22BD0`
+(12 000 FCFA) créé, serveur arrêté puis relancé, lavage retrouvé intact.
+12 tests ajoutés (434 au total), 3 mutations du cœur pur toutes détectées.
+
+### 21 octobre 2026 — Indicateur « En cours » *(écart C2)*
+
+Conséquence directe de la décision 1. La carte du tableau de bord alimentée
+par `in_progress_washes` ne pouvait afficher que zéro.
+
+- Requête SQL morte et champ de réponse supprimés de `server/reports.ts`,
+  avec une note expliquant pourquoi il ne faut pas les réintroduire.
+- Part « En cours » retirée du camembert.
+- Carte remplacée par **« À confirmer »**, alimentée par
+  `pending_payments_cents` / `pending_payments_count` — déjà calculés par le
+  serveur mais jamais affichés. C'est l'argent annoncé en mobile money et pas
+  encore vérifié : une information qui, elle, mérite l'attention du gérant.
+
+**Preuve** : un lavage réglé en Orange Money fait passer la carte à
+12 000 FCFA sur 1 encaissement. Ce n'est pas un nouveau zéro permanent.
