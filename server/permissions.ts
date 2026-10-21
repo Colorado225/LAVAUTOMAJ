@@ -46,6 +46,9 @@ export const PERMISSIONS = [
   "stock:read",
   "stock:manage",
   "stock:move",
+  // Fournisseurs et achats
+  "supplier:manage",
+  "purchase:manage",
   // Rapports
   "report:operational",
   "report:financial",
@@ -138,6 +141,14 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "stock:read",
     "stock:manage",
     "stock:move",
+    // Fournisseurs et achats.
+    //
+    // C'est le gérant qui va au marché et qui revient avec les sachets. Lui
+    // refuser l'achat obligerait le propriétaire à ressaisir après coup ce
+    // qu'il n'a pas vu arriver, ou le gérant à emprunter le compte d'un
+    // autre : les deux fabriquent un journal faux.
+    "supplier:manage",
+    "purchase:manage",
     // Le détail des dépenses sans leur total rendrait l'écran de rapports
     // incohérent — retenir l'agrégat quand on donne la ligne ne protège rien.
     "report:financial",
@@ -202,6 +213,8 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "stock:read": "Consulter le stock et les mouvements",
   "stock:manage": "Créer et modifier les produits du stock",
   "stock:move": "Enregistrer un mouvement de stock",
+  "supplier:manage": "Gérer les fournisseurs",
+  "purchase:manage": "Enregistrer un achat",
   "report:operational": "Consulter les rapports d’activité",
   "report:financial": "Consulter les rapports financiers (marges, dépenses)",
   "report:export": "Exporter les rapports",

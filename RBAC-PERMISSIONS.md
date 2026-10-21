@@ -447,3 +447,36 @@ valeur des sorties d'hier.
 
 **Verrouillage.** `tests/permissions.test.ts` passe de 18 à 21 permissions
 attendues pour le gérant, et de 28 à 31 pour le propriétaire.
+
+### 21 octobre 2026 — Les fournisseurs et les achats (lot L5)
+
+Deux permissions s'ajoutent.
+
+| Permission | Ce qu'elle ouvre |
+| --- | --- |
+| `supplier:manage` | Créer et tenir à jour la liste des fournisseurs |
+| `purchase:manage` | Enregistrer un achat, le consulter, l'annuler |
+
+**Le gérant les reçoit toutes les deux.** C'est lui qui va au marché et qui
+revient avec les sachets. Lui refuser l'achat produirait l'un des deux maux
+que la matrice existe pour éviter : ou bien le propriétaire ressaisit après
+coup une marchandise qu'il n'a pas vue arriver, ou bien le gérant emprunte le
+compte d'un autre. Dans les deux cas le journal devient faux.
+
+**Le caissier ne les reçoit pas.** Le prix d'achat des produits n'est pas de
+son ressort, et une consultation suffirait à le lui apprendre : la lecture est
+donc fermée au même titre que l'écriture. Un caissier reçoit un **403**, jamais
+un 402 — on ne propose pas un abonnement à qui n'aura pas le droit ensuite.
+
+**Pas de permission de lecture séparée.** `purchase:manage` ouvre la liste et
+la fiche autant que l'enregistrement. Découper serait gratuit : les trois
+personnes qui consultent les achats sont les trois qui les font.
+
+**Le forfait réutilise `stock.manage`.** Les achats n'existent que pour
+alimenter le stock ; ils relèvent de la même promesse commerciale. Une
+capacité de plus ne vendrait rien de neuf et doublerait les chemins à garder
+cohérents — la leçon du lot précédent était justement : **une seule clé par
+module**.
+
+**Verrouillage.** `tests/permissions.test.ts` passe de 21 à 23 permissions
+attendues pour le gérant, et de 31 à 33 pour le propriétaire.

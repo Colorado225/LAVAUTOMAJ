@@ -79,7 +79,7 @@ const SESSION_SELECT = `
   ) m ON true`
 
 const EXPENSE_FIELDS =
-  "id, site_id, category, amount_cents, payment_method, cash_session_id, description, beneficiary, reference, status, expense_date, created_at"
+  "id, site_id, category, amount_cents, payment_method, cash_session_id, description, beneficiary, reference, status, expense_date, purchase_id, created_at"
 
 export function createOperationsRouter() {
   const r = Router()
@@ -384,6 +384,19 @@ export function createOperationsRouter() {
         if (!oldQ.rowCount) throw new HttpError(404, "expense_not_found", "Dépense introuvable.")
         const old = oldQ.rows[0]
 
+        // Une dépense née d'un achat n'est pas modifiable ici. Elle est le
+        // reflet comptable d'une marchandise entrée en stock : en changer le
+        // montant à cet écran désolidariserait l'argent de ce qu'il a payé,
+        // sans que rien ne le signale. La correction passe par l'annulation
+        // de l'achat, qui reprend aussi la marchandise.
+        if (old.purchase_id) {
+          throw new HttpError(
+            409,
+            "expense_from_purchase",
+            "Cette dépense provient d'un achat. Pour la corriger, annulez l'achat correspondant : la marchandise sera reprise en même temps.",
+          )
+        }
+
         // A closed cash session is an accounting cut-off: its movements are frozen.
         if (old.cash_session_id) {
           const sessionQ = await client.query(
@@ -496,6 +509,19 @@ export function createOperationsRouter() {
         )
         if (!oldQ.rowCount) throw new HttpError(404, "expense_not_found", "Dépense introuvable.")
         const old = oldQ.rows[0]
+
+        // Une dépense née d'un achat n'est pas modifiable ici. Elle est le
+        // reflet comptable d'une marchandise entrée en stock : en changer le
+        // montant à cet écran désolidariserait l'argent de ce qu'il a payé,
+        // sans que rien ne le signale. La correction passe par l'annulation
+        // de l'achat, qui reprend aussi la marchandise.
+        if (old.purchase_id) {
+          throw new HttpError(
+            409,
+            "expense_from_purchase",
+            "Cette dépense provient d'un achat. Pour la corriger, annulez l'achat correspondant : la marchandise sera reprise en même temps.",
+          )
+        }
 
         if (old.cash_session_id) {
           const sessionQ = await client.query(

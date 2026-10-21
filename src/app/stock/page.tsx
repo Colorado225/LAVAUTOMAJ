@@ -76,6 +76,9 @@ interface Movement {
   /** Renseigné seulement pour une consommation ou sa contrepassation. */
   wash_id: string | null
   wash_reference: string | null
+  /** Renseigné seulement pour une entrée issue d'un achat, ou sa reprise. */
+  purchase_id: string | null
+  purchase_reference: string | null
 }
 
 const KIND_LABELS: Record<string, string> = {
@@ -500,7 +503,14 @@ export default function StockPage() {
                         {formatQuantity(Math.abs(movement.quantity_milli), movement.unit)}
                       </TableCell>
                       <TableCell className="max-w-64 truncate text-sm text-muted-foreground">
-                        {movement.wash_id && movement.wash_reference ? (
+                        {movement.purchase_id && movement.purchase_reference ? (
+                          <Link
+                            to="/achats"
+                            className="underline underline-offset-2 hover:text-foreground"
+                          >
+                            {movement.kind === "reversal" ? "Achat annulé" : "Achat"} {movement.purchase_reference}
+                          </Link>
+                        ) : movement.wash_id && movement.wash_reference ? (
                           <Link
                             to={`/washes/${movement.wash_id}`}
                             className="underline underline-offset-2 hover:text-foreground"
@@ -512,7 +522,7 @@ export default function StockPage() {
                         )}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {movement.wash_id ? (
+                        {movement.wash_id || movement.purchase_id ? (
                           // Déduction automatique : la personne reste dans la
                           // donnée — c'est elle la cause, la traçabilité en
                           // dépend — mais l'écran ne doit pas présenter un
@@ -521,8 +531,8 @@ export default function StockPage() {
                           <span
                             title={
                               movement.first_name
-                                ? `Déclenché en enregistrant le lavage par ${`${movement.first_name} ${movement.last_name ?? ""}`.trim()}`
-                                : "Déclenché par l’enregistrement du lavage"
+                                ? `Déclenché en enregistrant ${movement.purchase_id ? "l’achat" : "le lavage"} par ${`${movement.first_name} ${movement.last_name ?? ""}`.trim()}`
+                                : `Déclenché par l’enregistrement ${movement.purchase_id ? "de l’achat" : "du lavage"}`
                             }
                           >
                             Système

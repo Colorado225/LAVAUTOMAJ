@@ -250,6 +250,8 @@ const EXPECTED_MATRIX: Record<Exclude<Role, "owner">, readonly Permission[]> = {
     "service:read",
     "stock:manage",
     "stock:move",
+    "supplier:manage",
+    "purchase:manage",
     "stock:read",
     "wash:create",
     "wash:read",

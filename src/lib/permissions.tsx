@@ -41,6 +41,8 @@ export type Permission =
   | "stock:read"
   | "stock:manage"
   | "stock:move"
+  | "supplier:manage"
+  | "purchase:manage"
   | "report:operational"
   | "report:financial"
   | "report:export"

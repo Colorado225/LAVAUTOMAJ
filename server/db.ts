@@ -309,6 +309,48 @@ ALTER TABLE expenses ADD COLUMN IF NOT EXISTS beneficiary text;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS reference text;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS expense_date date NOT NULL DEFAULT CURRENT_DATE;
 ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS expense_id uuid REFERENCES expenses(id);
+
+-- Fournisseurs et achats (L5).
+CREATE TABLE IF NOT EXISTS suppliers (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ name text NOT NULL, phone text, contact_name text, notes text,
+ is_active boolean NOT NULL DEFAULT true,
+ created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(organization_id,name)
+);
+CREATE TABLE IF NOT EXISTS purchases (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ site_id uuid REFERENCES sites(id), supplier_id uuid REFERENCES suppliers(id),
+ reference text NOT NULL, invoice_reference text,
+ purchase_date date NOT NULL DEFAULT CURRENT_DATE,
+ total_cents integer NOT NULL CHECK(total_cents >= 0),
+ payment_method text NOT NULL, cash_session_id uuid REFERENCES cash_sessions(id),
+ status text NOT NULL DEFAULT 'received',
+ cancelled_at timestamptz, cancellation_reason text, cancelled_by uuid REFERENCES users(id),
+ created_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(organization_id,reference)
+);
+CREATE INDEX IF NOT EXISTS purchases_org_date_idx ON purchases(organization_id, purchase_date DESC);
+-- La colonne porte le mot « recu » et non « commande » : c'est la regle du
+-- metier inscrite dans le schema. Seul ce qui est entre dans le magasin
+-- augmente le stock, jamais ce qui a ete commande.
+CREATE TABLE IF NOT EXISTS purchase_items (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ purchase_id uuid NOT NULL REFERENCES purchases(id), product_id uuid NOT NULL REFERENCES products(id),
+ product_name_snapshot text NOT NULL,
+ received_milli integer NOT NULL CHECK(received_milli > 0),
+ unit_cost_cents integer NOT NULL CHECK(unit_cost_cents >= 0),
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS purchase_items_purchase_idx ON purchase_items(purchase_id);
+-- Rattache l'entree de stock a l'achat qui l'a provoquee, exactement comme
+-- wash_id rattache une sortie au lavage : meme lecture dans les deux sens.
+ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS purchase_id uuid REFERENCES purchases(id);
+CREATE INDEX IF NOT EXISTS stock_movements_purchase_idx ON stock_movements(purchase_id) WHERE purchase_id IS NOT NULL;
+-- Un achat produit UNE depense et une seule. Ce lien est ce qui rend le
+-- double comptage impossible : la depense n'est pas ressaisie a la main.
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS purchase_id uuid REFERENCES purchases(id);
+CREATE UNIQUE INDEX IF NOT EXISTS expenses_purchase_unique ON expenses(purchase_id) WHERE purchase_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS idempotency_keys (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  key text NOT NULL, fingerprint text NOT NULL, response_status integer, response_body jsonb,

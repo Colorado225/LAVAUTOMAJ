@@ -724,3 +724,71 @@ s'affichent toutes deux. La bascule vers Pro a été jouée par le vrai parcours
 **Tests** : 9 nouveaux (`tests/stock-wash-link.test.ts`), suite à **534/534**.
 Cinq mutations éprouvées, toutes détectées : rôle retiré, forfait retiré, clé
 vide au lieu d'absente, jointure non bornée, référence jamais renvoyée.
+
+### 21 octobre 2026 — L5, fournisseurs et achats
+
+Jusqu'ici le stock ne montait que par une saisie manuelle, sans trace de qui
+avait vendu la marchandise ni de ce qu'elle avait coûté. Et la dépense
+correspondante se tapait à part, dans un autre écran, à un autre moment.
+
+**Deux questions posées avant de construire**, parce que les réponses
+changeaient le modèle : paie-t-on sur place ou à crédit ? repart-on avec toute
+la marchandise ? Réponses : **toujours sur place, toujours tout d'un coup**.
+Le lot s'en trouve considérablement simplifié — pas d'échéancier fournisseur,
+pas de réception partielle, pas de statut « commandé ». L'achat est l'instant
+où tout se produit : l'argent sort, la marchandise entre.
+
+**La règle « seules les quantités reçues augmentent le stock ».** Elle ne
+devient pas caduque pour autant, elle change de forme : au lieu d'un flux de
+réception, c'est le **mot** qui la porte. La colonne s'appelle
+`received_milli`, le champ à l'écran s'appelle « quantité reçue », et la
+consigne du formulaire dit de compter ce qu'il y a dans le sac, pas ce qui est
+écrit sur le bon. Quand le vendeur en met dix-huit au lieu de vingt, on tape
+dix-huit. La règle est au point de saisie, là où elle sert.
+
+**Le double comptage achat/dépense.** C'est l'achat qui écrit la dépense,
+jamais l'utilisateur. Le lien `expenses.purchase_id` porte un **index unique**:
+le doublon n'est pas découragé, il est impossible à écrire.
+
+**Ce que la première version manquait, et que l'épreuve du réel a révélé.**
+Écrire une seule dépense ne suffit pas si cette dépense reste modifiable. Les
+routes `PATCH` et `DELETE` des dépenses permettaient de changer le montant ou
+de faire disparaître la ligne, laissant la marchandise en stock sans
+contrepartie — un achat gratuit. Les deux routes refusent désormais une
+dépense issue d'un achat, en **409**, avec le chemin de correction : annuler
+l'achat, ce qui reprend aussi la marchandise. Deux tests et une mutation
+couvrent ce verrou.
+
+Et la moitié visible de la garantie comptait autant : l'écran Dépenses affiche
+maintenant « Issue d'un achat — déjà comptée » sous la ligne concernée. Sans
+cette mention, le gérant croirait l'achat non enregistré et le ressaisirait.
+
+**Symétrie avec le lot précédent.** `stock_movements.purchase_id` fait pour
+l'achat ce que `wash_id` fait pour le lavage : depuis le stock, la colonne
+« Motif » renvoie à l'achat par sa référence `ACH-…` ; la colonne « Par » dit
+« Système », l'infobulle nommant la personne et la cause. Les deux sens de
+lecture sont les mêmes, et le code qui les sert aussi.
+
+**Annulation plutôt que suppression**, comme partout. L'entrée d'origine reste
+lisible à côté de sa contrepassation. Si la marchandise a déjà été consommée,
+le stock passe en négatif : c'est voulu, un négatif appelle un inventaire et
+ne doit jamais empêcher de corriger une erreur de saisie. La caisse n'est
+recréditée que si la journée est encore **ouverte** — une caisse comptée et
+signée ne se réécrit pas.
+
+**Vérifié en conditions réelles** : achat `ACH-20261021-AF9BD9`, 5 000 F chez
+un fournisseur nommé, 20 sachets + 4 chiffons entrés, une dépense de 5 000 F
+et une seule, modification et suppression refusées en 409, caissier en 403.
+Sur le tiroir : 26 000 F avant, 24 500 F après un achat de 1 500 F en espèces,
+26 000 F après annulation — l'argent revient au centime.
+
+**Tests** : 28 nouveaux (`tests/purchases.test.ts`), suite à **562/562**.
+Sept mutations éprouvées, toutes détectées — forfait, rôle, cloisonnement du
+fournisseur, dépense non écrite, garde de double contrepassation, contrôle de
+caisse, verrou sur la dépense. Le garde `NOT EXISTS` de la contrepassation
+étant inatteignable par l'API (un 409 le précède), il est éprouvé par appel
+direct de la fonction : c'est la leçon du lot L4, appliquée d'emblée.
+
+**Reste ouvert.** Un achat ne met pas à jour le coût de référence du produit :
+le mouvement fige le prix payé, mais la fiche produit garde le sien. À trancher
+avec les rapports de marge (L6).

@@ -28,6 +28,7 @@ export const routes: RouteObject[] = [
   { path: "/sites", lazy: page(() => import("@/app/sites/page")) },
   { path: "/team", lazy: page(() => import("@/app/team/page")) },
   { path: "/stock", lazy: page(() => import("@/app/stock/page")) },
+  { path: "/achats", lazy: page(() => import("@/app/purchases/page")) },
   { path: "/services", lazy: page(() => import("@/app/services/page")) },
   { path: "/service-categories", lazy: page(() => import("@/app/service-categories/page")) },
   { path: "/vehicle-categories", lazy: page(() => import("@/app/vehicle-categories/page")) },
