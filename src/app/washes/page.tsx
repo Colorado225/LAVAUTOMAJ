@@ -13,6 +13,8 @@ import {
 } from "@/lib/action-blocking"
 import { apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
+import { isNetworkError } from "@/lib/offline-queue"
+import { enqueueMutation } from "@/lib/offline-sync"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -264,24 +266,29 @@ export default function WashesPage() {
     const requestKey = idempotencyKey ?? createIdempotencyKey()
     setIdempotencyKey(requestKey)
     setSaving(true)
+
+    // Sorti de l'appel : le même corps doit pouvoir repartir plus tard, à
+    // l'identique, si le réseau manque maintenant.
+    const payload = {
+      site_id: siteId,
+      vehicle_category_id: vehicleCategoryId,
+      items: selectedServices.map((service) => ({
+        service_id: service.id,
+        quantity: quantities[service.id],
+      })),
+      worker_ids: selectedWorkerIds,
+      payment_method: paymentMethod,
+      amount_received_cents: amountReceivedCents,
+      ...(cashNeedsSession && cashSession ? { cash_session_id: cashSession.id } : {}),
+    }
+
     try {
       const response = await apiFetch(
         "/api/v1/washes",
         {
           method: "POST",
           headers: { "Idempotency-Key": requestKey },
-          body: JSON.stringify({
-            site_id: siteId,
-            vehicle_category_id: vehicleCategoryId,
-            items: selectedServices.map((service) => ({
-              service_id: service.id,
-              quantity: quantities[service.id],
-            })),
-            worker_ids: selectedWorkerIds,
-            payment_method: paymentMethod,
-            amount_received_cents: amountReceivedCents,
-            ...(cashNeedsSession && cashSession ? { cash_session_id: cashSession.id } : {}),
-          }),
+          body: JSON.stringify(payload),
         }
       )
       if (!response.ok) {
@@ -300,6 +307,33 @@ export default function WashesPage() {
       setRefreshKey((key) => key + 1)
       closeForm()
     } catch (err) {
+      // Réseau coupé : la vente est conservée sur l'appareil et repartira
+      // seule. La clé d'idempotence voyage avec elle — c'est elle qui
+      // empêchera un doublon si la requête était déjà passée sans que la
+      // réponse nous revienne.
+      if (isNetworkError(err)) {
+        const total = Math.round(totalCents / 100).toLocaleString("fr-FR")
+        const queued = await enqueueMutation({
+          url: "/api/v1/washes",
+          method: "POST",
+          body: payload,
+          headers: { "Idempotency-Key": requestKey },
+          offline: { label: `Lavage ${total} F` },
+        })
+        if (queued) {
+          setMutationSuccess(
+            "Pas de réseau : le lavage est enregistré sur cet appareil et sera envoyé automatiquement.",
+          )
+          setQuantities({})
+          setSelectedWorkerIds([])
+          setVehicleCategoryId("")
+          setAmountReceived("0")
+          setIdempotencyKey(null)
+          closeForm()
+          setSaving(false)
+          return
+        }
+      }
       // Keep the key while the payload stays unchanged: retrying after a lost
       // response returns the original record instead of creating a duplicate.
       setMutationError(err instanceof Error ? err.message : "Impossible d’enregistrer le lavage.")

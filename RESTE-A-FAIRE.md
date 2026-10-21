@@ -112,7 +112,18 @@ s'exécutent qu'à la main finissent par ne plus s'exécuter du tout.
 
 ---
 
-## 3. Bloquant terrain — Aucun mode hors ligne
+## 3. ~~Bloquant terrain — Aucun mode hors ligne~~ — RÉSOLU le 21/10/2026
+
+> **Traité.** L'application est installable, s'ouvre sans réseau, et les lavages
+> encaissés pendant une coupure repartent seuls au retour du réseau, sans
+> doublon possible. Voir **`HORS-CONNEXION.md`** pour les règles, les
+> exclusions volontaires (ouverture de caisse, annulations, modifications) et
+> les limites assumées. 25 tests : `tests/offline-queue.test.ts` et
+> `tests/pwa.test.ts`.
+>
+> Le constat initial, conservé pour mémoire :
+
+## 3 bis. Constat d'origine — Aucun mode hors ligne
 
 Recherche sur `serviceWorker|manifest.json|workbox|indexedDB|offline` dans
 `src/`, `public/` et `index.html` : **aucun résultat**.
