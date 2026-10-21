@@ -44,7 +44,16 @@ export function isDatabaseReady(): boolean {
   return ready && pool !== null;
 }
 
-const schemaSql = `
+/**
+ * SQL exécuté à chaque démarrage : création des tables si absentes, puis
+ * alignement du catalogue des forfaits.
+ *
+ * Exporté pour être rejouable en test sur une base déjà peuplée. C'est le
+ * seul moyen honnête de vérifier qu'un tarif décidé en console survit à un
+ * redémarrage : en test, réinitialiser le schéma crée une base neuve, ce qui
+ * effacerait la question au lieu d'y répondre.
+ */
+export const schemaSql = `
 CREATE TABLE IF NOT EXISTS users (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), clerk_user_id text UNIQUE,
  organization_id uuid, email text NOT NULL, first_name text, last_name text, phone text,
@@ -68,6 +77,14 @@ ALTER TABLE plans ADD COLUMN IF NOT EXISTS price_cents integer NOT NULL DEFAULT 
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS billing_cycle text NOT NULL DEFAULT 'monthly';
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_services integer;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS sort_order integer NOT NULL DEFAULT 0;
+-- Date de la derniere modification de prix decidee depuis la console.
+--
+-- Sans cette colonne, le seed ci-dessous ecraserait a chaque demarrage le
+-- tarif qu'un operateur vient de changer : il se serait recouche sur la
+-- valeur ecrite en dur, et personne n'aurait compris pourquoi. Tant qu'elle
+-- est nulle, le forfait suit les valeurs livrees avec le produit ; des
+-- qu'un operateur fixe un prix, c'est le sien qui fait foi.
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS price_overridden_at timestamptz;
 -- Migration du forfait d'entrée : « free » (0 F) devient « starter » (10 000 F),
 -- pour coller à la grille publique. Le renommage se fait AVANT le seed, sinon
 -- ON CONFLICT(code) insérerait un doublon en laissant « free » orphelin —
@@ -81,7 +98,11 @@ INSERT INTO plans(code,name,description,price_cents,billing_cycle,max_users,max_
  ('pro','Pro','Pour les stations qui ont plusieurs laveurs et veulent mieux contrôler leurs opérations.',2000000,'monthly',10,20,1,NULL,2,'{"reports.advanced":true,"reports.export":true,"reports.consolidated":false,"audit.read":true,"sites.multiple":false,"stock.manage":true,"team.tracking":true}'::jsonb),
  ('business','Business','Pour les stations importantes ou les propriétaires qui gèrent plusieurs sites.',3500000,'monthly',NULL,NULL,NULL,NULL,3,'{"reports.advanced":true,"reports.export":true,"reports.consolidated":true,"audit.read":true,"sites.multiple":true,"stock.manage":true,"team.tracking":true}'::jsonb)
 ON CONFLICT(code) DO UPDATE SET
- name=EXCLUDED.name, description=EXCLUDED.description, price_cents=EXCLUDED.price_cents,
+ name=EXCLUDED.name, description=EXCLUDED.description,
+ -- Un prix fixe depuis la console survit au redemarrage ; les autres suivent
+ -- la grille livree avec le produit.
+ price_cents=CASE WHEN plans.price_overridden_at IS NULL
+                  THEN EXCLUDED.price_cents ELSE plans.price_cents END,
  billing_cycle=EXCLUDED.billing_cycle, max_users=EXCLUDED.max_users, max_workers=EXCLUDED.max_workers,
  max_sites=EXCLUDED.max_sites, max_services=EXCLUDED.max_services, sort_order=EXCLUDED.sort_order,
  features=EXCLUDED.features;
@@ -673,6 +694,35 @@ ALTER TABLE organizations ADD COLUMN IF NOT EXISTS deletion_scheduled_for timest
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS deletion_reason text;
 CREATE INDEX IF NOT EXISTS organizations_deletion_idx ON organizations(deletion_scheduled_for)
  WHERE deletion_scheduled_for IS NOT NULL;
+
+-- Demandes de cloture emises par le client lui-meme.
+--
+-- A distinguer de la suppression ci-dessus, qui est une decision de
+-- l'editeur et coupe l'acces aussitot. Ici le gerant signale qu'il veut
+-- partir : rien ne s'arrete, il continue d'encaisser normalement. C'est
+-- l'editeur qui programmera la cloture, ou qui refusera en expliquant
+-- pourquoi. Le client peut se raviser tant que personne n'a tranche.
+--
+-- Une seule demande ouverte a la fois, garantie par l'index partiel plus bas :
+-- deux demandes en attente pour la meme station n'auraient aucun sens et
+-- feraient apparaitre la station deux fois dans la file de l'editeur.
+CREATE TABLE IF NOT EXISTS closure_requests (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+ requested_by uuid REFERENCES users(id) ON DELETE SET NULL,
+ requested_by_email text NOT NULL,
+ reason text NOT NULL,
+ status text NOT NULL DEFAULT 'pending'
+   CHECK (status IN ('pending','cancelled','accepted','declined')),
+ resolution_note text,
+ resolved_by_email text,
+ resolved_at timestamptz,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS closure_requests_one_pending
+ ON closure_requests(organization_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS closure_requests_feed_idx
+ ON closure_requests(status, created_at DESC);
 CREATE TABLE IF NOT EXISTS clerk_webhook_events (
  id text PRIMARY KEY, event_type text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
 );

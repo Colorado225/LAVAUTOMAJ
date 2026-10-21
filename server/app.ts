@@ -20,6 +20,7 @@ import { createPurchaseRouter } from "./purchases.ts"
 import { createAttendanceRouter } from "./attendance.ts"
 import { createAdminRouter } from "./admin.ts"
 import { createConsoleAuthRouter, requireOperator } from "./console-auth.ts"
+import { createPublicPricingRouter } from "./public-pricing.ts"
 import { attachSubscription, blockWritesWhenReadOnly } from "./entitlements.ts"
 import { captureIncident, monitorRequests } from "./monitoring-middleware.ts"
 
@@ -76,6 +77,10 @@ export function mountApi(app: Express) {
   // -------------------------------------------------------------------------
   app.use("/api/v1/console/auth", createConsoleAuthRouter())
   app.use("/api/v1/console", requireOperator, createAdminRouter())
+
+  // Grille tarifaire publique — avant `requireSession`, comme la console et
+  // pour la raison inverse : ce que lit un visiteur sans compte.
+  app.use("/api/v1/public", createPublicPricingRouter())
 
   app.use("/api/v1", requireSession)
   app.use("/api/v1", requireTenantContext)

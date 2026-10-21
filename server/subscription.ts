@@ -3,6 +3,7 @@ import { z } from "zod"
 import type { Pool } from "pg"
 import { getPool } from "./db.ts"
 import { asyncRoute, body, tenant, requirePermission, HttpError } from "./http.ts"
+import { registerClosureRoutes } from "./closure.ts"
 import { env } from "./env.ts"
 import {
   TRIAL_DAYS,
@@ -96,6 +97,10 @@ export function createSubscriptionRouter() {
       }),
     )
   }
+
+  // Demande de clôture émise par le client. Montée ici pour bénéficier du
+  // préfixe `/subscription`, exempté du blocage en lecture seule.
+  registerClosureRoutes(r)
 
   return r
 }

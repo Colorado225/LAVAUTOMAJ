@@ -8,6 +8,7 @@ import {
   FileClock,
   LayoutDashboard,
   LogOut,
+  Tags,
   TrendingUp,
   Wallet,
 } from "lucide-react"
@@ -36,6 +37,7 @@ const NAV = [
   { to: "/console/revenus", end: false, label: "Revenus", icon: TrendingUp },
   { to: "/console/paiements", end: false, label: "Paiements", icon: Wallet },
   { to: "/console/surveillance", end: false, label: "Surveillance", icon: Activity },
+  { to: "/console/tarifs", end: false, label: "Tarifs", icon: Tags },
   { to: "/console/journal", end: false, label: "Journal", icon: FileClock },
 ]
 

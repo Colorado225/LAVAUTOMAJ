@@ -26,6 +26,7 @@ import { createPasswordResetToken } from "./auth.ts"
 import { registerAccountRoutes } from "./console-accounts.ts"
 import { registerSupportRoutes } from "./console-support.ts"
 import { registerMonitoringRoutes } from "./console-monitoring.ts"
+import { registerClosureConsoleRoutes, acceptPendingClosure } from "./closure.ts"
 
 // ---------------------------------------------------------------------------
 // Back-office de l'éditeur
@@ -712,6 +713,12 @@ export function createAdminRouter() {
 
       const { scheduled_for } = await scheduleDeletion(pool, id, input.reason, graceDays)
 
+      // Si le client avait demandé à partir, sa demande est exaucée : on la
+      // sort de la file. Sans cela elle y resterait éternellement « en
+      // attente » alors qu'elle a été traitée, et un second opérateur
+      // programmerait la clôture une deuxième fois.
+      const closedRequest = await acceptPendingClosure(pool, id, operator.email, input.reason)
+
       await auditPlatformAction(pool, id, operator.email, "organization.deletion_scheduled", id, {
         reason: input.reason,
         scheduled_for,
@@ -723,7 +730,13 @@ export function createAdminRouter() {
       })
       invalidateSubscriptionCache(id)
 
-      res.json({ organization_id: id, name, scheduled_for, grace_days: graceDays })
+      res.json({
+        organization_id: id,
+        name,
+        scheduled_for,
+        grace_days: graceDays,
+        closure_request_accepted: closedRequest,
+      })
     }),
   )
 
@@ -966,10 +979,92 @@ export function createAdminRouter() {
     "/plans",
     asyncRoute(async (_req, res) => {
       const q = await adminDb().query(
-        `SELECT code, name, price_cents, billing_cycle, max_users, max_workers, max_sites
+        `SELECT code, name, price_cents, billing_cycle, max_users, max_workers, max_sites,
+                price_overridden_at
          FROM plans ORDER BY sort_order ASC, price_cents ASC`,
       )
       res.json({ plans: q.rows })
+    }),
+  )
+
+  // -------------------------------------------------------------------------
+  // PATCH /api/v1/console/plans/:code — changer un tarif.
+  //
+  // Les prix de WashPilot sont des hypothèses commerciales, pas des constantes
+  // physiques. Les corriger devait jusqu'ici passer par une intervention en
+  // base de données, ce qui revenait à dire qu'on ne les corrigeait pas.
+  //
+  // Trois protections encadrent ce geste, parce qu'un tarif engage l'éditeur :
+  //
+  //   • **Aucun forfait ne peut tomber à zéro.** Un forfait gratuit rendrait
+  //     l'essai indiscernable de l'abonnement et viderait de son sens la
+  //     bascule en lecture seule à l'échéance.
+  //   • **Le montant doit être un multiple de 5 francs.** Ce n'est pas une
+  //     coquetterie : les passerelles mobile money ivoiriennes refusent les
+  //     montants qui ne le sont pas. Un prix à 10 001 F produirait un forfait
+  //     invendable, et l'erreur n'apparaîtrait qu'au premier client qui paie.
+  //   • **Un motif est exigé**, et le changement est journalisé avec l'ancien
+  //     et le nouveau prix. Une hausse de tarif se discute : il faut pouvoir
+  //     dire qui l'a décidée et quand.
+  //
+  // Ce que cette route ne fait pas, volontairement : elle ne touche à aucun
+  // abonnement en cours ni à aucune intention de paiement déjà ouverte. Ces
+  // dernières portent leur propre montant, figé au moment où le client a
+  // cliqué. Changer la grille n'augmente donc jamais une facture déjà
+  // annoncée — on ne révise pas un prix après l'avoir affiché.
+  // -------------------------------------------------------------------------
+  r.patch(
+    "/plans/:code",
+    asyncRoute(async (req, res) => {
+      const operator = req.operator!
+      const code = String(req.params.code ?? "")
+      if (!["starter", "pro", "business"].includes(code)) {
+        throw new HttpError(404, "plan_not_found", "Ce forfait n'existe pas.")
+      }
+
+      const input = body(
+        z
+          .object({
+            price_xof: z.number().int().min(1).max(1_000_000),
+            reason: z.string().trim().min(3).max(300),
+          })
+          .strip(),
+        req.body,
+      )
+
+      if (input.price_xof % 5 !== 0) {
+        throw new HttpError(
+          400,
+          "price_not_multiple_of_5",
+          "Le montant doit être un multiple de 5 francs : les opérateurs mobile money refusent les autres.",
+        )
+      }
+
+      const pool = adminDb()
+      const before = await pool.query("SELECT price_cents FROM plans WHERE code = $1", [code])
+      if (!before.rowCount) {
+        throw new HttpError(404, "plan_not_found", "Ce forfait n'existe pas.")
+      }
+      const previousCents = Number(before.rows[0].price_cents)
+      const nextCents = input.price_xof * 100
+
+      await pool.query(
+        `UPDATE plans SET price_cents = $2::integer, price_overridden_at = now() WHERE code = $1`,
+        [code, nextCents],
+      )
+
+      await logConsoleAction(pool, operator, "plan.price_changed", null, null, {
+        plan_code: code,
+        previous_price_xof: Math.round(previousCents / 100),
+        new_price_xof: input.price_xof,
+        reason: input.reason,
+      })
+
+      res.json({
+        code,
+        price_xof: input.price_xof,
+        previous_price_xof: Math.round(previousCents / 100),
+      })
     }),
   )
 
@@ -1171,6 +1266,7 @@ export function createAdminRouter() {
   registerAccountRoutes(r)
   registerSupportRoutes(r)
   registerMonitoringRoutes(r)
+  registerClosureConsoleRoutes(r)
 
   return r
 }
