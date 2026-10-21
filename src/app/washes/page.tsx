@@ -4,6 +4,8 @@ import { useMemo, useState, type FormEvent } from "react"
 import { Link, useViewTransitionState } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
+import { BlockedReason } from "@/components/access/blocked-reason"
+import { washButtonState, washSubmitBlockedReason } from "@/lib/action-blocking"
 import { apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { Button } from "@/components/ui/button"
@@ -14,7 +16,7 @@ import { SubmitButton } from "@/components/ui/submit-button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useSuccessFlash } from "@/hooks/use-success-flash"
-import { ArrowRight, Check, Droplets, Lock, Plus } from "lucide-react"
+import { ArrowRight, Check, Droplets, Loader2, Lock, Plus } from "lucide-react"
 
 interface Site {
   id: string
@@ -149,6 +151,14 @@ export default function WashesPage() {
   const [mutationSuccess, setMutationSuccess] = useState<string | null>(null)
 
   const activeSites = sites ?? []
+
+  const washFormBlocked = washButtonState({
+    sitesLoading,
+    accessLoading: createWash.loading,
+    activeSiteCount: activeSites.length,
+    allowed: createWash.allowed,
+    reason: createWash.reason,
+  })
   const activeCategories = (categories ?? []).filter((item) => item.is_active)
   const activeServices = (serviceCatalog ?? []).filter((item) => item.is_active)
   const activeWorkers = (workers ?? []).filter((worker) => worker.status === "active")
@@ -165,6 +175,18 @@ export default function WashesPage() {
   const amountReceivedCents = parseXofAmount(amountReceived)
   const amountIsValid = amountReceivedCents != null && amountReceivedCents <= totalCents
   const cashNeedsSession = amountReceivedCents != null && amountReceivedCents > 0 && paymentMethod === "cash"
+
+  const submitBlockedReason = washSubmitBlockedReason({
+    allowed: createWash.allowed,
+    accessReason: createWash.reason,
+    siteId,
+    vehicleCategoryId,
+    selectedServiceCount: selectedServices.length,
+    amountIsValid,
+    cashNeedsSession,
+    cashSessionLoading,
+    hasCashSession: Boolean(cashSession),
+  })
 
   function markFormChanged() {
     setIdempotencyKey(null)
@@ -294,22 +316,28 @@ export default function WashesPage() {
                 ))}
               </select>
             </label>
-            <Button
-              onClick={() => {
-                setMutationError(null)
-                setMutationSuccess(null)
-                setFormOpen((open) => !open)
-              }}
-              disabled={sitesLoading || activeSites.length === 0 || !createWash.allowed}
-              title={createWash.reason ?? undefined}
-            >
-              {createWash.allowed ? (
-                <Plus className="mr-2 size-4" />
-              ) : (
-                <Lock className="mr-2 size-4" />
-              )}{" "}
-              Nouveau lavage
-            </Button>
+            <div className="flex flex-col gap-1.5">
+              <Button
+                onClick={() => {
+                  setMutationError(null)
+                  setMutationSuccess(null)
+                  setFormOpen((open) => !open)
+                }}
+                disabled={washFormBlocked.disabled}
+                aria-busy={washFormBlocked.preparing}
+                title={washFormBlocked.reason ?? undefined}
+              >
+                {washFormBlocked.preparing ? (
+                  <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
+                ) : washFormBlocked.denied ? (
+                  <Lock className="mr-2 size-4" />
+                ) : (
+                  <Plus className="mr-2 size-4" />
+                )}{" "}
+                Nouveau lavage
+              </Button>
+              <BlockedReason reason={washFormBlocked.reason} className="max-w-72" />
+            </div>
           </div>
         </div>
 
@@ -546,15 +574,13 @@ export default function WashesPage() {
                   success={saveSuccess}
                   successLabel="Lavage enregistré"
                   idleIcon={<Check className="size-4" />}
-                  disabled={
-                    !createWash.allowed ||
-                    !siteId || !vehicleCategoryId || selectedServices.length === 0 ||
-                    !amountIsValid || (cashNeedsSession && (cashSessionLoading || !cashSession))
-                  }
+                  disabled={submitBlockedReason !== null}
+                  title={submitBlockedReason ?? undefined}
                 >
                   Enregistrer le lavage
                 </SubmitButton>
               </div>
+              <BlockedReason reason={submitBlockedReason} className="sm:justify-end sm:text-right" />
             </form>
           </section>
         )}

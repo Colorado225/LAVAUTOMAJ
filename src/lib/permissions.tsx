@@ -126,20 +126,42 @@ export function usePermissions() {
 
 export interface AccessCheck {
   allowed: boolean
-  /** Motif du refus, affiché en infobulle sur le bouton désactivé. */
+  /** Motif du refus, à afficher **visiblement** près de l'action désactivée. */
   reason: string | null
+  /**
+   * Les droits sont-ils encore en cours de chargement ?
+   *
+   * Distinguer ce cas du refus est indispensable : tant que la réponse de
+   * `/me/permissions` n'est pas arrivée, on ne sait pas si l'action est
+   * permise. Afficher un cadenas pendant ce laps de temps fait passer une
+   * attente pour une interdiction, et c'est ce qui faisait croire à un
+   * « Nouveau lavage » refusé alors qu'il était simplement pas encore prêt.
+   */
+  loading: boolean
 }
 
 /** Vérifie une permission de rôle seule. */
 export function usePermission(permission: Permission): AccessCheck {
   const { state, can, loading } = usePermissions()
-  if (loading) return { allowed: false, reason: null }
-  if (can(permission)) return { allowed: true, reason: null }
+  if (loading) return { allowed: false, reason: null, loading: true }
+  if (can(permission)) return { allowed: true, reason: null, loading: false }
 
-  const label = state?.permission_labels?.[permission]
-  const roleLabel = state ? ROLE_LABELS[state.role] ?? state.role_label : "votre rôle"
+  // Chargement terminé mais aucun état : la requête a échoué. Accuser le rôle
+  // serait un mensonge — et « votre rôle (votre rôle) » était la phrase que
+  // cette branche produisait réellement.
+  if (!state) {
+    return {
+      allowed: false,
+      loading: false,
+      reason: "Vos droits n'ont pas pu être chargés. Rechargez la page ou reconnectez-vous.",
+    }
+  }
+
+  const label = state.permission_labels?.[permission]
+  const roleLabel = ROLE_LABELS[state.role] ?? state.role_label
   return {
     allowed: false,
+    loading: false,
     reason: label
       ? `${label} : action réservée. Votre rôle (${roleLabel}) ne dispose pas de ce droit.`
       : `Action non autorisée pour votre rôle (${roleLabel}).`,
@@ -158,6 +180,10 @@ export function useAccess(permission: Permission, capability?: Capability): Acce
   const capabilityCheck = useCapability(capability ?? "washes.create")
 
   if (!permissionCheck.allowed) return permissionCheck
-  if (!capability) return { allowed: true, reason: null }
-  return { allowed: capabilityCheck.allowed, reason: capabilityCheck.reason }
+  if (!capability) return { allowed: true, reason: null, loading: false }
+  return {
+    allowed: capabilityCheck.allowed,
+    reason: capabilityCheck.reason,
+    loading: capabilityCheck.loading,
+  }
 }

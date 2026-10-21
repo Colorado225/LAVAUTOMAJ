@@ -223,23 +223,40 @@ export function useSubscription(): SubscriptionContextValue {
 
 export interface CapabilityCheck {
   allowed: boolean
-  /** Explication affichée en infobulle sur un bouton désactivé. */
+  /** Explication à afficher **visiblement** près de l'action désactivée. */
   reason: string | null
   readOnly: boolean
+  /** L'abonnement est-il encore en cours de chargement ? Voir `AccessCheck`. */
+  loading: boolean
 }
 
 /** Droit d'exécuter une action, avec le motif du refus. */
 export function useCapability(capability: Capability): CapabilityCheck {
-  const { state, can, readOnly } = useSubscription()
+  const { state, can, readOnly, loading } = useSubscription()
   const allowed = can(capability)
-  if (allowed) return { allowed: true, reason: null, readOnly }
+  if (allowed) return { allowed: true, reason: null, readOnly, loading: false }
 
-  const label = state?.capability_labels?.[capability] ?? "Cette action"
+  // Tant que l'abonnement n'est pas chargé, on ne sait pas ce que le forfait
+  // permet. Annoncer « non inclus dans votre forfait » à ce moment-là serait
+  // une explication inventée.
+  if (loading) return { allowed: false, reason: null, readOnly, loading: true }
+
+  if (!state) {
+    return {
+      allowed: false,
+      readOnly,
+      loading: false,
+      reason: "Votre abonnement n'a pas pu être chargé. Rechargez la page ou reconnectez-vous.",
+    }
+  }
+
+  const label = state.capability_labels?.[capability] ?? "Cette action"
   return {
     allowed: false,
     readOnly,
+    loading: false,
     reason: readOnly
-      ? `${label} : votre essai gratuit de ${state?.trial_days ?? 14} jours est terminé. Choisissez un forfait pour réactiver les enregistrements.`
-      : `${label} n’est pas inclus dans votre forfait ${state?.plan_name ?? "actuel"}.`,
+      ? `${label} : votre essai gratuit de ${state.trial_days ?? 14} jours est terminé. Choisissez un forfait pour réactiver les enregistrements.`
+      : `${label} n’est pas inclus dans votre forfait ${state.plan_name ?? "actuel"}.`,
   }
 }
