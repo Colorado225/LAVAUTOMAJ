@@ -281,7 +281,41 @@ supplantée — sa suppression est une décision à prendre, pas un oubli.
   et sans emploi ; `washes.customer_id` n'est plus alimenté.
 - `clerk_webhook_events` : table morte, héritée d'une architecture abandonnée.
 - Deuxième instance impossible (limitation en mémoire, `setInterval`).
-- `wash_quality_events` absente ; messages de validation encore en anglais.
+- `wash_quality_events` absente.
+
+### Messages de validation — réglés le 21 octobre 2026
+
+Une saisie refusée renvoyait le message brut de la bibliothèque de validation :
+« Invalid option: expected one of "cash"|"orange_money" ». Inutilisable pour un
+caissier, qui ne sait ni ce qui est refusé, ni quoi corriger.
+
+Basculer la bibliothèque en français ne suffisait pas : elle produit alors
+« Entrée invalide : chaîne de caractères attendu, indéfini reçu ». Il manquait
+surtout **le nom du champ en cause**, qui est l'information la plus utile.
+
+Avant / après :
+
+| Avant | Après |
+|---|---|
+| `Invalid option: expected one of "cash"\|"orange_money"` | Le mode de paiement ne fait pas partie des choix possibles. |
+| `Invalid UUID` | La station n'est pas valide. Reprenez la sélection dans la liste. |
+| `Too small: expected number to be >=1` | Ligne 2 : la quantité doit être au moins 1. |
+| `Too big: expected number to be <=100000000` | Le montant ne peut pas dépasser 1 000 000 F. |
+| `Too big: expected number to be <=1439` | L'heure de début ne peut pas dépasser 23:59. |
+
+Les règles retenues :
+
+- **un message écrit à la main dans un validateur l'emporte toujours.**
+  « Sélectionnez au moins une prestation. » vaut mieux que toute phrase
+  générique ;
+- **aucune tournure ne s'accorde en genre**, puisque le libellé peut être
+  masculin ou féminin : « ne fait pas partie des choix possibles » plutôt que
+  « n'est pas reconnu » ;
+- **les bornes se relisent dans l'unité du métier** : les centimes en francs,
+  les millièmes en unités, les minutes depuis minuit en heures ;
+- **une borne exclusive ne se dit pas comme une borne inclusive** :
+  `.positive()` donne « doit dépasser 0 », jamais « au moins 0 » ;
+- un champ absent du lexique reste lisible : `widget_id` devient « widget ».
 
 ### Coût de référence d'un produit — réglé le 21 octobre 2026
 

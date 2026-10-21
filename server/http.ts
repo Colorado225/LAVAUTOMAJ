@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from "express"
 import { z } from "zod"
 import { HttpError } from "./auth.ts"
 import { deniedMessage, type Permission } from "./permissions.ts"
+import { describeIssues } from "./validation-messages.ts"
 
 export { HttpError } from "./auth.ts"
 
@@ -15,7 +16,7 @@ export function asyncRoute(fn: (req: Request, res: Response, next: NextFunction)
 export function body<T extends z.ZodTypeAny>(schema: T, value: unknown): z.infer<T> {
   const result = schema.safeParse(value)
   if (!result.success) {
-    throw new HttpError(400, "invalid_data", result.error.issues.map((i) => i.message).join("; "))
+    throw new HttpError(400, "invalid_data", describeIssues(result.error.issues, value))
   }
   return result.data
 }
