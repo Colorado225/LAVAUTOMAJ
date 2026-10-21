@@ -52,7 +52,7 @@ export function PlanStep({ progress, onDone, onQuit }: OnboardingWizardProps) {
     setSaving(true)
     setServerError(null)
     try {
-      // Le plan_code provient du catalogue Neon, validé à nouveau côté serveur.
+      // Le plan_code provient du catalogue serveur, validé à nouveau côté serveur.
       const response = await saveStage("plan", { plan: selectedCode }, selectedCode ?? undefined, quit)
       if (!response.ok) {
         const text = await response.text()

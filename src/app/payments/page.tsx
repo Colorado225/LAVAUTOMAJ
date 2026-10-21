@@ -17,7 +17,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
+import { useApi } from "@/lib/api"
+import { useMutation } from "@/lib/use-mutation"
 import { useAccess } from "@/lib/permissions"
 import { actionGate } from "@/lib/action-blocking"
 import { BlockedReason } from "@/components/access/blocked-reason"
@@ -54,8 +55,11 @@ export default function PaymentsPage() {
   const [status, setStatus] = React.useState<(typeof STATUS_FILTERS)[number]["value"]>("all")
   const [method, setMethod] = React.useState<string>("all")
   const [refreshKey, setRefreshKey] = React.useState(0)
-  const [busyId, setBusyId] = React.useState<string | null>(null)
-  const [error, setError] = React.useState<string | null>(null)
+  // Une seule écriture à la fois sur cette page : le contrôleur porte la
+  // ligne occupée et le message d'échec.
+  const mutation = useMutation()
+  const busyId = mutation.busyKey
+  const error = mutation.error
   const [confirmedId, setConfirmedId] = React.useState<string | null>(null)
 
   const { data, loading, error: loadError } = useApi<PaymentsResponse>(
@@ -68,23 +72,14 @@ export default function PaymentsPage() {
       "Motif du remboursement (conservé dans le journal d’audit) :",
     )
     if (!reason || reason.trim().length < 3) return
-    setBusyId(paymentId)
-    setError(null)
-    try {
-      const response = await apiFetch(`/api/v1/payments/${paymentId}/refund`, {
-        method: "POST",
-        body: JSON.stringify({ reason: reason.trim() }),
-      })
-      if (!response.ok) {
-        setError(await apiErrorMessage(response))
-        return
-      }
-      setRefreshKey((key) => key + 1)
-    } catch {
-      setError("Remboursement impossible : serveur injoignable.")
-    } finally {
-      setBusyId(null)
-    }
+    const outcome = await mutation.run({
+      url: `/api/v1/payments/${paymentId}/refund`,
+      method: "POST",
+      body: { reason: reason.trim() },
+      failure: "Remboursement impossible : serveur injoignable.",
+      busyKey: paymentId,
+    })
+    if (outcome.ok) setRefreshKey((key) => key + 1)
   }
 
   const totals = data?.totals_by_method ?? []
@@ -92,24 +87,16 @@ export default function PaymentsPage() {
   const verifiedTotal = totals.reduce((sum, row) => sum + row.verified_cents, 0)
 
   async function confirmPayment(id: string) {
-    setBusyId(id)
-    setError(null)
-    try {
-      const response = await apiFetch(`/api/v1/payments/${id}/verify`, {
-        method: "POST",
-        body: JSON.stringify({}),
-      })
-      if (!response.ok) {
-        setError(await apiErrorMessage(response))
-        return
-      }
-      setConfirmedId(id)
-      setRefreshKey((key) => key + 1)
-    } catch {
-      setError("Confirmation impossible : serveur injoignable.")
-    } finally {
-      setBusyId(null)
-    }
+    const outcome = await mutation.run({
+      url: `/api/v1/payments/${id}/verify`,
+      method: "POST",
+      body: {},
+      failure: "Confirmation impossible : serveur injoignable.",
+      busyKey: id,
+    })
+    if (!outcome.ok) return
+    setConfirmedId(id)
+    setRefreshKey((key) => key + 1)
   }
 
   return (

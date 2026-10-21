@@ -39,7 +39,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
+import { useApi } from "@/lib/api"
+import { useMutation } from "@/lib/use-mutation"
 import type { CurrentMember } from "@/lib/team-api"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
@@ -95,6 +96,9 @@ function formatXof(cents: number) {
   return `${(cents / 100).toLocaleString("fr-CI", { maximumFractionDigits: 2 })} XOF`
 }
 
+/** Clé d'occupation du formulaire, distincte des clés de ligne. */
+const FORM_KEY = "formulaire"
+
 export default function ServicesPage() {
   const manageCatalog = useAccess("service:manage", "catalog.manage")
   // Ouvrir un formulaire n'écrit rien : on reste cliquable pendant que les
@@ -131,10 +135,11 @@ export default function ServicesPage() {
     [categories, form.category_id],
   )
   const [search, setSearch] = useState("")
-  const [saving, setSaving] = useState(false)
-  const [busyServiceId, setBusyServiceId] = useState<string | null>(null)
-  const [mutationError, setMutationError] = useState<string | null>(null)
-  const [mutationSuccess, setMutationSuccess] = useState<string | null>(null)
+  // Un seul contrôleur remplace « saving », « busyServiceId » et les deux
+  // messages : c'est la même écriture, elle n'avait pas à vivre en quatre
+  // états qu'il fallait penser à synchroniser.
+  const mutation = useMutation()
+  const saving = mutation.busyKey === FORM_KEY
 
   const filteredServices = useMemo(() => {
     const query = search.trim().toLocaleLowerCase("fr-CI")
@@ -144,8 +149,7 @@ export default function ServicesPage() {
   function openCreateDialog() {
     setEditingService(null)
     setForm(emptyForm())
-    setMutationError(null)
-    setMutationSuccess(null)
+    mutation.reset()
     setDialogOpen(true)
   }
 
@@ -160,8 +164,7 @@ export default function ServicesPage() {
         Object.entries(service.price_by_vehicle_type ?? {}).map(([k, v]) => [k, String(v / 100)])
       ),
     })
-    setMutationError(null)
-    setMutationSuccess(null)
+    mutation.reset()
     setDialogOpen(true)
   }
 
@@ -169,7 +172,7 @@ export default function ServicesPage() {
     if (open) setDialogOpen(true)
     else if (!saving) {
       setDialogOpen(false)
-      setMutationError(null)
+      mutation.reset()
     }
   }
 
@@ -179,61 +182,47 @@ export default function ServicesPage() {
     const priceCents = parseXofAmount(form.price_xof)
     const durationMinutes = form.duration_minutes.trim() ? Number(form.duration_minutes) : null
     if (!name || name.length > 100 || priceCents == null) {
-      setMutationError("Saisissez un nom (100 caractères maximum) et un prix valide.")
+      mutation.fail("Saisissez un nom (100 caractères maximum) et un prix valide.")
       return
     }
     if (durationMinutes !== null && (!Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 1440)) {
-      setMutationError("La durée doit être comprise entre 1 et 1 440 minutes.")
+      mutation.fail("La durée doit être comprise entre 1 et 1 440 minutes.")
       return
     }
 
-    setSaving(true)
-    setMutationError(null)
-    try {
-      const body = {
+    const outcome = await mutation.run({
+      url: editingService ? `/api/v1/services/${encodeURIComponent(editingService.id)}` : "/api/v1/services",
+      method: editingService ? "PATCH" : "POST",
+      body: {
         name,
         price_cents: priceCents,
         category_id: form.category_id,
         duration_minutes: durationMinutes,
         is_active: editingService?.is_active ?? true,
-      }
-      const response = await apiFetch(
-        editingService ? `/api/v1/services/${encodeURIComponent(editingService.id)}` : "/api/v1/services",
-        {
-          method: editingService ? "PATCH" : "POST",
-          body: JSON.stringify(body),
-        },
-      )
-      if (!response.ok) throw new Error(await apiErrorMessage(response))
-      setDialogOpen(false)
-      setMutationSuccess(editingService ? "La prestation a été mise à jour dans Neon." : "La prestation a été créée dans Neon.")
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Impossible d’enregistrer la prestation.")
-    } finally {
-      setSaving(false)
-    }
+      },
+      success: editingService ? "Prestation mise à jour." : "Prestation créée.",
+      failure: "Impossible d’enregistrer la prestation.",
+      busyKey: FORM_KEY,
+    })
+    if (!outcome.ok) return
+    setDialogOpen(false)
+    setRefreshKey((key) => key + 1)
   }
 
   async function toggleService(service: Service) {
     const nextStatus = !service.is_active
-    if (!nextStatus && !window.confirm(`Désactiver « ${service.name} » ? Les lavages historiques conserveront leurs prix enregistrés.`)) return
-    setBusyServiceId(service.id)
-    setMutationError(null)
-    setMutationSuccess(null)
-    try {
-      const response = await apiFetch(`/api/v1/services/${encodeURIComponent(service.id)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ is_active: nextStatus }),
-      })
-      if (!response.ok) throw new Error(await apiErrorMessage(response))
-      setMutationSuccess(nextStatus ? "La prestation a été réactivée dans Neon." : "La prestation a été désactivée dans Neon.")
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Impossible de modifier la prestation.")
-    } finally {
-      setBusyServiceId(null)
-    }
+    const outcome = await mutation.run({
+      url: `/api/v1/services/${encodeURIComponent(service.id)}`,
+      method: "PATCH",
+      body: { is_active: nextStatus },
+      confirm: nextStatus
+        ? undefined
+        : `Désactiver « ${service.name} » ? Les lavages historiques conserveront leurs prix enregistrés.`,
+      success: nextStatus ? "Prestation réactivée." : "Prestation désactivée.",
+      failure: "Impossible de modifier la prestation.",
+      busyKey: service.id,
+    })
+    if (outcome.ok) setRefreshKey((key) => key + 1)
   }
 
   return (
@@ -251,8 +240,8 @@ export default function ServicesPage() {
           )}
         </div>
 
-        {mutationSuccess && <p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">{mutationSuccess}</p>}
-        {mutationError && !dialogOpen && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{mutationError}</p>}
+        {mutation.success && <p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">{mutation.success}</p>}
+        {mutation.error && !dialogOpen && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{mutation.error}</p>}
         {!canManage && member && <p className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">La création et la modification du catalogue sont réservées au propriétaire et aux responsables.</p>}
 
         <Card>
@@ -295,7 +284,7 @@ export default function ServicesPage() {
                         /* La ligne en cours de modification s'estompe : le
                            retour est immédiat, avant même la réponse serveur. */
                         className={`row-in transition-all duration-200 ${
-                          busyServiceId === service.id ? "scale-[0.995] opacity-50" : "hover:bg-muted/40"
+                          mutation.busyKey === service.id ? "scale-[0.995] opacity-50" : "hover:bg-muted/40"
                         }`}
                         style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
                       >
@@ -304,7 +293,7 @@ export default function ServicesPage() {
                         <TableCell>{service.duration_minutes ? `${service.duration_minutes} min` : "—"}</TableCell>
                         <TableCell className="text-right">{formatXof(service.price_cents)}</TableCell>
                         <TableCell><Badge variant={service.is_active ? "secondary" : "outline"}>{service.is_active ? "Active" : "Inactive"}</Badge></TableCell>
-                        {canManage && <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" disabled={catalogForm.disabled} title={catalogForm.reason ?? undefined} aria-label={`Modifier ${service.name}`} onClick={() => openEditDialog(service)}><Pencil className="size-4" /></Button><Button variant="ghost" size="icon" title={catalogWrite.reason ?? undefined} disabled={catalogWrite.disabled || busyServiceId === service.id} aria-label={service.is_active ? `Désactiver ${service.name}` : `Réactiver ${service.name}`} onClick={() => void toggleService(service)}>{busyServiceId === service.id ? <RefreshCw className="size-4 animate-spin" /> : service.is_active ? <ToggleLeft className="size-4" /> : <ToggleRight className="size-4" />}</Button></div></TableCell>}
+                        {canManage && <TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" disabled={catalogForm.disabled} title={catalogForm.reason ?? undefined} aria-label={`Modifier ${service.name}`} onClick={() => openEditDialog(service)}><Pencil className="size-4" /></Button><Button variant="ghost" size="icon" title={catalogWrite.reason ?? undefined} disabled={catalogWrite.disabled || mutation.busyKey === service.id} aria-label={service.is_active ? `Désactiver ${service.name}` : `Réactiver ${service.name}`} onClick={() => void toggleService(service)}>{mutation.busyKey === service.id ? <RefreshCw className="size-4 animate-spin" /> : service.is_active ? <ToggleLeft className="size-4" /> : <ToggleRight className="size-4" />}</Button></div></TableCell>}
                       </TableRow>
                     ))}
                   </TableBody>
@@ -319,7 +308,7 @@ export default function ServicesPage() {
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{editingService ? "Modifier la prestation" : "Nouvelle prestation"}</DialogTitle>
-            <DialogDescription>Les changements sont enregistrés dans la base Neon de l’organisation active.</DialogDescription>
+            <DialogDescription>Les changements sont enregistrés immédiatement pour la station active.</DialogDescription>
           </DialogHeader>
           <form onSubmit={saveService} className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
@@ -333,7 +322,7 @@ export default function ServicesPage() {
                 </Select>
               </label>
             </div>
-            {mutationError && <p role="alert" className="text-sm text-destructive">{mutationError}</p>}
+            {mutation.error && <p role="alert" className="text-sm text-destructive">{mutation.error}</p>}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => handleDialogChange(false)} disabled={saving}>Annuler</Button>
               <Button type="submit" disabled={saving || !form.name.trim() || parseXofAmount(form.price_xof) == null}>{saving && <RefreshCw className="mr-2 size-4 animate-spin" />}{editingService ? "Enregistrer" : "Créer la prestation"}</Button>

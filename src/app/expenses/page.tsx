@@ -5,7 +5,8 @@ import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
 import { actionGate } from "@/lib/action-blocking"
 import { BlockedReason } from "@/components/access/blocked-reason"
-import { apiFetch, useApi } from "@/lib/api"
+import { useApi } from "@/lib/api"
+import { useMutation } from "@/lib/use-mutation"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import {
   Table,
@@ -114,6 +115,9 @@ interface CreateExpenseRequest {
   cash_session_id?: string
 }
 
+/** Clé d'occupation du formulaire. */
+const FORM_KEY = "formulaire"
+
 export default function ExpensesPage() {
   const manageExpenses = useAccess("expense:create", "expenses.manage")
   // Le formulaire s'ouvre dans une boîte de dialogue : rien n'est écrit tant
@@ -130,12 +134,13 @@ export default function ExpensesPage() {
   const { data: cashSessions } = useApi<CashSession[]>(`/api/v1/cash-sessions?status=open&refresh=${refreshKey}`)
 
   const [open, setOpen] = useState(false)
-  const [saving, setSaving] = useState(false)
+  // Le contrôleur porte l'occupation et les deux messages de l'écriture.
+  const mutation = useMutation()
+  const saving = mutation.busyKey === FORM_KEY
   const [saveSuccess, flashSaveSuccess] = useSuccessFlash()
   // La dépense qui vient d'être créée est surlignée brièvement dans la liste.
   const [highlightedExpenseId, setHighlightedExpenseId] = useState<string | null>(null)
-  const [mutationError, setMutationError] = useState<string | null>(null)
-  const [mutationSuccess, setMutationSuccess] = useState<string | null>(null)
+
   const idempotencyKeys = useRef(new Map<string, string>())
 
   // Form fields
@@ -168,74 +173,65 @@ export default function ExpensesPage() {
     setDescription("")
     setReference("")
     setCashSessionId("")
-    setMutationError(null)
-    setMutationSuccess(null)
+    mutation.reset()
   }
 
   async function submitExpense(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setMutationError(null)
-    setMutationSuccess(null)
+    mutation.reset()
 
     if (!category) {
-      setMutationError("Veuillez sélectionner une catégorie.")
+      mutation.fail("Veuillez sélectionner une catégorie.")
       return
     }
     if (amountCents == null || amountCents <= 0) {
-      setMutationError("Le montant doit être un nombre positif valide.")
+      mutation.fail("Le montant doit être un nombre positif valide.")
       return
     }
     if (needsCashSession && !cashSessionId) {
-      setMutationError("Une session de caisse ouverte est requise pour les paiements en espèces.")
+      mutation.fail("Une session de caisse ouverte est requise pour les paiements en espèces.")
       return
     }
 
-    setSaving(true)
-    try {
-      const body: CreateExpenseRequest = {
-        category,
-        amount_cents: amountCents,
-        payment_method: paymentMethod,
-      }
-
-      if (siteId) body.site_id = siteId
-      if (beneficiary) body.beneficiary = beneficiary
-      if (description) body.description = description
-      if (reference) body.reference = reference
-      if (cashSessionId) body.cash_session_id = cashSessionId
-
-      const fingerprint = JSON.stringify(body)
-      let requestKey = idempotencyKeys.current.get(fingerprint)
-      if (!requestKey) {
-        requestKey = createIdempotencyKey()
-        idempotencyKeys.current.set(fingerprint, requestKey)
-      }
-
-      const response = await apiFetch("/api/v1/expenses", {
-        method: "POST",
-        headers: { "Idempotency-Key": requestKey },
-        body: JSON.stringify(body),
-      })
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(errorText || `Erreur ${response.status}`)
-      }
-
-      idempotencyKeys.current.clear()
-      const created = (await response.json().catch(() => null)) as { id?: string } | null
-      if (created?.id) setHighlightedExpenseId(created.id)
-      flashSaveSuccess()
-      setMutationSuccess("Dépense enregistrée avec succès !")
-      setTimeout(() => {
-        setOpen(false)
-        resetForm()
-        setRefreshKey((key) => key + 1)
-      }, 1500)
-    } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Échec de l'enregistrement de la dépense.")
-    } finally {
-      setSaving(false)
+    const body: CreateExpenseRequest = {
+      category,
+      amount_cents: amountCents,
+      payment_method: paymentMethod,
     }
+    if (siteId) body.site_id = siteId
+    if (beneficiary) body.beneficiary = beneficiary
+    if (description) body.description = description
+    if (reference) body.reference = reference
+    if (cashSessionId) body.cash_session_id = cashSessionId
+
+    // Même dépense renvoyée deux fois = même clé : le serveur n'en crée
+    // qu'une. La clé n'est oubliée qu'une fois l'écriture acceptée.
+    const fingerprint = JSON.stringify(body)
+    let requestKey = idempotencyKeys.current.get(fingerprint)
+    if (!requestKey) {
+      requestKey = createIdempotencyKey()
+      idempotencyKeys.current.set(fingerprint, requestKey)
+    }
+
+    const outcome = await mutation.run<{ id?: string }>({
+      url: "/api/v1/expenses",
+      method: "POST",
+      headers: { "Idempotency-Key": requestKey },
+      body,
+      success: "Dépense enregistrée avec succès !",
+      failure: "Échec de l'enregistrement de la dépense.",
+      busyKey: FORM_KEY,
+    })
+    if (!outcome.ok) return
+
+    idempotencyKeys.current.clear()
+    if (outcome.data?.id) setHighlightedExpenseId(outcome.data.id)
+    flashSaveSuccess()
+    setTimeout(() => {
+      setOpen(false)
+      resetForm()
+      setRefreshKey((key) => key + 1)
+    }, 1500)
   }
 
   function handleOpenChange(isOpen: boolean) {
@@ -284,14 +280,14 @@ export default function ExpensesPage() {
               </DialogHeader>
 
               <form onSubmit={submitExpense} className="space-y-6 py-4">
-                {mutationError && (
+                {mutation.error && (
                   <div className="p-3 bg-destructive/10 text-destructive rounded-md text-sm">
-                    {mutationError}
+                    {mutation.error}
                   </div>
                 )}
-                {mutationSuccess && (
+                {mutation.success && (
                   <div className="p-3 bg-green-100 text-green-800 rounded-md text-sm">
-                    {mutationSuccess}
+                    {mutation.success}
                   </div>
                 )}
 
