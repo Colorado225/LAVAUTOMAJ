@@ -21,6 +21,7 @@ import type { Pool } from "pg"
 import { getPool } from "./db.ts"
 import { asyncRoute, body, tenant, parseId, requirePermission } from "./http.ts"
 import { HttpError } from "./auth.ts"
+import { requireCapability } from "./entitlements.ts"
 import { fingerprint, withIdempotency } from "./idempotency.ts"
 import { signedQuantity, canApply, isLowStock, inventoryDelta, UNITS } from "./stock-rules.ts"
 
@@ -270,6 +271,7 @@ export function createStockRouter() {
   r.get(
     "/product-categories",
     requirePermission("stock:read"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -284,6 +286,7 @@ export function createStockRouter() {
   r.post(
     "/product-categories",
     requirePermission("stock:manage"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(stockValidators.category, req.body)
@@ -310,6 +313,7 @@ export function createStockRouter() {
   r.get(
     "/products",
     requirePermission("stock:read"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -335,6 +339,7 @@ export function createStockRouter() {
   r.post(
     "/products",
     requirePermission("stock:manage"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(stockValidators.product, req.body)
@@ -413,6 +418,7 @@ export function createStockRouter() {
   r.patch(
     "/products/:id",
     requirePermission("stock:manage"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -489,6 +495,7 @@ export function createStockRouter() {
   r.get(
     "/stock-movements",
     requirePermission("stock:read"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const productId = typeof req.query.product_id === "string" ? parseId(req.query.product_id) : null
@@ -509,6 +516,7 @@ export function createStockRouter() {
   r.post(
     "/stock-movements",
     requirePermission("stock:move"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(stockValidators.movement, req.body)
@@ -591,6 +599,7 @@ export function createStockRouter() {
   r.post(
     "/products/:id/inventory",
     requirePermission("stock:move"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -652,6 +661,7 @@ export function createStockRouter() {
   r.post(
     "/stock-movements/:id/reverse",
     requirePermission("stock:move"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -736,6 +746,7 @@ export function createStockRouter() {
   r.get(
     "/services/:id/consumables",
     requirePermission("service:read"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -757,6 +768,7 @@ export function createStockRouter() {
   r.put(
     "/services/:id/consumables",
     requirePermission("service:manage"),
+    requireCapability("stock.manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)

@@ -5,6 +5,8 @@ import type * as React from "react"
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
+import { useCapability } from "@/lib/subscription"
+import { PlanGate } from "@/components/subscription/plan-gate"
 import { actionGate } from "@/lib/action-blocking"
 import { BlockedReason } from "@/components/access/blocked-reason"
 import { Badge } from "@/components/ui/badge"
@@ -91,6 +93,9 @@ export default function StockPage() {
   const readStock = useAccess("stock:read")
   const manageStock = useAccess("stock:manage")
   const moveStock = useAccess("stock:move")
+  // Le suivi du stock appartient au forfait Pro. « stock.read » n'est pas
+  // coupé en lecture seule : un espace échu reste consultable.
+  const planStock = useCapability("stock.manage")
 
   // Ouvrir un formulaire n'écrit rien : on laisse cliquer pendant que les
   // droits chargent. Enregistrer écrit tout de suite : on attend.
@@ -294,11 +299,30 @@ export default function StockPage() {
     setRefreshKey((key) => key + 1)
   }
 
+  // Le rôle est évalué avant le forfait : un caissier reçoit un refus de
+  // droit, jamais une invitation à payer pour une page qui ne le concerne pas.
   if (readStock.loading === false && readStock.allowed === false) {
     return (
       <BaseLayout title="Stock" description="Produits, mouvements et seuils d’alerte.">
         <div className="p-4">
           <BlockedReason reason={readStock.reason ?? "Vous n’avez pas accès au stock."} />
+        </div>
+      </BaseLayout>
+    )
+  }
+
+  if (planStock.loading === false && planStock.allowed === false) {
+    return (
+      <BaseLayout title="Stock" description="Produits, mouvements et seuils d’alerte.">
+        <div className="p-4">
+          <PlanGate
+            permission="stock:read"
+            capability="stock.manage"
+            title="Suivi du stock"
+            pitch="Comptez vos sachets d’Omo, vos bidons et vos chiffons, voyez ce qu’un lavage consomme réellement, et sachez quoi racheter avant la rupture."
+          >
+            <span />
+          </PlanGate>
         </div>
       </BaseLayout>
     )

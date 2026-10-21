@@ -612,3 +612,56 @@ hors route, a été ajouté ; la mutation est désormais détectée.
 
 **Tests** : 20 nouveaux (`tests/service-consumables.test.ts`), suite à
 **513/513**. `tsc -b` 0, build ✓, lint 0 erreur / 21 warnings.
+
+### 21 octobre 2026 — Le stock bascule en forfait Pro
+
+**Décision commerciale**, prise après la livraison de L4 : le suivi du stock
+n'est plus ouvert à tous les forfaits. Il rejoint Pro, aux côtés de la
+traçabilité et des rapports détaillés. La grille publique l'annonce
+désormais ; elle ne le mentionnait nulle part auparavant.
+
+| | |
+| --- | --- |
+| Capacité | `stock.manage`, libellé « Suivi du stock de consommables » |
+| Forfaits | Starter non · Pro oui · Business oui |
+| Point de blocage | `requireCapability` sur les **11** routes de stock |
+| Écran | `PlanGate` sur `/stock`, argumentaire et lien vers les forfaits |
+| Catalogue | le bouton « consommables » disparaît des fiches de prestation |
+
+**Le piège de conception, et comment il a été vu.** J'avais d'abord créé deux
+capacités, `stock.read` et `stock.manage`, en inscrivant la seconde dans
+`WRITE_CAPABILITIES` — en croyant y ajouter une restriction. Cette liste ne
+restreint pas : elle **court-circuite le forfait**
+(`capabilities[c] = !readOnly`, les options du plan ne sont plus lues). Le
+résultat était l'inverse de l'intention : Starter obtenait le droit d'écrire
+dans le stock tout en se voyant refuser la lecture. Le test l'a montré en
+renvoyant 201 là où 402 était attendu.
+
+Corrigé en ramenant le tout à **une seule capacité**, simple option de
+forfait. Deux clés au comportement strictement identique auraient de toute
+façon été un piège pour le prochain lecteur. Un test porte désormais ce
+constat, pour que l'erreur ne puisse pas revenir.
+
+**Ce que la rétrogradation ne fait pas.** Elle ne supprime rien et n'écrit
+rien en douce. Une station repassée en Starter garde ses produits, ses
+mouvements et ses recettes ; enregistrer un lavage reste possible — c'est le
+métier même de Starter — mais ne déduit plus. Le stock se fige, à inventorier
+au retour en Pro, plutôt que d'être faussé sans que personne puisse le voir.
+
+**Vérifié en conditions réelles** sur la base persistée. Sur Starter : les
+trois routes de lecture répondent 402 `plan_upgrade_required` avec le message
+« Suivi du stock de consommables n'est pas inclus dans votre forfait actuel »,
+tandis que le caissier reçoit 403 — le rôle est évalué avant l'argent, et on
+ne propose jamais un forfait à qui la page ne concerne pas. Un lavage de
+2 prestations a été enregistré (6 000 F) sur une prestation dont la recette
+déclare 2 sachets : le produit visé est **resté à 5 sachets**. La bascule vers
+Pro a ensuite été jouée par le vrai parcours — souscription, déclaration de
+paiement, validation en console — et le stock est redevenu lisible.
+
+**Tests** : 12 nouveaux (`tests/stock-plan.test.ts`), suite à **525/525**.
+Cinq mutations éprouvées, toutes détectées, dont la remise de `stock.manage`
+dans `WRITE_CAPABILITIES`.
+
+**Reste à faire, mineur** : `stock_movements.wash_id` est enregistré en base
+mais n'est pas exposé par `GET /stock-movements`. Le relier à l'écran
+permettrait de cliquer d'un mouvement vers le lavage qui l'a provoqué.

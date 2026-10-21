@@ -152,6 +152,8 @@ des garde-fous (section 7).
 | Pro | Gestion des équipes et attributions | ⚠️ différenciée par le plafond (voir 7.2) |
 | Pro | Suivi des sessions de caisse | ⚠️ disponible aussi en Starter (voir 7.2) |
 | Pro | Suivi des dépenses et marges opérationnelles | ✅ |
+| Pro | Stock des consommables : niveaux, seuils, inventaire | ✅ *(ajouté 21/10)* |
+| Pro | Déduction automatique du stock à chaque lavage | ✅ *(ajouté 21/10)* |
 | Pro | Rapports détaillés et exports | ✅ |
 | Pro | Historique des opérations et traçabilité | ✅ *(ajouté)* |
 | Pro | Assistance prioritaire | ✅ *(délai de réponse mesuré)* |
@@ -242,6 +244,7 @@ aucun bouton pour le rôle, étincelle et « Voir les forfaits » pour le forfai
 | Fonction | Forfait minimum | Point de blocage serveur |
 |---|---|---|
 | Historique des opérations | Pro | `requireCapability("audit.read")` sur `/audit-logs` |
+| Suivi du stock | Pro | `requireCapability("stock.manage")` sur les **11** routes de stock |
 | Regroupement semaine / mois | Pro | 402 dans `/reports/summary` si `granularity ≠ day` |
 | Export des rapports | Pro | `reports.export` (construit côté client, gardé à l'affichage) |
 | Vue et rapports consolidés | Business | `by_site` vide hors `reports.consolidated` |
@@ -259,6 +262,25 @@ sous Pro :
   laveurs, la fiche de lavage Starter perd son intérêt. La différenciation
   passe par le **plafond**, déjà appliqué : 3 laveurs en Starter, 20 en Pro,
   illimité en Business. C'est la limite qui se vend, pas la fonction.
+
+**Le cas du stock, arbitré le 21 octobre 2026.** La décision est « le stock
+bascule en Pro ». Elle soulevait une difficulté : la déduction automatique est
+déclenchée par l'**enregistrement d'un lavage**, qui est précisément ce que
+Starter vend. Trois règles la résolvent :
+
+1. **Les onze routes de stock répondent 402** sur Starter. Le verrou est au
+   serveur ; masquer l'entrée de menu n'aurait été qu'un décor.
+2. **Enregistrer un lavage reste ouvert à Starter**, et ne déduit rien. On
+   n'écrit pas dans un stock que le client ne peut ni consulter ni corriger :
+   une station rétrogradée retrouve son stock **figé** là où il était, à
+   inventorier, plutôt que silencieusement faussé.
+3. **La contrepassation à l'annulation n'est pas soumise au forfait.** S'il
+   n'y a rien à contrepasser, elle ne fait rien ; s'il y a quelque chose,
+   c'est qu'une consommation a bien eu lieu, et la laisser en place
+   fausserait un stock déjà écrit.
+
+Rien n'est supprimé à la rétrogradation : produits, mouvements et recettes
+restent en base et réapparaissent intacts dès le retour en Pro.
 
 Ces deux lignes de la grille publique sont donc **tenues en partie seulement**.
 Recommandation : reformuler la ligne Pro « Suivi des sessions de caisse » en

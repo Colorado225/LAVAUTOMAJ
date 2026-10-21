@@ -51,6 +51,7 @@ export const CAPABILITIES = [
   "reports.consolidated",
   "audit.read",
   "sites.multiple",
+  "stock.manage",
 ] as const
 
 export type Capability = (typeof CAPABILITIES)[number]
@@ -69,6 +70,7 @@ export const CAPABILITY_LABELS: Record<Capability, string> = {
   "reports.consolidated": "Rapports consolidés et vue multi-stations",
   "audit.read": "Historique des opérations et traçabilité",
   "sites.multiple": "Gestion multi-stations",
+  "stock.manage": "Suivi du stock de consommables",
 }
 
 /** Capacités coupées dès que l'organisation passe en lecture seule. */

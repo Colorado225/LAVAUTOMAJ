@@ -582,7 +582,16 @@ export function createApiRouter() {
           // Ce que le lavage a consommé sort du stock dans la même
           // transaction : si le lavage échoue, rien n'est déduit. Jamais
           // bloquant — le produit a réellement été utilisé.
-          await consumeForWash(client, t.organizationId, wash.id, input.items, t.userId)
+          //
+          // Le suivi du stock appartient au forfait Pro. Sans lui, on ne
+          // déduit rien : écrire dans un stock que le client ne peut ni
+          // consulter ni corriger reviendrait à le fausser en silence. Une
+          // station rétrogradée retrouve donc son stock figé là où il était,
+          // à inventorier. Et en aucun cas l'absence de forfait n'empêche
+          // d'enregistrer le lavage : c'est le métier même de Starter.
+          if (req.subscription?.capabilities["stock.manage"]) {
+            await consumeForWash(client, t.organizationId, wash.id, input.items, t.userId)
+          }
 
           for (const workerId of new Set(input.worker_ids)) {
             await client.query("INSERT INTO wash_assignments(wash_id, worker_id) VALUES($1,$2)", [wash.id, workerId])
@@ -659,6 +668,11 @@ export function createApiRouter() {
 
         // Le lavage n'a pas eu lieu : ce qu'il avait consommé revient au
         // stock, par contrepassation et non par suppression.
+        //
+        // Volontairement non soumise au forfait, contrairement à la
+        // déduction : s'il n'y a rien à contrepasser, l'appel ne fait rien.
+        // S'il y a quelque chose, c'est qu'une consommation a bien eu lieu,
+        // et la laisser en place fausserait un stock déjà écrit.
         await reverseWashConsumption(client, t.organizationId, id, t.userId)
 
         const q = await client.query(

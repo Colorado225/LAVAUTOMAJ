@@ -91,6 +91,8 @@ export const PRICING_PLANS: PricingPlan[] = [
       "Gestion des équipes et des attributions",
       "Suivi des sessions de caisse",
       "Suivi des dépenses et des marges opérationnelles",
+      "Stock des consommables : niveaux, seuils d’alerte et inventaire",
+      "Déduction automatique du stock à chaque lavage",
       "Rapports détaillés et exports",
       "Historique des opérations et traçabilité",
       `Assistance prioritaire : réponse sous ${publicResponseLabel(PUBLIC_RESPONSE_HOURS.pro)}`,
