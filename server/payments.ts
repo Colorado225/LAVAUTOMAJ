@@ -4,6 +4,7 @@ import type { Pool } from "pg"
 import { getPool } from "./db.ts"
 import { asyncRoute, body, tenant, parseId, requirePermission, HttpError } from "./http.ts"
 import { fingerprint, withIdempotency } from "./idempotency.ts"
+import { issueReceipt, receiptHistory, renderReceiptText } from "./receipt.ts"
 
 // ---------------------------------------------------------------------------
 // Encaissements
@@ -113,6 +114,47 @@ const PAYMENT_FIELDS = `p.id, p.wash_id, p.method, p.amount_cents, p.status, p.r
 
 export function createPaymentsRouter() {
   const r = Router()
+
+  // ---------------------------------------------------------------------------
+  // POST /api/v1/washes/:id/receipt — émettre le reçu 80 mm d'un lavage.
+  //
+  // POST et non GET, parce que l'émission n'est pas une lecture : elle attribue
+  // un numéro de copie et laisse une trace. Ouvrir le reçu, c'est l'émettre.
+  // Un GET silencieux permettrait d'imprimer autant de papiers qu'on veut sans
+  // que le compteur de duplicata bouge, ce qui viderait la mention DUPLICATA de
+  // son sens.
+  //
+  // Permission `payment:read` : remettre au client la preuve de ce qu'il a payé
+  // appartient à qui voit les encaissements — le caissier, le gérant, le
+  // propriétaire. Un agent de lavage ne voit pas les paiements et n'imprime pas.
+  // ---------------------------------------------------------------------------
+  r.post(
+    "/washes/:id/receipt",
+    requirePermission("payment:read"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const washId = parseId(req.params.id)
+      const receipt = await issueReceipt(db(), {
+        organizationId: t.organizationId,
+        washId,
+        userId: t.userId,
+      })
+      // Le rendu texte accompagne les données : une station dont le pilote
+      // d'imprimante n'accepte que du texte brut l'envoie tel quel.
+      res.status(201).json({ receipt, text: renderReceiptText(receipt) })
+    }),
+  )
+
+  // GET /api/v1/washes/:id/receipt/history — combien de papiers circulent.
+  r.get(
+    "/washes/:id/receipt/history",
+    requirePermission("payment:read"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const washId = parseId(req.params.id)
+      res.json({ issues: await receiptHistory(db(), t.organizationId, washId) })
+    }),
+  )
 
   // GET /api/v1/payments?status=pending&method=wave&limit=100
   // Suivi des encaissements, canal par canal.

@@ -125,7 +125,11 @@ tests/               # Tests unitaires (node:test via tsx)
    justification de tout écart.
 4. **Annulation de lavage** : motif obligatoire, paiements marqués `refunded`, contre-passation
    en caisse si la session d'origine est encore ouverte.
-5. **Abonnement** : essai de 14 jours à l'inscription, puis lecture seule à
+5. **Reçu de lavage** : format thermique 80 mm imprimé par le navigateur, un reçu
+   par lavage (prestations, règlements, solde restant). Toute réimpression porte
+   la mention DUPLICATA et laisse une trace. Ce n'est **pas** un reçu normalisé
+   de la DGI — voir [`RECU-LAVAGE.md`](RECU-LAVAGE.md).
+6. **Abonnement** : essai de 14 jours à l'inscription, puis lecture seule à
    l'expiration. Le client demande l'activation depuis l'application
    (`POST /support/upgrade-request`) ; l'éditeur encaisse hors application et
    valide — ou décline — depuis la console `/console`. Voir

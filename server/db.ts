@@ -172,6 +172,23 @@ CREATE TABLE IF NOT EXISTS wash_items (
  service_id uuid REFERENCES services(id), service_name text NOT NULL, quantity integer NOT NULL CHECK(quantity > 0),
  unit_price_cents integer NOT NULL CHECK(unit_price_cents >= 0), line_total_cents integer NOT NULL CHECK(line_total_cents >= 0)
 );
+-- Emissions de recu.
+--
+-- Une ligne par impression, pas une par lavage : c'est le nombre de copies
+-- qui compte. Un recu est une preuve de paiement, et deux papiers
+-- indiscernables pour un seul versement permettent de justifier deux fois la
+-- meme somme. La copie n.2 et les suivantes portent la mention DUPLICATA.
+CREATE TABLE IF NOT EXISTS receipt_issues (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ organization_id uuid NOT NULL REFERENCES organizations(id),
+ wash_id uuid NOT NULL REFERENCES washes(id),
+ copy_number integer NOT NULL CHECK(copy_number > 0),
+ issued_by uuid REFERENCES users(id),
+ issued_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(wash_id, copy_number)
+);
+CREATE INDEX IF NOT EXISTS receipt_issues_wash_idx ON receipt_issues(wash_id, copy_number DESC);
+
 CREATE TABLE IF NOT EXISTS wash_assignments (
  wash_id uuid NOT NULL REFERENCES washes(id), worker_id uuid NOT NULL REFERENCES workers(id), PRIMARY KEY(wash_id,worker_id)
 );

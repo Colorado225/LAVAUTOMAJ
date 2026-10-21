@@ -519,3 +519,62 @@ html[data-theme-transition]::view-transition-new(root) {
     animation: none !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Reçu thermique 80 mm
+   ---------------------------------------------------------------------------
+   Impression par le navigateur plutôt que par un pilote ESC/POS : aucune
+   dépendance supplémentaire, et la même page sort correctement d'une
+   imprimante de comptoir USB, d'un modèle Bluetooth Android ou d'un PDF.
+
+   La règle `visibility` plutôt que `display` est délibérée : masquer par
+   `display:none` casse la mise en page des ancêtres du reçu (il vit dans un
+   portail de dialogue), alors que `visibility:hidden` conserve l'arbre et
+   n'imprime rien. Le reçu est ensuite sorti du flux et collé en haut à
+   gauche de la page.
+
+   80 mm de papier = 72 mm imprimables sur la quasi-totalité des modèles. Le
+   reste est la marge mécanique du chariot ; écrire dedans fait disparaître
+   le bord droit des montants.
+--------------------------------------------------------------------------- */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  #recu-impression,
+  #recu-impression * {
+    visibility: visible !important;
+  }
+
+  #recu-impression {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 72mm !important;
+    max-width: 72mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  /* Une imprimante thermique ne connaît que le noir : tout aplat gris sort
+     en bavure et mange le papier. */
+  #recu-impression * {
+    background: transparent !important;
+    color: #000 !important;
+    box-shadow: none !important;
+  }
+
+  #recu-impression .recu-separateur {
+    border-top: 1px dashed #000 !important;
+  }
+}
+
+@page {
+  size: 80mm auto;
+  margin: 3mm;
+}

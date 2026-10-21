@@ -33,6 +33,7 @@ export const DEFAULT_GRACE_DAYS = 30
  */
 const PURGE_ORDER: { table: string; where: string }[] = [
   // Dépendances des lavages, qui ne portent pas d'organization_id.
+  { table: "receipt_issues", where: "organization_id = $1::uuid" },
   { table: "wash_items", where: "wash_id IN (SELECT id FROM washes WHERE organization_id = $1::uuid)" },
   { table: "wash_assignments", where: "wash_id IN (SELECT id FROM washes WHERE organization_id = $1::uuid)" },
   // Puis tout ce qui porte directement l'organisation.

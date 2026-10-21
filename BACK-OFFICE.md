@@ -749,7 +749,7 @@ l'adresse de l'opérateur.
 ## 11. Vérification
 
 ```bash
-# Suite complète (359 tests)
+# Suite complète (377 tests)
 NODE_ENV=test npm test
 
 # Ciblé

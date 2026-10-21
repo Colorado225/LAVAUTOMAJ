@@ -9,6 +9,7 @@ import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { Input } from "@/components/ui/input"
 import { PAYMENT_METHODS, paymentMethodLabel as methodLabel } from "@/lib/payments-api"
+import { WashReceiptButton } from "@/components/receipt/wash-receipt"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -116,6 +117,9 @@ export default function WashDetailPage() {
   const [saving, setSaving] = useState(false)
   const [mutationError, setMutationError] = useState<string | null>(null)
   const managePayments = useAccess("payment:create", "payments.manage")
+  // Remettre au client la preuve de ce qu'il a paye appartient a qui voit
+  // les encaissements : le serveur exige la meme permission.
+  const readPayments = useAccess("payment:read")
   const [paymentOpen, setPaymentOpen] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState<string>("cash")
   const [paymentAmount, setPaymentAmount] = useState("")
@@ -356,6 +360,14 @@ export default function WashDetailPage() {
                     {formatXof(paidCents)} / {formatXof(wash?.total_cents ?? 0)}
                   </span>
                 </div>
+
+                {/* Un lavage annulé ne donne aucun reçu : le papier prouverait
+                    un paiement pour une prestation qui n'a pas eu lieu. */}
+                {washID && readPayments.allowed && wash?.status !== "cancelled" && (
+                  <div className="mt-3">
+                    <WashReceiptButton washId={washID} />
+                  </div>
+                )}
 
                 {detail.payments.length === 0 ? (
                   <p className="mt-2 text-sm text-muted-foreground">Aucun paiement enregistré.</p>
