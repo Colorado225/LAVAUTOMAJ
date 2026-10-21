@@ -239,6 +239,50 @@ client réel puisse s'inscrire, payer et être servi.
 Tout le reste peut attendre ce premier client — et sera mieux conçu une fois
 qu'on l'aura écouté.
 
+## Enregistrer un lavage — revu le 21 octobre 2026
+
+### Ce qui a été cherché, et ce qui a été trouvé
+
+Le bouton « Nouveau lavage » était signalé comme non fonctionnel. L'examen
+n'a trouvé **aucun défaut à l'ouverture** du formulaire : la station est
+active, le droit `wash:create` est accordé, le forfait autorise
+`washes.create`, les deux chargements de droits se terminent toujours, et le
+service worker sert bien la dernière version. Un refus `cash_session_required`
+observé en ligne de commande venait de l'appel d'essai lui-même, qui omettait
+la session de caisse — le formulaire, lui, la transmet.
+
+Le blocage réel était **à la validation**, pas à l'ouverture : le bouton
+« Enregistrer » restait grisé sans que la raison saute aux yeux.
+
+### Ce qui a changé
+
+| Point | Avant | Maintenant |
+| --- | --- | --- |
+| Laveur | Case « Employés affectés (facultatif) », souvent laissée vide | « Qui lave ce véhicule ? » — **obligatoire**, la validation l'exige |
+| Aucun employé actif | « Aucun employé actif à affecter. », sans issue | Lien direct vers **Équipe** pour en ajouter un |
+| Reçu | Accessible seulement en rouvrant la fiche du lavage | Proposé **immédiatement après une vente intégralement réglée** |
+| Plaque sur le reçu | Absente | Ligne « Plaque », le client reconnaît sa voiture |
+| Station fermée | Restait proposée dans le formulaire | Écartée du formulaire, mais toujours nommée dans l'historique |
+
+### Deux choix assumés
+
+**L'exigence du laveur porte sur le formulaire, pas sur le serveur.** Un
+lavage ressaisi après coup, ou rejoué depuis la file hors ligne, peut
+légitimement n'avoir personne de nommé ; le refuser côté serveur ferait
+perdre des ventes déjà encaissées. Au comptoir, en revanche, le caissier a le
+laveur sous les yeux : c'est le seul moment où l'information est encore sûre.
+
+**Le reçu n'est pas émis tout seul.** Une ligne d'émission signifie qu'un
+papier est sorti ; l'émettre automatiquement fausserait le compte des copies.
+Il est donc proposé en un clic, pendant que le client est encore au comptoir.
+
+### Ce que cela laisse ouvert
+
+- Le reçu reste un reçu commercial, **jamais une facture normalisée** : aucune
+  mention TVA, FNE ou DGI, et les tests l'interdisent explicitement.
+- Un lavage enregistré sans laveur depuis la file hors ligne n'apparaîtra dans
+  aucune part de rendement. C'est la contrepartie du choix ci-dessus.
+
 ## Recensement du câblage — 21 octobre 2026
 
 Comparaison croisée entre les pages, les routes, le menu et l'API.

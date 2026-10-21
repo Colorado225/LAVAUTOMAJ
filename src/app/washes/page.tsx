@@ -24,12 +24,14 @@ import { SubmitButton } from "@/components/ui/submit-button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useSuccessFlash } from "@/hooks/use-success-flash"
+import { WashReceiptButton } from "@/components/receipt/wash-receipt"
 import { ArrowRight, Check, Droplets, Loader2, Lock, Plus } from "lucide-react"
 
 interface Site {
   id: string
   name: string
   city: string | null
+  is_active: boolean
 }
 
 interface VehicleCategory {
@@ -186,8 +188,23 @@ export default function WashesPage() {
   const [highlightedWashId, setHighlightedWashId] = useState<string | null>(null)
   const [mutationError, setMutationError] = useState<string | null>(null)
   const [mutationSuccess, setMutationSuccess] = useState<string | null>(null)
+  /**
+   * Lavage qui vient d'être intégralement réglé.
+   *
+   * Le reçu n'est pas émis tout seul : une ligne d'émission veut dire qu'un
+   * papier est sorti. On le propose donc en un clic, juste après la vente,
+   * tant que le client est encore devant le comptoir.
+   */
+  const [washToReceipt, setWashToReceipt] = useState<{ id: string; reference: string } | null>(null)
 
-  const activeSites = sites ?? []
+  // Deux listes, deux usages distincts.
+  //
+  // « allSites » sert à retrouver le nom d'une station dans l'historique :
+  // fermer une station ne doit pas effacer le nom des lavages déjà passés.
+  // « activeSites » sert au formulaire : on n'enregistre pas une vente sur
+  // une station qui ne tourne plus.
+  const allSites = sites ?? []
+  const activeSites = allSites.filter((site) => site.is_active)
 
   const washFormBlocked = washButtonState({
     sitesLoading,
@@ -232,6 +249,7 @@ export default function WashesPage() {
     siteId,
     vehicleCategoryId,
     selectedServiceCount: selectedServices.length,
+    assignedWorkerCount: selectedWorkerIds.length,
     amountIsValid,
     cashNeedsSession,
     cashSessionLoading,
@@ -242,6 +260,7 @@ export default function WashesPage() {
     setIdempotencyKey(null)
     setMutationError(null)
     setMutationSuccess(null)
+    setWashToReceipt(null)
   }
 
   function toggleService(serviceId: string, checked: boolean) {
@@ -276,9 +295,15 @@ export default function WashesPage() {
     event.preventDefault()
     setMutationError(null)
     setMutationSuccess(null)
+    // Le reçu de la vente précédente ne doit jamais survivre à celle-ci.
+    setWashToReceipt(null)
 
     if (!siteId || !vehicleCategoryId || selectedServices.length === 0) {
       setMutationError("Choisissez un site, une catégorie et au moins une prestation.")
+      return
+    }
+    if (selectedWorkerIds.length === 0) {
+      setMutationError("Indiquez qui lave ce véhicule avant de valider.")
       return
     }
     if (amountReceivedCents == null || amountReceivedCents > totalCents) {
@@ -323,8 +348,15 @@ export default function WashesPage() {
         throw new Error((await response.text()) || `Erreur ${response.status}`)
       }
       const replayed = response.headers.get("Idempotency-Replayed") === "true"
-      const created = (await response.json().catch(() => null)) as { id?: string } | null
+      const created = (await response.json().catch(() => null)) as
+        | { id?: string; reference?: string; payment_status?: string }
+        | null
       if (created?.id) setHighlightedWashId(created.id)
+      setWashToReceipt(
+        created?.id && created.payment_status === "paid"
+          ? { id: created.id, reference: created.reference ?? "" }
+          : null,
+      )
       flashSaveSuccess()
       setMutationSuccess(replayed ? "Cette opération avait déjà été enregistrée." : "Lavage enregistré avec succès.")
       setQuantities({})
@@ -441,7 +473,15 @@ export default function WashesPage() {
         )}
         {mutationSuccess && (
           <div className="rounded-md border border-emerald-600/30 bg-emerald-600/5 p-3 text-sm text-emerald-700 dark:text-emerald-400">
-            {mutationSuccess}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>
+                {mutationSuccess}
+                {washToReceipt && " Le client a réglé la totalité : remettez-lui son reçu."}
+              </span>
+              {washToReceipt && (
+                <WashReceiptButton washId={washToReceipt.id} label="Remettre le reçu au client" />
+              )}
+            </div>
           </div>
         )}
 
@@ -508,7 +548,7 @@ export default function WashesPage() {
                 <div className="flex flex-col gap-1.5 text-sm font-medium">
                   Site sélectionné
                   <div className="flex h-10 items-center rounded-md border bg-muted/40 px-3 text-muted-foreground">
-                    {activeSites.find((site) => site.id === siteId)?.name ?? "Aucun site"}
+                    {allSites.find((site) => site.id === siteId)?.name ?? "Aucun site"}
                   </div>
                 </div>
               </div>
@@ -580,7 +620,12 @@ export default function WashesPage() {
               </fieldset>
 
               <fieldset className="space-y-3">
-                <legend className="mb-2 text-sm font-semibold">Employés affectés <span className="font-normal text-muted-foreground">(facultatif)</span></legend>
+                <legend className="mb-2 text-sm font-semibold">
+                  Qui lave ce véhicule&nbsp;?{" "}
+                  <span className="font-normal text-muted-foreground">
+                    (obligatoire &mdash; plusieurs possibles, la part se partage)
+                  </span>
+                </legend>
                 {workersLoading ? (
                   <div className="flex flex-wrap gap-2" role="status" aria-busy="true" aria-label="Chargement des employés">
                     {[0, 1, 2].map((item) => (
@@ -592,7 +637,13 @@ export default function WashesPage() {
                     ))}
                   </div>
                 ) : activeWorkers.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Aucun employé actif à affecter.</p>
+                  <p className="text-sm text-muted-foreground">
+                    Aucun employé actif pour le moment. Ajoutez-le dans{" "}
+                    <Link to="/team" className="font-medium underline underline-offset-4">
+                      Équipe
+                    </Link>{" "}
+                    pour pouvoir enregistrer un lavage.
+                  </p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
                     {activeWorkers.map((worker) => {
@@ -751,7 +802,7 @@ export default function WashesPage() {
                         <WashReference washId={wash.id} reference={wash.reference} />
                       </TableCell>
                       <TableCell className="font-mono text-xs uppercase tabular-nums">{wash.plate ?? "—"}</TableCell>
-                      <TableCell>{activeSites.find((site) => site.id === wash.site_id)?.name ?? "—"}</TableCell>
+                      <TableCell>{allSites.find((site) => site.id === wash.site_id)?.name ?? "—"}</TableCell>
                       <TableCell>{activeCategories.find((category) => category.id === wash.vehicle_category_id)?.name ?? "—"}</TableCell>
                       <TableCell className="text-right">{formatXof(wash.total_cents)}</TableCell>
                       <TableCell>{washStatusLabel(wash.status)}</TableCell>

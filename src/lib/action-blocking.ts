@@ -111,6 +111,15 @@ export interface WashSubmitInput {
   siteId: string
   vehicleCategoryId: string
   selectedServiceCount: number
+  /**
+   * Combien de laveurs sont affectés à ce lavage.
+   *
+   * Exigé **au formulaire**, pas au serveur : un lavage rejoué hors ligne ou
+   * ressaisi après coup peut légitimement n'avoir personne de nommé. Au
+   * comptoir, en revanche, le caissier a le laveur sous les yeux — c'est le
+   * seul moment où l'information est encore sûre.
+   */
+  assignedWorkerCount: number
   /** Le montant reçu est-il exploitable (nombre, et ≤ total) ? */
   amountIsValid: boolean
   /** Cet encaissement exige-t-il une session de caisse ? */
@@ -132,6 +141,9 @@ export function washSubmitBlockedReason(input: WashSubmitInput): string | null {
   if (!input.siteId) return "Choisissez une station."
   if (!input.vehicleCategoryId) return "Choisissez une catégorie de véhicule."
   if (input.selectedServiceCount === 0) return "Sélectionnez au moins une prestation."
+  if (input.assignedWorkerCount === 0) {
+    return "Indiquez qui lave ce véhicule."
+  }
   if (!input.amountIsValid) {
     return "Le montant reçu doit être un nombre, et ne peut pas dépasser le total du lavage."
   }

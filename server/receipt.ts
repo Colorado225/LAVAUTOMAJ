@@ -61,7 +61,14 @@ export interface Receipt {
   copy_number: number
   duplicate: boolean
   station: { name: string; site: string; city: string; address: string | null; phone: string | null }
-  wash: { reference: string; created_at: string; vehicle: string | null; customer: string | null }
+  wash: {
+    reference: string
+    created_at: string
+    vehicle: string | null
+    /** Plaque relevée au comptoir : c'est elle qui identifie le véhicule. */
+    plate: string | null
+    customer: string | null
+  }
   cashier: string | null
   workers: string[]
   items: ReceiptLineItem[]
@@ -175,6 +182,9 @@ export function renderReceiptText(receipt: Receipt, width = RECEIPT_WIDTH): stri
   lines.push(padLine("Date", shortDateTime(receipt.wash.created_at), width))
   if (receipt.cashier) lines.push(padLine("Caissier", receipt.cashier, width))
   if (receipt.wash.vehicle) lines.push(padLine("Vehicule", receipt.wash.vehicle, width))
+  // La plaque, et rien d'autre : c'est à elle que le client reconnaît sa
+  // voiture sur le papier, et à elle que la station la reconnaîtra au retour.
+  if (receipt.wash.plate) lines.push(padLine("Plaque", receipt.wash.plate, width))
   if (receipt.wash.customer) lines.push(padLine("Client", receipt.wash.customer, width))
   lines.push(rule("-", width))
 
@@ -239,7 +249,7 @@ export async function issueReceipt(
     await client.query("BEGIN")
 
     const washQ = await client.query(
-      `SELECT w.id, w.reference, w.created_at, w.status, w.total_cents,
+      `SELECT w.id, w.reference, w.created_at, w.status, w.total_cents, w.plate,
               s.name AS site_name, s.city, s.address, s.phone,
               o.name AS organization_name,
               vc.name AS vehicle_name,
@@ -333,6 +343,7 @@ export async function issueReceipt(
         reference: wash.reference,
         created_at: new Date(wash.created_at).toISOString(),
         vehicle: wash.vehicle_name,
+        plate: wash.plate,
         customer: wash.customer_name,
       },
       cashier: wash.cashier,

@@ -37,6 +37,7 @@ function soumission(overrides: Partial<WashSubmitInput> = {}): WashSubmitInput {
     siteId: "site-1",
     vehicleCategoryId: "cat-1",
     selectedServiceCount: 1,
+    assignedWorkerCount: 1,
     amountIsValid: true,
     cashNeedsSession: false,
     cashSessionLoading: false,
@@ -119,6 +120,7 @@ test("enregistrement : chaque champ manquant est nommé", () => {
     [{ siteId: "" }, /station/i],
     [{ vehicleCategoryId: "" }, /catégorie/i],
     [{ selectedServiceCount: 0 }, /prestation/i],
+    [{ assignedWorkerCount: 0 }, /lave ce véhicule/i],
     [{ amountIsValid: false }, /montant/i],
   ]
   for (const [patch, motif] of attendus) {
@@ -298,4 +300,33 @@ test("porte : tout état désactivé hors attente porte un motif", () => {
     assert.equal(g.disabled, true, JSON.stringify(c))
     assert.ok(g.reason, `cas muet : ${JSON.stringify(c)}`)
   }
+})
+
+test("enregistrement : personne d'affecté, on ne valide pas", () => {
+  // La part de chacun se calcule sur cette affectation. Enregistrer sans
+  // laveur, c'est fabriquer une ligne que le rendement ne saura pas répartir.
+  const reason = washSubmitBlockedReason(soumission({ assignedWorkerCount: 0 }))
+  assert.equal(reason, "Indiquez qui lave ce véhicule.")
+})
+
+test("enregistrement : plusieurs laveurs passent aussi bien qu'un seul", () => {
+  // Deux personnes sur un 4x4, c'est courant : la part se partagera.
+  assert.equal(washSubmitBlockedReason(soumission({ assignedWorkerCount: 3 })), null)
+})
+
+test("enregistrement : la prestation manquante se signale avant le laveur", () => {
+  // On remonte le formulaire dans l'ordre où il se remplit, sinon le caissier
+  // corrige le bas pendant que le haut est encore vide.
+  const reason = washSubmitBlockedReason(
+    soumission({ selectedServiceCount: 0, assignedWorkerCount: 0 }),
+  )
+  assert.match(reason ?? "", /prestation/i)
+})
+
+test("enregistrement : le laveur manquant se signale avant la caisse", () => {
+  // Les deux manquent : on réclame d'abord ce qui se règle au comptoir.
+  const reason = washSubmitBlockedReason(
+    soumission({ assignedWorkerCount: 0, cashNeedsSession: true, hasCashSession: false }),
+  )
+  assert.match(reason ?? "", /lave ce véhicule/i)
 })
