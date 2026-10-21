@@ -98,7 +98,7 @@ const PRODUCT_FIELDS = `p.id, p.name, p.category_id, p.unit, p.unit_cost_cents,
   p.low_stock_threshold_milli, p.is_active, p.created_at`
 
 const MOVEMENT_FIELDS = `m.id, m.product_id, m.site_id, m.kind, m.quantity_milli,
-  m.unit_cost_cents, m.reason, m.reference, m.reverses_movement_id, m.created_at`
+  m.unit_cost_cents, m.reason, m.reference, m.reverses_movement_id, m.wash_id, m.created_at`
 
 /**
  * Stock courant d'un produit, verrou posé.
@@ -501,10 +501,11 @@ export function createStockRouter() {
       const productId = typeof req.query.product_id === "string" ? parseId(req.query.product_id) : null
       const q = await db().query(
         `SELECT ${MOVEMENT_FIELDS}, p.name AS product_name, p.unit,
-                u.first_name, u.last_name
+                u.first_name, u.last_name, w.reference AS wash_reference
          FROM stock_movements m
          JOIN products p ON p.id = m.product_id
          LEFT JOIN users u ON u.id = m.created_by
+         LEFT JOIN washes w ON w.id = m.wash_id AND w.organization_id = m.organization_id
          WHERE m.organization_id=$1::uuid AND ($2::uuid IS NULL OR m.product_id=$2::uuid)
          ORDER BY m.created_at DESC LIMIT 200`,
         [t.organizationId, productId],

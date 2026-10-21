@@ -480,7 +480,38 @@ export function createApiRouter() {
           [id],
         ),
       ])
-      res.json({ wash: washQ.rows[0], items: items.rows, workers: workers.rows, payments: payments.rows })
+      // Ce que le lavage a sorti du stock. Réservé à qui a le droit de voir le
+      // stock **et** dont le forfait l'inclut : sans cette double condition,
+      // la fiche de lavage — ouverte à tout caissier — contournerait d'un
+      // coup les deux portes posées sur le module stock, coûts unitaires
+      // compris. La clé est absente de la réponse plutôt que vide : une liste
+      // vide signifie « ce lavage n'a rien consommé », ce qui est autre chose.
+      //
+      // On lit les mouvements réellement écrits, pas la recette : celle-ci a
+      // pu changer depuis, et un lavage saisi hors forfait n'a rien déduit.
+      const peutVoirLeStock =
+        t.can("stock:read") && req.subscription?.capabilities["stock.manage"] === true
+      const consumables = peutVoirLeStock
+        ? (
+            await pool.query(
+              `SELECT m.id, m.product_id, m.kind, m.quantity_milli, m.created_at,
+                      p.name AS product_name, p.unit
+               FROM stock_movements m
+               JOIN products p ON p.id = m.product_id
+               WHERE m.wash_id=$1::uuid AND m.organization_id=$2::uuid
+               ORDER BY m.created_at, p.name`,
+              [id, t.organizationId],
+            )
+          ).rows
+        : undefined
+
+      res.json({
+        wash: washQ.rows[0],
+        items: items.rows,
+        workers: workers.rows,
+        payments: payments.rows,
+        ...(consumables === undefined ? {} : { consumables }),
+      })
     }),
   )
 

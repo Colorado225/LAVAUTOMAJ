@@ -3,6 +3,7 @@
 import type * as React from "react"
 
 import { useMemo, useState, type FormEvent } from "react"
+import { Link } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
 import { useCapability } from "@/lib/subscription"
@@ -72,6 +73,9 @@ interface Movement {
   created_at: string
   first_name: string | null
   last_name: string | null
+  /** Renseigné seulement pour une consommation ou sa contrepassation. */
+  wash_id: string | null
+  wash_reference: string | null
 }
 
 const KIND_LABELS: Record<string, string> = {
@@ -495,9 +499,39 @@ export default function StockPage() {
                         {movement.quantity_milli > 0 ? "+" : "−"}
                         {formatQuantity(Math.abs(movement.quantity_milli), movement.unit)}
                       </TableCell>
-                      <TableCell className="max-w-64 truncate text-sm text-muted-foreground">{movement.reason ?? "—"}</TableCell>
+                      <TableCell className="max-w-64 truncate text-sm text-muted-foreground">
+                        {movement.wash_id && movement.wash_reference ? (
+                          <Link
+                            to={`/washes/${movement.wash_id}`}
+                            className="underline underline-offset-2 hover:text-foreground"
+                          >
+                            {movement.kind === "reversal" ? "Lavage annulé" : "Lavage"} {movement.wash_reference}
+                          </Link>
+                        ) : (
+                          (movement.reason ?? "—")
+                        )}
+                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {movement.first_name ? `${movement.first_name} ${movement.last_name ?? ""}`.trim() : "—"}
+                        {movement.wash_id ? (
+                          // Déduction automatique : la personne reste dans la
+                          // donnée — c'est elle la cause, la traçabilité en
+                          // dépend — mais l'écran ne doit pas présenter un
+                          // mouvement déclenché par le système comme un geste
+                          // délibéré de sa part.
+                          <span
+                            title={
+                              movement.first_name
+                                ? `Déclenché en enregistrant le lavage par ${`${movement.first_name} ${movement.last_name ?? ""}`.trim()}`
+                                : "Déclenché par l’enregistrement du lavage"
+                            }
+                          >
+                            Système
+                          </span>
+                        ) : movement.first_name ? (
+                          `${movement.first_name} ${movement.last_name ?? ""}`.trim()
+                        ) : (
+                          "—"
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}

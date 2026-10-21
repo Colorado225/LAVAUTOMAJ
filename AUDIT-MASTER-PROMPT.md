@@ -665,3 +665,62 @@ dans `WRITE_CAPABILITIES`.
 **Reste à faire, mineur** : `stock_movements.wash_id` est enregistré en base
 mais n'est pas exposé par `GET /stock-movements`. Le relier à l'écran
 permettrait de cliquer d'un mouvement vers le lavage qui l'a provoqué.
+
+### 21 octobre 2026 — L4.1, relier un mouvement de stock à son lavage
+
+**Avant** : une consommation automatique s'affichait « −8 sachets ·
+Consommation automatique du lavage · Kouamé ». Deux défauts. On ne savait pas
+**quel** lavage. Et le nom affiché était celui du caissier, qui n'avait rien
+décidé — c'est le système qui déduit.
+
+**Après**, deux sens de lecture :
+
+| Sens | Ce qu'on obtient |
+| --- | --- |
+| Stock → lavage | la colonne « Motif » devient un lien portant la **référence** (`LAV-20261021-841587`) |
+| Lavage → stock | un bloc « Sorti du stock » sur la fiche de lavage |
+
+**Aucune migration** : la colonne `wash_id` et son index partiel existaient
+depuis L4, ils n'étaient simplement pas exposés.
+
+**La porte, qui était le vrai sujet.** La fiche de lavage est ouverte à tout
+caissier ; le stock ne l'est pas. Renvoyer les consommables sans condition
+aurait ouvert d'un coup les quantités et les coûts unitaires à tout le monde,
+**en contournant les deux verrous posés la veille** — le rôle et le forfait
+Pro. Le bloc n'est calculé que si l'appelant a `stock:read` **et** la capacité
+`stock.manage`.
+
+**Clé absente, pas vide.** Un tableau vide dit « ce lavage n'a rien
+consommé » ; l'absence de clé dit « cette information ne vous est pas
+destinée ». Les confondre afficherait « aucun consommable » à un caissier,
+c'est-à-dire un mensonge. Un test porte précisément cette nuance.
+
+**Ce sont les mouvements qui sont lus, pas la recette.** La recette a pu
+changer depuis, et un lavage saisi hors forfait n'a rien déduit. Seule la
+trace écrite dit ce qui s'est réellement passé.
+
+**La colonne « Par ».** Pour une déduction automatique, l'écran affiche
+« Système », la personne restant accessible en infobulle. Elle demeure dans la
+donnée — c'est la cause, la traçabilité en dépend — mais l'écran cesse de
+présenter un mouvement déclenché par le système comme un geste délibéré.
+Imputer silencieusement 8 sachets à un caissier serait le même défaut que
+celui que le produit combat ailleurs.
+
+**Deux pièges évités à l'écriture.** `MOVEMENT_FIELDS` sert aussi à trois
+clauses `RETURNING` qui retirent le préfixe `m.` : y glisser un champ joint
+aurait cassé les trois insertions. Seule la colonne réelle `m.wash_id` y a été
+ajoutée, la référence jointe restant dans le `SELECT` de la liste. Et la
+jointure est bornée par l'organisation : sans cela, un identifiant de lavage
+suffisait à faire remonter la référence d'une station voisine — c'est l'objet
+d'un test et d'une mutation.
+
+**Vérifié en conditions réelles** : lavage `LAV-20261021-841587`, 6 000 F,
+recette de 2 sachets × 2 prestations. Le mouvement porte la référence ; le
+propriétaire voit « 4 sachets » sur la fiche ; le caissier ouvre la même fiche
+sans recevoir la clé ; après annulation, la consommation et sa contrepassation
+s'affichent toutes deux. La bascule vers Pro a été jouée par le vrai parcours
+— souscription, déclaration, validation en console.
+
+**Tests** : 9 nouveaux (`tests/stock-wash-link.test.ts`), suite à **534/534**.
+Cinq mutations éprouvées, toutes détectées : rôle retiré, forfait retiré, clé
+vide au lieu d'absente, jointure non bornée, référence jamais renvoyée.
