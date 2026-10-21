@@ -53,6 +53,10 @@ export const washValidators = {
         )
         .min(1, "Sélectionnez au moins une prestation."),
       worker_ids: z.array(z.string().uuid()).max(50).default([]),
+      // Responsable principal, facultatif. Il doit figurer parmi les laveurs
+      // affectés : désigner un responsable absent de l'équipe du lavage
+      // produirait une statistique que personne ne pourrait expliquer.
+      principal_worker_id: z.string().uuid().nullable().optional(),
       payment_method: z.enum(PAYMENT_METHODS),
       amount_received_cents: z.number().int().min(0).max(100000000),
       cash_session_id: z.string().uuid().optional(),
@@ -624,8 +628,19 @@ export function createApiRouter() {
             await consumeForWash(client, t.organizationId, wash.id, input.items, t.userId)
           }
 
+          const principal = input.principal_worker_id ?? null
+          if (principal && !input.worker_ids.includes(principal)) {
+            throw new HttpError(
+              400,
+              "invalid_principal",
+              "Le responsable principal doit faire partie des laveurs affectés à ce lavage.",
+            )
+          }
           for (const workerId of new Set(input.worker_ids)) {
-            await client.query("INSERT INTO wash_assignments(wash_id, worker_id) VALUES($1,$2)", [wash.id, workerId])
+            await client.query(
+              "INSERT INTO wash_assignments(wash_id, worker_id, assignment_role, assigned_by) VALUES($1,$2,$3,$4)",
+              [wash.id, workerId, workerId === principal ? "principal" : "participant", t.userId],
+            )
           }
 
           if (input.amount_received_cents > 0) {

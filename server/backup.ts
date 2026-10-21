@@ -61,6 +61,8 @@ export const EXPORT_QUERIES: { key: string; sql: string }[] = [
   { key: "suppliers", sql: "SELECT * FROM suppliers WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "purchases", sql: "SELECT * FROM purchases WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "purchase_items", sql: "SELECT * FROM purchase_items WHERE organization_id=$1::uuid ORDER BY created_at" },
+  { key: "work_schedules", sql: "SELECT * FROM work_schedules WHERE organization_id=$1::uuid ORDER BY created_at" },
+  { key: "attendance_records", sql: "SELECT * FROM attendance_records WHERE organization_id=$1::uuid ORDER BY work_date" },
   {
     key: "audit_logs",
     sql: `SELECT action, entity_type, entity_id, metadata, created_at FROM audit_logs

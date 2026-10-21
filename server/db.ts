@@ -77,9 +77,9 @@ UPDATE plans SET code='starter' WHERE code='free';
 -- Chaque forfait est payant et ouvre un essai de 14 jours (voir
 -- server/entitlements.ts). Prix en centimes : 10 000 F = 1 000 000.
 INSERT INTO plans(code,name,description,price_cents,billing_cycle,max_users,max_workers,max_sites,max_services,sort_order,features) VALUES
- ('starter','Starter','Pour les petites stations qui veulent abandonner le cahier de caisse.',1000000,'monthly',2,3,1,10,1,'{"reports.advanced":false,"reports.export":false,"reports.consolidated":false,"audit.read":false,"sites.multiple":false,"stock.manage":false}'::jsonb),
- ('pro','Pro','Pour les stations qui ont plusieurs laveurs et veulent mieux contrôler leurs opérations.',2000000,'monthly',10,20,1,NULL,2,'{"reports.advanced":true,"reports.export":true,"reports.consolidated":false,"audit.read":true,"sites.multiple":false,"stock.manage":true}'::jsonb),
- ('business','Business','Pour les stations importantes ou les propriétaires qui gèrent plusieurs sites.',3500000,'monthly',NULL,NULL,NULL,NULL,3,'{"reports.advanced":true,"reports.export":true,"reports.consolidated":true,"audit.read":true,"sites.multiple":true,"stock.manage":true}'::jsonb)
+ ('starter','Starter','Pour les petites stations qui veulent abandonner le cahier de caisse.',1000000,'monthly',2,3,1,10,1,'{"reports.advanced":false,"reports.export":false,"reports.consolidated":false,"audit.read":false,"sites.multiple":false,"stock.manage":false,"team.tracking":false}'::jsonb),
+ ('pro','Pro','Pour les stations qui ont plusieurs laveurs et veulent mieux contrôler leurs opérations.',2000000,'monthly',10,20,1,NULL,2,'{"reports.advanced":true,"reports.export":true,"reports.consolidated":false,"audit.read":true,"sites.multiple":false,"stock.manage":true,"team.tracking":true}'::jsonb),
+ ('business','Business','Pour les stations importantes ou les propriétaires qui gèrent plusieurs sites.',3500000,'monthly',NULL,NULL,NULL,NULL,3,'{"reports.advanced":true,"reports.export":true,"reports.consolidated":true,"audit.read":true,"sites.multiple":true,"stock.manage":true,"team.tracking":true}'::jsonb)
 ON CONFLICT(code) DO UPDATE SET
  name=EXCLUDED.name, description=EXCLUDED.description, price_cents=EXCLUDED.price_cents,
  billing_cycle=EXCLUDED.billing_cycle, max_users=EXCLUDED.max_users, max_workers=EXCLUDED.max_workers,
@@ -153,6 +153,57 @@ CREATE TABLE IF NOT EXISTS workers (
 );
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS district text;
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS joined_at date;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS photo_url text;
+
+-- Presences et horaires (module Equipes).
+--
+-- Les heures sont stockees en timestamptz. La Cote d'Ivoire est a UTC+0 toute
+-- l'annee, sans heure d'ete : l'heure locale d'une station et l'heure UTC
+-- coincident, et la minute du jour se derive sans conversion. Une station
+-- hors de ce fuseau demanderait de porter le fuseau sur la station.
+CREATE TABLE IF NOT EXISTS work_schedules (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ site_id uuid REFERENCES sites(id),
+ -- NULL : l'horaire vaut pour toute la station. Renseigne : il ne vaut que
+ -- pour cette personne et prime sur celui de la station.
+ worker_id uuid REFERENCES workers(id),
+ -- NULL : tous les jours. 0 = dimanche, conformement a EXTRACT(DOW).
+ day_of_week smallint CHECK(day_of_week IS NULL OR (day_of_week BETWEEN 0 AND 6)),
+ -- Exception ponctuelle, qui prime sur le jour de la semaine.
+ specific_date date,
+ start_minute smallint NOT NULL CHECK(start_minute BETWEEN 0 AND 1439),
+ end_minute smallint NOT NULL CHECK(end_minute BETWEEN 0 AND 1439),
+ break_duration_minutes smallint NOT NULL DEFAULT 0 CHECK(break_duration_minutes >= 0),
+ late_tolerance_minutes smallint NOT NULL DEFAULT 15 CHECK(late_tolerance_minutes >= 0),
+ valid_from date NOT NULL DEFAULT CURRENT_DATE, valid_to date,
+ created_by uuid REFERENCES users(id),
+ created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS work_schedules_org_idx ON work_schedules(organization_id, site_id, worker_id);
+
+CREATE TABLE IF NOT EXISTS attendance_records (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ site_id uuid REFERENCES sites(id), worker_id uuid NOT NULL REFERENCES workers(id),
+ work_date date NOT NULL,
+ check_in_at timestamptz, check_out_at timestamptz,
+ -- Pause reellement relevee, et non pause prevue par l'horaire : on ne
+ -- retranche pas du temps de travail sur la foi d'un parametre.
+ break_minutes smallint CHECK(break_minutes IS NULL OR break_minutes >= 0),
+ status text NOT NULL DEFAULT 'present',
+ absence_reason text, comment text,
+ recorded_by uuid REFERENCES users(id),
+ corrected_by uuid REFERENCES users(id), corrected_at timestamptz, correction_reason text,
+ created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+ -- Un seul releve par personne et par jour. Une station qui ferait deux
+ -- vacations dans la meme journee demanderait d'ajouter une plage a la cle ;
+ -- le besoin n'existe pas et la contrainte protege des doublons de saisie.
+ UNIQUE(worker_id, work_date)
+);
+ALTER TABLE attendance_records DROP CONSTRAINT IF EXISTS attendance_records_status_check;
+ALTER TABLE attendance_records ADD CONSTRAINT attendance_records_status_check
+ CHECK(status IN ('present','absent_declared','absent_justified','absent_unjustified','leave'));
+CREATE INDEX IF NOT EXISTS attendance_records_org_date_idx ON attendance_records(organization_id, work_date DESC);
+
 CREATE TABLE IF NOT EXISTS customers (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  full_name text NOT NULL, phone text, created_at timestamptz NOT NULL DEFAULT now()
@@ -274,6 +325,18 @@ CREATE INDEX IF NOT EXISTS stock_movements_wash_idx ON stock_movements(wash_id) 
 CREATE TABLE IF NOT EXISTS wash_assignments (
  wash_id uuid NOT NULL REFERENCES washes(id), worker_id uuid NOT NULL REFERENCES workers(id), PRIMARY KEY(wash_id,worker_id)
 );
+-- La table d'affectation existait deja : on l'etend plutot que d'en creer une
+-- seconde. Les colonnes ont une valeur par defaut, donc les affectations
+-- deja enregistrees restent valides et deviennent des participations.
+ALTER TABLE wash_assignments ADD COLUMN IF NOT EXISTS assignment_role text NOT NULL DEFAULT 'participant';
+ALTER TABLE wash_assignments ADD COLUMN IF NOT EXISTS assigned_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE wash_assignments ADD COLUMN IF NOT EXISTS assigned_by uuid REFERENCES users(id);
+ALTER TABLE wash_assignments DROP CONSTRAINT IF EXISTS wash_assignments_role_check;
+ALTER TABLE wash_assignments ADD CONSTRAINT wash_assignments_role_check
+ CHECK(assignment_role IN ('principal','participant'));
+-- Un lavage n'a qu'un responsable principal, ou aucun.
+CREATE UNIQUE INDEX IF NOT EXISTS wash_assignments_principal_idx
+ ON wash_assignments(wash_id) WHERE assignment_role = 'principal';
 CREATE TABLE IF NOT EXISTS payments (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  wash_id uuid NOT NULL REFERENCES washes(id), method text NOT NULL, amount_cents integer NOT NULL CHECK(amount_cents >= 0),

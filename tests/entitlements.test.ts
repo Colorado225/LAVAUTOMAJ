@@ -52,6 +52,7 @@ test("un essai qui vient de démarrer laisse 14 jours et tout est autorisé", ()
     "audit.read",
     "sites.multiple",
     "stock.manage",
+    "team.tracking",
   ])
 })
 
@@ -119,8 +120,8 @@ test("en lecture seule, les écritures et les options payantes sont coupées", (
   ] as const) {
     assert.equal(state.capabilities[capability], false, `${capability} devrait être bloquée`)
   }
-  // Les 7 capacités d'écriture plus les 6 options de forfait.
-  assert.equal(state.restricted.length, 13)
+  // Les 7 capacités d'écriture plus les 7 options de forfait.
+  assert.equal(state.restricted.length, 14)
 })
 
 test("l'échéance exacte compte comme expirée", () => {

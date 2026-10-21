@@ -25,6 +25,7 @@ export type Capability =
   | "audit.read"
   | "sites.multiple"
   | "stock.manage"
+  | "team.tracking"
 
 export type SubscriptionStatus =
   | "none"

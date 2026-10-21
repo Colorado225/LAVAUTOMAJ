@@ -792,3 +792,28 @@ direct de la fonction : c'est la leçon du lot L4, appliquée d'emblée.
 **Reste ouvert.** Un achat ne met pas à jour le coût de référence du produit :
 le mouvement fige le prix payé, mais la fiche produit garde le sien. À trancher
 avec les rapports de marge (L6).
+
+### 21 octobre 2026 — Module Équipes : présences et rendement
+
+Audit d'abord, conformément à la méthode. Il a révélé une **collision de
+fond** entre le cahier des charges reçu et le produit tel qu'il a été décidé.
+
+Le cahier demande des tâches en cours, des heures de début et de fin, un temps
+moyen de réalisation. Or `INSERT INTO washes(… status …) VALUES(…,'completed',…)`
+— tout lavage naît terminé, et `in_progress` n'existe nulle part. WashPilot est
+une caisse enregistreuse, pas un suivi d'atelier.
+
+Construire ces indicateurs aurait rempli l'écran de colonnes vides à
+perpétuité. Le cahier l'interdit lui-même : « n'invente pas de résultats de
+performance lorsque les données nécessaires n'existent pas ». Ils ne sont donc
+pas construits, et l'écran **dit pourquoi**.
+
+Le reste — présences, attribution juste, volumes, régularité — a été livré.
+Trois refus le structurent : ne pas déduire une absence d'un silence, ne pas
+inventer d'heure de référence, ne pas transformer une donnée absente en zéro.
+Et une règle de comptage : un lavage fait à trois reste un lavage pour la
+station, chacun en recevant une part de 333 millièmes.
+
+Détail complet, règles, limites et suite : **`MODULE-EQUIPES.md`**.
+
+53 tests ajoutés, suite à **615/615**, 7 mutations toutes détectées.

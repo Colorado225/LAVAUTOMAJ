@@ -61,6 +61,9 @@ const PURGE_ORDER: { table: string; where: string }[] = [
   { table: "services", where: "organization_id = $1::uuid" },
   { table: "service_categories", where: "organization_id = $1::uuid" },
   { table: "vehicle_categories", where: "organization_id = $1::uuid" },
+  // Présences et horaires pointent vers les laveurs : ils partent avant eux.
+  { table: "attendance_records", where: "organization_id = $1::uuid" },
+  { table: "work_schedules", where: "organization_id = $1::uuid" },
   { table: "workers", where: "organization_id = $1::uuid" },
   { table: "customers", where: "organization_id = $1::uuid" },
   { table: "sites", where: "organization_id = $1::uuid" },
