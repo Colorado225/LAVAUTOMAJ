@@ -23,6 +23,7 @@ import {
   scheduleDeletion,
 } from "./organization-deletion.ts"
 import { createPasswordResetToken } from "./auth.ts"
+import { registerAccountRoutes } from "./console-accounts.ts"
 
 // ---------------------------------------------------------------------------
 // Back-office de l'éditeur
@@ -859,7 +860,20 @@ export function createAdminRouter() {
   )
 
   // -------------------------------------------------------------------------
-  // POST .../members/:userId/status — débloquer ou suspendre un compte.
+  // POST .../members/:userId/status — retirer quelqu'un de CETTE station.
+  //
+  // Ne touche pas au compte : la personne continue de se connecter et de
+  // travailler sur ses autres stations. Pour bloquer le compte partout,
+  // c'est `POST /accounts/:userId/status` (voir `console-accounts.ts`).
+  //
+  // La première version écrivait aussi `users.status = 'disabled'`, ce que la
+  // contrainte `users_status_check` refuse — la route tombait en 500. Elle
+  // confondait deux états qui n'ont pas la même portée.
+  //
+  // Aucune session n'est supprimée, et c'est délibéré :
+  // `requireTenantContext` relit l'appartenance à chaque requête, donc la
+  // coupure est immédiate. Effacer les sessions déconnecterait la personne
+  // de ses autres stations, où elle n'a rien fait.
   // -------------------------------------------------------------------------
   r.post(
     "/organizations/:id/members/:userId/status",
@@ -899,17 +913,19 @@ export function createAdminRouter() {
         }
       }
 
-      await pool.query("UPDATE organization_members SET status = $2, updated_at = now() WHERE organization_id = $1::uuid AND user_id = $3::uuid", [id, input.status, userId])
-      await pool.query("UPDATE users SET status = $2, updated_at = now() WHERE id = $1::uuid", [userId, input.status])
-      if (input.status === "disabled") {
-        await pool.query("DELETE FROM auth_sessions WHERE user_id = $1::uuid", [userId])
-      }
+      await pool.query(
+        `UPDATE organization_members
+            SET status = $2, updated_at = now(),
+                disabled_at = CASE WHEN $2 = 'disabled' THEN now() ELSE NULL END
+          WHERE organization_id = $1::uuid AND user_id = $3::uuid`,
+        [id, input.status, userId],
+      )
 
-      const action = input.status === "active" ? "user.enabled" : "user.disabled"
+      const action = input.status === "active" ? "membership.enabled" : "membership.disabled"
       await auditPlatformAction(pool, id, operator.email, action, userId, { email, reason: input.reason })
       await logConsoleAction(pool, operator, action, id, org_name, { email, reason: input.reason })
 
-      res.json({ user_id: userId, email, status: input.status })
+      res.json({ user_id: userId, email, membership_status: input.status })
     }),
   )
 
@@ -1149,6 +1165,8 @@ export function createAdminRouter() {
       })
     }),
   )
+
+  registerAccountRoutes(r)
 
   return r
 }

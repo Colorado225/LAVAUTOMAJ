@@ -355,24 +355,67 @@ function MemberRow({
   organizationId: string
   onRun: (fn: () => Promise<string>) => void
 }) {
-  const disabled = member.membership_status !== "active" || member.user_status !== "active"
+  // Deux états distincts, affichés distinctement. Les fusionner derrière un
+  // seul mot « désactivé » laissait croire que les retirer de la station
+  // bloquait leur compte — ce n'est pas le cas, et l'inverse non plus.
+  const outOfStation = member.membership_status !== "active"
+  const accountBlocked = member.user_status !== "active"
   const name = [member.first_name, member.last_name].filter(Boolean).join(" ") || member.email
 
   return (
     <li className="flex flex-wrap items-center gap-3 py-3">
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-white">
-          {name}
+          <Link to={`/console/comptes/${member.id}`} className="hover:underline">
+            {name}
+          </Link>
           <span className="ml-2 text-xs font-normal text-slate-500">
             {ROLE_LABELS[member.role] ?? member.role}
           </span>
-          {disabled && <span className="ml-2 text-xs font-normal text-amber-400">désactivé</span>}
+          {outOfStation && (
+            <span className="ml-2 text-xs font-normal text-amber-400">retiré de la station</span>
+          )}
+          {accountBlocked && (
+            <span className="ml-2 text-xs font-normal text-red-400">compte bloqué partout</span>
+          )}
         </p>
         <p className="truncate text-xs text-slate-400">
           {member.email} · vu {member.last_seen_at ? formatDateTime(member.last_seen_at) : "jamais"}
         </p>
       </div>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="sr-only" htmlFor={`role-${member.id}`}>
+          Rôle de {name}
+        </label>
+        <select
+          id={`role-${member.id}`}
+          value={member.role}
+          className="h-8 rounded-md border border-slate-700 bg-slate-900 px-2 text-xs text-slate-200"
+          onChange={(event) => {
+            const role = event.target.value
+            if (role === member.role) return
+            const reason = window.prompt(
+              `Pourquoi ce changement de rôle vers « ${ROLE_LABELS[role] ?? role} » ?`,
+            )
+            if (!reason || reason.trim().length < 5) return
+            void onRun(async () => {
+              const payload = await consoleRequest<{ permission_overrides_cleared: number }>(
+                `/organizations/${organizationId}/members/${member.id}/role`,
+                { method: "POST", body: JSON.stringify({ role, reason: reason.trim() }) },
+              )
+              const cleared = payload.permission_overrides_cleared
+              return cleared > 0
+                ? `Rôle modifié. ${cleared} permission(s) accordée(s) à titre exceptionnel ont été retirées.`
+                : "Rôle modifié."
+            })
+          }}
+        >
+          {Object.entries(ROLE_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
         <Button
           type="button"
           size="sm"
@@ -403,9 +446,11 @@ function MemberRow({
           variant="ghost"
           className="text-slate-300"
           onClick={() => {
-            const next = disabled ? "active" : "disabled"
+            const next = outOfStation ? "active" : "disabled"
             const reason = window.prompt(
-              next === "disabled" ? "Motif de la désactivation ?" : "Motif de la réactivation ?",
+              next === "disabled"
+                ? "Motif du retrait de cette station ? (le compte reste utilisable ailleurs)"
+                : "Motif de la réintégration ?",
             )
             if (!reason || reason.trim().length < 3) return
             void onRun(async () => {
@@ -413,11 +458,13 @@ function MemberRow({
                 method: "POST",
                 body: JSON.stringify({ status: next, reason: reason.trim() }),
               })
-              return next === "disabled" ? "Compte désactivé." : "Compte réactivé."
+              return next === "disabled"
+                ? "Retiré de cette station. Le compte reste ouvert."
+                : "Réintégré dans la station."
             })
           }}
         >
-          {disabled ? "Réactiver" : "Désactiver"}
+          {outOfStation ? "Réintégrer" : "Retirer"}
         </Button>
       </div>
     </li>

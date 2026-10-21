@@ -49,9 +49,15 @@ suis-je bloqué ? » sans ouvrir la base.
 
 ### 1.3 Gérer finement les comptes
 
-Suspendre ou réactiver un membre d'une station sans toucher aux autres ;
-suspendre la station entière (lecture seule) ; et, nouveauté de cette version,
-**supprimer une organisation** — en deux temps, décrits au §4.
+Retrouver une **personne** dans tout le parc à partir de son adresse, de son
+nom ou de son numéro — l'entrée qui manquait, puisque le support reçoit
+l'appel d'une personne et non d'une station. Puis : la retirer d'une station
+sans toucher à ses autres, changer son rôle, **transférer la propriété** d'une
+station dont le propriétaire est parti, bloquer un compte compromis partout à
+la fois, fermer ses sessions. Le détail au §6.
+
+Également : suspendre la station entière (lecture seule) et **supprimer une
+organisation**, en deux temps, décrits au §4.
 
 ### 1.4 Surveiller
 
@@ -327,7 +333,105 @@ lisible dans un export.
 
 ---
 
-## 6. Les routes
+## 6. Les comptes
+
+Le reste de la console est organisé par station. Cette famille existe parce que
+**le support reçoit l'appel d'une personne, pas d'une station** : « bonjour, je
+n'arrive plus à me connecter », sans nom de station et souvent sans savoir quel
+rôle elle occupe.
+
+### 6.1 Deux états qu'il ne faut pas confondre
+
+C'est la distinction qui structure toute la famille, et l'avoir manquée a
+produit un défaut livré en production (§6.5).
+
+| | Porté par | Dit quoi | Portée |
+|---|---|---|---|
+| **Appartenance** | `organization_members.status` | travaille-t-elle encore dans *cette* station ? | une station |
+| **Compte** | `users.status` | peut-elle se connecter, *où que ce soit* ? | tout le parc |
+
+Quelqu'un qui travaille sur deux stations peut quitter l'une sans perdre
+l'autre. Un compte compromis doit pouvoir être coupé partout d'un seul geste.
+Ce sont deux besoins réels, donc **deux gestes distincts** — jamais une case
+unique « désactiver ».
+
+Vérifié de bout en bout : un caissier retiré de sa station **se connecte
+toujours** (son compte est vivant) mais reçoit `403 membership_disabled` sur la
+station. `requireTenantContext` relit l'appartenance à chaque requête, donc le
+retrait est immédiat — et aucune session n'est supprimée, sans quoi la personne
+serait déconnectée de ses autres stations, où elle n'a rien fait.
+
+### 6.2 Les gestes
+
+| Geste | Route | Portée | Garde-fou |
+|---|---|---|---|
+| Retirer de cette station | `POST /organizations/:id/members/:userId/status` | une station | — |
+| Changer le rôle | `POST /organizations/:id/members/:userId/role` | une station | `last_owner`, `role_unchanged` |
+| Bloquer le compte partout | `POST /accounts/:userId/status` | tout le parc | `last_owner` sur **toutes** ses stations |
+| Déconnecter tous les appareils | `POST /accounts/:userId/revoke-sessions` | tout le parc | — |
+| Réinitialiser le mot de passe | `POST /organizations/:id/members/:userId/reset-password` | le compte | lien valable 1 h |
+
+Tous exigent un **motif d'au moins cinq caractères**, inscrit dans le journal du
+client *et* dans celui de l'éditeur.
+
+### 6.3 Pourquoi l'éditeur peut changer un rôle
+
+La question se pose : toucher à la hiérarchie d'un client, est-ce légitime ?
+
+Le cas qui tranche est celui du **propriétaire parti sans successeur**. Plus
+personne ne peut inviter, facturer ni gérer l'équipe, et le client ne peut pas
+s'en sortir seul — c'est précisément le moment où il appelle. Refuser serait
+d'ailleurs incohérent : l'opérateur peut déjà suspendre l'abonnement et
+programmer la suppression de la station entière.
+
+Le **transfert de propriété se fait en deux temps**, et l'ordre est imposé par
+le garde-fou lui-même : nommer d'abord le nouveau propriétaire, rétrograder
+l'ancien ensuite. Tenter l'inverse renvoie `409 last_owner`. Il n'y a donc
+aucun instant où la station se retrouve sans administrateur.
+
+Un changement de rôle **efface les permissions accordées à titre exceptionnel**
+à cette personne dans cette station. Elles avaient été consenties pour l'ancien
+périmètre ; les conserver donnerait au nouveau rôle des droits que personne n'a
+décidés — un gérant rétrogradé caissier garderait l'accès au journal d'audit.
+La réponse indique combien ont été retirées, et l'écran le dit à l'opérateur.
+
+### 6.4 Le garde-fou du dernier propriétaire
+
+Bloquer un compte ou retirer un rôle est refusé (`409 last_owner`) si la
+personne est le **dernier propriétaire actif** d'au moins une station. Le
+contrôle porte sur **toutes** ses stations, pas seulement celle qu'on regarde :
+quelqu'un peut être second propriétaire ici et seul propriétaire ailleurs. Le
+message nomme les stations bloquantes.
+
+Les stations déjà programmées pour suppression sont exclues du contrôle — y
+préserver un propriétaire n'a plus d'objet.
+
+La fiche d'une personne affiche cet avertissement **avant** qu'on essaie, et le
+bouton de blocage est désactivé tant que la situation dure.
+
+### 6.5 Le défaut corrigé au passage
+
+`POST /organizations/:id/members/:userId/status` répondait **500** depuis sa
+mise en service. Elle écrivait `users.status = 'disabled'`, valeur que la
+contrainte `users_status_check` refuse — cette colonne n'accepte que `active`
+ou `inactive`. La route confondait les deux états du §6.1 : elle prétendait
+retirer quelqu'un d'une station et bloquait son compte partout.
+
+Les 265 tests passaient. **Aucun ne l'exerçait** : la route avait été livrée
+sans jamais être appelée de bout en bout. C'est la leçon retenue — une suite
+verte ne dit rien d'un chemin que personne n'a parcouru. Les 20 tests de
+`tests/console-accounts.test.ts` commencent par cette régression.
+
+### 6.6 Ce que cette famille ne fait pas
+
+- **Changer l'adresse e-mail d'un compte.** L'adresse est l'identifiant de
+  connexion ; la modifier depuis la console permettrait de rediriger un compte
+  vers une boîte que l'opérateur contrôle. Le client la change lui-même.
+- **Se connecter à la place d'un client.** Décision de la §3, inchangée.
+- **Supprimer un compte.** Un compte n'est purgé que lorsque sa dernière
+  station l'est (§4).
+
+## 7. Les routes
 
 Toutes sous `/api/v1/console`, toutes derrière `requireOperator`.
 
@@ -337,13 +441,17 @@ Toutes sous `/api/v1/console`, toutes derrière `requireOperator`.
 `GET /organizations/:id` · `GET /organizations/:id/members` ·
 `GET /upgrade-requests?pending=` · `GET /plans` ·
 `GET /payment-intents?status=&declared=` · `GET /audit?organization_id=&limit=` ·
-`GET /revenue?months=` · `GET /revenue/export?format=detail|journal&from=&to=`
+`GET /revenue?months=` · `GET /revenue/export?format=detail|journal&from=&to=` ·
+`GET /accounts?q=&limit=` · `GET /accounts/:userId`
 
 **Écriture** — `POST /organizations/:id/activate {plan_code, months≤36,
 payment_reference?, note?}` · `/suspend {reason}` · `/extend-trial {days≤90,
 reason}` · `/schedule-deletion {reason≥10, grace_days?}` · `/cancel-deletion` ·
 `/purge {confirm_name}` · `POST /members/:userId/reset-password` ·
-`POST /members/:userId/status {status, reason}` ·
+`POST /members/:userId/status {status: active|disabled, reason≥3}` ·
+`POST /members/:userId/role {role, reason≥5}` ·
+`POST /accounts/:userId/status {status: active|inactive, reason≥5}` ·
+`POST /accounts/:userId/revoke-sessions {reason≥5}` ·
 `POST /upgrade-requests/:id/decline {reason 3-300}` ·
 `POST /payment-intents/:reference/confirm {note?, channel?}` ·
 `POST /revenue/:id/reverse {reason≥10}`
@@ -363,7 +471,7 @@ l'adresse de l'opérateur.
 
 ---
 
-## 7. Ce que la console ne fait pas, volontairement
+## 8. Ce que la console ne fait pas, volontairement
 
 - **Pas d'usurpation d'identité.** Aucun « se connecter en tant que ». Voir
   les données d'un client est une chose, agir en son nom une autre.
@@ -373,21 +481,25 @@ l'adresse de l'opérateur.
 - **Pas de modification des données d'exploitation.** La console ne corrige
   pas un lavage, ne touche pas une caisse. Elle administre des abonnements et
   des comptes.
+- **Pas de changement d'adresse e-mail.** L'adresse est l'identifiant de
+  connexion : la modifier depuis la console permettrait de rediriger un compte
+  vers une boîte que l'opérateur contrôle.
 - **Pas de notification automatique au client.** Les gestes de l'éditeur ne
   déclenchent pas d'e-mail ; seules les relances d'échéance en envoient.
 
 ---
 
-## 8. Vérification
+## 9. Vérification
 
 ```bash
-# Suite complète (265 tests)
+# Suite complète (285 tests)
 NODE_ENV=test npm test
 
 # Ciblé
 NODE_ENV=test npx tsx --test tests/platform-admin.test.ts    # 26 tests
 NODE_ENV=test npx tsx --test tests/console-deletion.test.ts  # 12 tests
 NODE_ENV=test npx tsx --test tests/revenue.test.ts           # 23 tests
+NODE_ENV=test npx tsx --test tests/console-accounts.test.ts  # 20 tests
 ```
 
 Parcours manuel utile, serveur lancé :
@@ -410,9 +522,15 @@ mutation** : neutraliser la coupure immédiate, autoriser une purge non
 programmée, retirer une table de `PURGE_ORDER` ou supprimer la clause
 protégeant les comptes multi-stations font chacun échouer la suite.
 
+La famille « comptes » l'est aussi : réécrire `users.status` depuis la route
+d'appartenance (le défaut du §6.5), retirer le garde-fou du dernier
+propriétaire, conserver les permissions exceptionnelles lors d'un changement de
+rôle, ou ignorer les stations en suppression dans le garde-fou — les quatre
+sont détectés.
+
 ---
 
-## 9. Prochaines marches
+## 10. Prochaines marches
 
 1. **Brancher un agrégateur** (CinetPay couvre Wave, Orange, MTN et Moov en
    une intégration) : le webhook appellera `activateSubscription()`, la file de
@@ -420,7 +538,10 @@ protégeant les comptes multi-stations font chacun échouer la suite.
 2. **Réconciliation** entre le registre et le relevé de l'agrégateur, une fois
    celui-ci branché : comparer chaque jour ce qu'on croit avoir encaissé et ce
    que le prestataire a réellement versé.
-3. **Second opérateur avec droits restreints** — lecture seule pour une
+3. **Supervision technique** — la famille qui reste : santé du service,
+   erreurs, lenteurs, alerte quand une station cesse d'émettre. Aujourd'hui un
+   incident se découvre par l'appel d'un client.
+4. **Second opérateur avec droits restreints** — lecture seule pour une
    personne au support, écriture réservée au créateur. Aujourd'hui tous les
    opérateurs sont égaux ; il faudrait ajouter une colonne `role` à
    `platform_operators` et la lire dans `requireOperator`.

@@ -134,8 +134,9 @@ tests/               # Tests unitaires (node:test via tsx)
 ## Console de l'éditeur
 
 Application **séparée** réservée au créateur, servie sous `/console` : suivi du
-parc, registre des encaissements avec exports comptables, gestion des comptes,
-suppression d'une organisation en deux temps.
+parc, registre des encaissements avec exports comptables, recherche de comptes
+dans tout le parc avec rôles et sessions, suppression d'une organisation en
+deux temps.
 
 ```bash
 # .env — puis redémarrer le serveur

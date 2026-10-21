@@ -191,3 +191,43 @@ export interface RevenueResponse {
   channels: Array<{ code: string; label: string }>
   server_time: string
 }
+
+/** Une personne, vue depuis la console : son compte, pas une de ses stations. */
+export interface ConsoleAccount {
+  id: string
+  email: string
+  first_name: string | null
+  last_name: string | null
+  phone: string | null
+  status: string
+  created_at: string
+  last_seen_at: string | null
+  active_sessions: number
+  memberships: number
+}
+
+/** Le lien entre une personne et une station. */
+export interface ConsoleAccountMembership {
+  organization_id: string
+  organization_name: string
+  slug: string
+  role: string
+  status: string
+  created_at: string
+  disabled_at: string | null
+  deletion_requested_at: string | null
+  permission_overrides: number
+}
+
+export interface ConsoleAccountSession {
+  created_at: string
+  last_used_at: string | null
+  expires_at: string
+}
+
+export interface ConsoleAccountDetail {
+  account: ConsoleAccount
+  memberships: ConsoleAccountMembership[]
+  sessions: ConsoleAccountSession[]
+  sole_owner_of: Array<{ organization_id: string; name: string }>
+}

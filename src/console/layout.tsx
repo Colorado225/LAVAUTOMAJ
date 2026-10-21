@@ -1,6 +1,7 @@
 import * as React from "react"
 import { NavLink, Outlet } from "react-router-dom"
 import {
+  Users,
   Building2,
   FileClock,
   LayoutDashboard,
@@ -28,6 +29,7 @@ import { useConsoleAuth } from "./auth"
 const NAV = [
   { to: "/console", end: true, label: "Vue d'ensemble", icon: LayoutDashboard },
   { to: "/console/stations", end: false, label: "Stations", icon: Building2 },
+  { to: "/console/comptes", end: false, label: "Comptes", icon: Users },
   { to: "/console/revenus", end: false, label: "Revenus", icon: TrendingUp },
   { to: "/console/paiements", end: false, label: "Paiements", icon: Wallet },
   { to: "/console/journal", end: false, label: "Journal", icon: FileClock },
