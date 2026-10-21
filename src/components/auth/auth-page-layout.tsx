@@ -2,7 +2,7 @@ import type { ReactNode } from "react"
 import { MapPin, Sparkles } from "lucide-react"
 import { motion, useReducedMotion } from "framer-motion"
 import { Link } from "react-router-dom"
-import { Logo } from "@/components/logo"
+import { BrandMark } from "@/components/brand"
 
 interface AuthPageLayoutProps {
   eyebrow: string
@@ -32,7 +32,7 @@ export function AuthPageLayout({
   const year = new Date().getFullYear()
 
   return (
-    <main className="relative min-h-svh w-full overflow-hidden bg-[#f6f8fc] text-[#102342]">
+    <main className="light-surface relative min-h-svh w-full overflow-hidden bg-[#f6f8fc] text-[#102342]">
       <div className="pointer-events-none absolute -left-40 top-36 size-96 rounded-full bg-blue-100/50 blur-3xl lg:hidden" />
       <div className="mx-auto grid min-h-svh w-full max-w-[1720px] grid-cols-1 lg:grid-cols-[minmax(0,1.04fr)_minmax(420px,0.96fr)]">
         <section className="relative z-10 flex min-h-svh flex-col px-5 py-5 sm:px-8 sm:py-7 lg:px-12 lg:py-8 xl:px-16">
@@ -42,9 +42,11 @@ export function AuthPageLayout({
               aria-label="WashPilot CI — accueil"
               className="group flex shrink-0 items-center gap-3 rounded-xl outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
             >
-              <span className="grid size-11 place-items-center rounded-2xl bg-[#0c2852] text-white shadow-lg shadow-blue-950/15 transition-transform duration-200 group-hover:-translate-y-0.5 motion-reduce:transition-none">
-                <Logo size={27} />
-              </span>
+              <BrandMark
+                height={40}
+                tone="light"
+                className="transition-transform duration-200 group-hover:-translate-y-0.5 motion-reduce:transition-none"
+              />
               <span className="flex flex-col gap-1">
                 <span className="text-[17px] font-extrabold leading-none tracking-[-0.04em] text-[#102342]">
                   WashPilot <span className="text-blue-600">CI</span>

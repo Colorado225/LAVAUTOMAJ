@@ -2,9 +2,10 @@ import { Router } from "express"
 import { z } from "zod"
 import type { Pool } from "pg"
 import { getPool } from "./db.ts"
-import { asyncRoute, body, tenant, parseId, requireRole } from "./http.ts"
+import { asyncRoute, body, tenant, parseId, requirePermission } from "./http.ts"
 import { HttpError } from "./auth.ts"
 import { fingerprint, withIdempotency } from "./idempotency.ts"
+import { assertSiteWritable } from "./plan-limits.ts"
 
 export const operationValidators = {
   openSession: z
@@ -86,6 +87,7 @@ export function createOperationsRouter() {
   // -------------------------------------------------------- cash sessions --
   r.get(
     "/cash-sessions",
+    requirePermission("cash_session:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const status = typeof req.query.status === "string" && ["open", "closed"].includes(req.query.status) ? req.query.status : null
@@ -99,6 +101,7 @@ export function createOperationsRouter() {
 
   r.get(
     "/cash-sessions/current",
+    requirePermission("cash_session:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const siteId = typeof req.query.site_id === "string" && req.query.site_id ? parseId(req.query.site_id) : null
@@ -113,7 +116,7 @@ export function createOperationsRouter() {
 
   r.post(
     "/cash-sessions/open",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("cash_session:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(operationValidators.openSession, req.body)
@@ -136,6 +139,7 @@ export function createOperationsRouter() {
             throw new HttpError(409, "cash_session_already_open", "Une session de caisse est déjà ouverte pour cette station.")
           }
 
+          await assertSiteWritable(client, t.organizationId, input.site_id)
           const insertQ = await client.query(
             "INSERT INTO cash_sessions(organization_id, site_id, opened_by, opening_amount_cents) VALUES($1,$2,$3,$4) RETURNING id",
             [t.organizationId, input.site_id, t.userId, input.opening_amount_cents],
@@ -155,6 +159,7 @@ export function createOperationsRouter() {
 
   r.get(
     "/cash-sessions/:id",
+    requirePermission("cash_session:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -166,6 +171,7 @@ export function createOperationsRouter() {
 
   r.get(
     "/cash-sessions/:id/movements",
+    requirePermission("cash_session:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -181,7 +187,7 @@ export function createOperationsRouter() {
 
   r.post(
     "/cash-sessions/:id/movements",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("cash_session:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -220,7 +226,7 @@ export function createOperationsRouter() {
 
   r.post(
     "/cash-sessions/:id/close",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("cash_session:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -271,6 +277,7 @@ export function createOperationsRouter() {
   // ------------------------------------------------------------- expenses --
   r.get(
     "/expenses",
+    requirePermission("expense:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -283,7 +290,7 @@ export function createOperationsRouter() {
 
   r.post(
     "/expenses",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("expense:create"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(operationValidators.expense, req.body)
@@ -316,6 +323,7 @@ export function createOperationsRouter() {
             if (!siteId) siteId = sessionQ.rows[0].site_id
           }
 
+          await assertSiteWritable(client, t.organizationId, siteId)
           const q = await client.query(
             `INSERT INTO expenses(organization_id, site_id, category, amount_cents, payment_method, cash_session_id, description, beneficiary, reference, created_by)
              VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING ${EXPENSE_FIELDS}`,
@@ -361,7 +369,7 @@ export function createOperationsRouter() {
   // PATCH /api/v1/expenses/:id — editable only while the cash session is open.
   r.patch(
     "/expenses/:id",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("expense:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -475,7 +483,7 @@ export function createOperationsRouter() {
   // DELETE /api/v1/expenses/:id — reverses the cash movement when the session is still open.
   r.delete(
     "/expenses/:id",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("expense:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)

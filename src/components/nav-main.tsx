@@ -2,6 +2,8 @@
 
 import { ChevronRight, type LucideIcon } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
+import { motion } from "framer-motion"
+import { SPRING } from "@/lib/motion"
 
 import {
   Collapsible,
@@ -78,7 +80,7 @@ export function NavMain({
                         <SidebarMenuSubButton
                           className="cursor-pointer"
                           isActive={location.pathname === subItem.url}
-                          render={<Link to={subItem.url} />}
+                          render={<Link to={subItem.url} viewTransition />}
                         >
                           <span>{subItem.title}</span>
                         </SidebarMenuSubButton>
@@ -90,11 +92,23 @@ export function NavMain({
             ) : (
               <SidebarMenuButton
                 tooltip={item.title}
-                className="cursor-pointer"
+                // Le fond actif est dessiné par l'indicateur animé ci-dessous.
+                className="group/nav relative isolate cursor-pointer transition-transform duration-150 ease-out hover:translate-x-0.5 data-active:bg-transparent"
                 isActive={location.pathname === item.url}
-                render={<Link to={item.url} />}
+                render={<Link to={item.url} viewTransition />}
               >
-                {item.icon && <item.icon />}
+                {location.pathname === item.url && (
+                  /* Un seul indicateur pour tout le menu : il glisse d'un
+                     élément à l'autre au lieu de clignoter d'un écran à l'autre. */
+                  <motion.span
+                    layoutId="sidebar-active-indicator"
+                    className="edge-3d absolute inset-0 -z-10 rounded-md bg-sidebar-accent"
+                    transition={SPRING.snappy}
+                  />
+                )}
+                {item.icon && (
+                  <item.icon className="transition-transform duration-150 ease-out group-hover/nav:scale-110" />
+                )}
                 <span>{item.title}</span>
               </SidebarMenuButton>
             )}

@@ -9,7 +9,6 @@ import {
 import { Link, useNavigate } from "react-router-dom"
 import { useAuth } from "@/lib/auth"
 
-import { Logo } from "@/components/logo"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -66,7 +65,7 @@ export function NavUser({
             }
           >
             <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <Logo size={24} className="size-6" />
+              <CircleUser className="size-5" aria-hidden />
             </div>
             <div className="grid flex-1 text-left text-sm leading-tight">
               <span className="truncate font-medium">{displayName}</span>
@@ -86,7 +85,7 @@ export function NavUser({
               <DropdownMenuLabel className="p-0 font-normal text-foreground">
                 <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                   <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                    <Logo size={24} />
+                    <CircleUser className="size-5" aria-hidden />
                   </div>
                   <div className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-medium">{displayName}</span>
@@ -101,14 +100,14 @@ export function NavUser({
             <DropdownMenuGroup>
               <DropdownMenuItem
                 className="cursor-pointer"
-                render={<Link to="/settings/account" />}
+                render={<Link to="/settings/account" viewTransition />}
               >
                 <CircleUser className="size-4 mr-2" />
                 Mon compte
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="cursor-pointer"
-                render={<Link to="/settings/billing" />}
+                render={<Link to="/settings/billing" viewTransition />}
               >
                 <CreditCard className="size-4 mr-2" />
                 Abonnement

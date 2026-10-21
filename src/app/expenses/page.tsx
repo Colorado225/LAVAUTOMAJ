@@ -2,7 +2,11 @@
 
 import { useRef, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { apiFetch, useApi } from "@/lib/api"
+import { useAccess } from "@/lib/permissions"
+import { actionGate } from "@/lib/action-blocking"
+import { BlockedReason } from "@/components/access/blocked-reason"
+import { useApi } from "@/lib/api"
+import { useMutation } from "@/lib/use-mutation"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import {
   Table,
@@ -31,7 +35,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
-import { Plus, X } from "lucide-react"
+import { TableSkeleton } from "@/components/ui/table-skeleton"
+import { SubmitButton } from "@/components/ui/submit-button"
+import { EmptyState } from "@/components/ui/empty-state"
+import { useSuccessFlash } from "@/hooks/use-success-flash"
+import { Lock, Plus, Receipt, X } from "lucide-react"
 
 interface Site {
   id: string
@@ -107,7 +115,18 @@ interface CreateExpenseRequest {
   cash_session_id?: string
 }
 
+/** Clé d'occupation du formulaire. */
+const FORM_KEY = "formulaire"
+
 export default function ExpensesPage() {
+  const manageExpenses = useAccess("expense:create", "expenses.manage")
+  // Le formulaire s'ouvre dans une boîte de dialogue : rien n'est écrit tant
+  // qu'on n'a pas validé, donc l'attente des droits ne grise pas le bouton.
+  const expenseForm = actionGate({
+    loading: manageExpenses.loading,
+    allowed: manageExpenses.allowed,
+    reason: manageExpenses.reason,
+  })
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<Expense[]>(`/api/v1/expenses?refresh=${refreshKey}`)
   const expenses = data ?? []
@@ -115,9 +134,13 @@ export default function ExpensesPage() {
   const { data: cashSessions } = useApi<CashSession[]>(`/api/v1/cash-sessions?status=open&refresh=${refreshKey}`)
 
   const [open, setOpen] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [mutationError, setMutationError] = useState<string | null>(null)
-  const [mutationSuccess, setMutationSuccess] = useState<string | null>(null)
+  // Le contrôleur porte l'occupation et les deux messages de l'écriture.
+  const mutation = useMutation()
+  const saving = mutation.busyKey === FORM_KEY
+  const [saveSuccess, flashSaveSuccess] = useSuccessFlash()
+  // La dépense qui vient d'être créée est surlignée brièvement dans la liste.
+  const [highlightedExpenseId, setHighlightedExpenseId] = useState<string | null>(null)
+
   const idempotencyKeys = useRef(new Map<string, string>())
 
   // Form fields
@@ -150,71 +173,65 @@ export default function ExpensesPage() {
     setDescription("")
     setReference("")
     setCashSessionId("")
-    setMutationError(null)
-    setMutationSuccess(null)
+    mutation.reset()
   }
 
   async function submitExpense(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setMutationError(null)
-    setMutationSuccess(null)
+    mutation.reset()
 
     if (!category) {
-      setMutationError("Veuillez sélectionner une catégorie.")
+      mutation.fail("Veuillez sélectionner une catégorie.")
       return
     }
     if (amountCents == null || amountCents <= 0) {
-      setMutationError("Le montant doit être un nombre positif valide.")
+      mutation.fail("Le montant doit être un nombre positif valide.")
       return
     }
     if (needsCashSession && !cashSessionId) {
-      setMutationError("Une session de caisse ouverte est requise pour les paiements en espèces.")
+      mutation.fail("Une session de caisse ouverte est requise pour les paiements en espèces.")
       return
     }
 
-    setSaving(true)
-    try {
-      const body: CreateExpenseRequest = {
-        category,
-        amount_cents: amountCents,
-        payment_method: paymentMethod,
-      }
-
-      if (siteId) body.site_id = siteId
-      if (beneficiary) body.beneficiary = beneficiary
-      if (description) body.description = description
-      if (reference) body.reference = reference
-      if (cashSessionId) body.cash_session_id = cashSessionId
-
-      const fingerprint = JSON.stringify(body)
-      let requestKey = idempotencyKeys.current.get(fingerprint)
-      if (!requestKey) {
-        requestKey = createIdempotencyKey()
-        idempotencyKeys.current.set(fingerprint, requestKey)
-      }
-
-      const response = await apiFetch("/api/v1/expenses", {
-        method: "POST",
-        headers: { "Idempotency-Key": requestKey },
-        body: JSON.stringify(body),
-      })
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(errorText || `Erreur ${response.status}`)
-      }
-
-      idempotencyKeys.current.clear()
-      setMutationSuccess("Dépense enregistrée avec succès !")
-      setTimeout(() => {
-        setOpen(false)
-        resetForm()
-        setRefreshKey((key) => key + 1)
-      }, 1500)
-    } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Échec de l'enregistrement de la dépense.")
-    } finally {
-      setSaving(false)
+    const body: CreateExpenseRequest = {
+      category,
+      amount_cents: amountCents,
+      payment_method: paymentMethod,
     }
+    if (siteId) body.site_id = siteId
+    if (beneficiary) body.beneficiary = beneficiary
+    if (description) body.description = description
+    if (reference) body.reference = reference
+    if (cashSessionId) body.cash_session_id = cashSessionId
+
+    // Même dépense renvoyée deux fois = même clé : le serveur n'en crée
+    // qu'une. La clé n'est oubliée qu'une fois l'écriture acceptée.
+    const fingerprint = JSON.stringify(body)
+    let requestKey = idempotencyKeys.current.get(fingerprint)
+    if (!requestKey) {
+      requestKey = createIdempotencyKey()
+      idempotencyKeys.current.set(fingerprint, requestKey)
+    }
+
+    const outcome = await mutation.run<{ id?: string }>({
+      url: "/api/v1/expenses",
+      method: "POST",
+      headers: { "Idempotency-Key": requestKey },
+      body,
+      success: "Dépense enregistrée avec succès !",
+      failure: "Échec de l'enregistrement de la dépense.",
+      busyKey: FORM_KEY,
+    })
+    if (!outcome.ok) return
+
+    idempotencyKeys.current.clear()
+    if (outcome.data?.id) setHighlightedExpenseId(outcome.data.id)
+    flashSaveSuccess()
+    setTimeout(() => {
+      setOpen(false)
+      resetForm()
+      setRefreshKey((key) => key + 1)
+    }, 1500)
   }
 
   function handleOpenChange(isOpen: boolean) {
@@ -235,9 +252,25 @@ export default function ExpensesPage() {
             </p>
           </div>
           <Dialog open={open} onOpenChange={handleOpenChange}>
-            <DialogTrigger render={<Button />}>
-              <Plus className="mr-2 h-4 w-4" /> Nouvelle dépense
+            <div className="flex flex-col items-start gap-1.5">
+            <DialogTrigger
+              render={
+                <Button
+                  disabled={expenseForm.disabled}
+                  aria-busy={expenseForm.busy}
+                  title={expenseForm.reason ?? undefined}
+                />
+              }
+            >
+              {expenseForm.denied ? (
+                <Lock className="mr-2 h-4 w-4" />
+              ) : (
+                <Plus className="mr-2 h-4 w-4" />
+              )}{" "}
+              Nouvelle dépense
             </DialogTrigger>
+            <BlockedReason reason={expenseForm.reason} className="max-w-72" />
+            </div>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Nouvelle dépense</DialogTitle>
@@ -247,14 +280,14 @@ export default function ExpensesPage() {
               </DialogHeader>
 
               <form onSubmit={submitExpense} className="space-y-6 py-4">
-                {mutationError && (
+                {mutation.error && (
                   <div className="p-3 bg-destructive/10 text-destructive rounded-md text-sm">
-                    {mutationError}
+                    {mutation.error}
                   </div>
                 )}
-                {mutationSuccess && (
+                {mutation.success && (
                   <div className="p-3 bg-green-100 text-green-800 rounded-md text-sm">
-                    {mutationSuccess}
+                    {mutation.success}
                   </div>
                 )}
 
@@ -390,16 +423,21 @@ export default function ExpensesPage() {
                   >
                     <X className="mr-2 h-4 w-4" /> Annuler
                   </Button>
-                  <Button type="submit" disabled={saving}>
-                    {saving ? "Enregistrement..." : "Enregistrer la dépense"}
-                  </Button>
+                  <SubmitButton
+                    type="submit"
+                    pending={saving}
+                    success={saveSuccess}
+                    successLabel="Dépense enregistrée"
+                  >
+                    Enregistrer la dépense
+                  </SubmitButton>
                 </div>
               </form>
             </DialogContent>
           </Dialog>
         </div>
 
-        {loading && <div className="text-muted-foreground">Chargement…</div>}
+        {loading && <TableSkeleton rows={6} cols={6} label="Chargement des dépenses" />}
         {error && <div className="text-destructive">{error}</div>}
 
         {!loading && !error && (
@@ -418,13 +456,21 @@ export default function ExpensesPage() {
               <TableBody>
                 {expenses.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground">
-                      Aucune dépense enregistrée.
+                    <TableCell colSpan={6} className="p-0">
+                      <EmptyState
+                        icon={Receipt}
+                        title="Aucune dépense enregistrée"
+                        description="Les sorties d'argent (carburant, produits, salaires…) apparaîtront ici dès la première saisie."
+                      />
                     </TableCell>
                   </TableRow>
                 )}
-                {expenses.map((e) => (
-                  <TableRow key={e.id}>
+                {expenses.map((e, index) => (
+                  <TableRow
+                    key={e.id}
+                    className={`row-in transition-colors ${e.id === highlightedExpenseId ? "row-flash" : ""}`}
+                    style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
+                  >
                     <TableCell>{new Date(e.expense_date).toLocaleDateString("fr-CI")}</TableCell>
                     <TableCell>{expenseCategories.find(c => c.value === e.category)?.label || e.category}</TableCell>
                     <TableCell>{e.beneficiary || "-"}</TableCell>

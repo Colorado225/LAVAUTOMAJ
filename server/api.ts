@@ -2,8 +2,11 @@ import { Router } from "express"
 import { z } from "zod"
 import type { Pool } from "pg"
 import { getPool } from "./db.ts"
-import { asyncRoute, body, tenant, parseId, requireRole, HttpError } from "./http.ts"
+import { asyncRoute, body, tenant, parseId, requirePermission, HttpError } from "./http.ts"
 import { fingerprint, withIdempotency } from "./idempotency.ts"
+import { consumeForWash, reverseWashConsumption } from "./stock.ts"
+import { initialPaymentStatus, resolvePaymentStatus, PAYMENT_METHODS } from "./payments.ts"
+import { assertSiteCapacity, assertSiteWritable, loadSiteLimitState } from "./plan-limits.ts"
 
 export const catalogValidators = {
   category: z
@@ -50,7 +53,7 @@ export const washValidators = {
         )
         .min(1, "Sélectionnez au moins une prestation."),
       worker_ids: z.array(z.string().uuid()).max(50).default([]),
-      payment_method: z.enum(["cash", "orange_money", "mtn_momo", "moov_money", "wave", "other"]),
+      payment_method: z.enum(PAYMENT_METHODS),
       amount_received_cents: z.number().int().min(0).max(100000000),
       cash_session_id: z.string().uuid().optional(),
     })
@@ -78,18 +81,36 @@ export function createApiRouter() {
   // ---------------------------------------------------------------- sites --
   r.get(
     "/sites",
+    requirePermission("wash:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
-      const q = await db().query(
+      const pool = db()
+      const q = await pool.query(
         "SELECT id, name, city, address, phone, email, description, logo_url, slug, is_active, created_at, updated_at FROM sites WHERE organization_id=$1::uuid ORDER BY created_at",
         [t.organizationId],
       )
-      res.json(q.rows)
+      // `writable` dit à l'interface ce que le serveur refusera de toute façon :
+      // après une rétrogradation, les stations excédentaires restent listées et
+      // consultables, mais n'acceptent plus de nouvelle opération.
+      const limit = await loadSiteLimitState(pool, t.organizationId)
+      const writableIds =
+        limit.enforced && limit.limit !== null
+          ? new Set(
+              q.rows.filter((row) => row.is_active).slice(0, limit.limit).map((row) => row.id),
+            )
+          : null
+      res.json(
+        q.rows.map((row) => ({
+          ...row,
+          writable: writableIds ? writableIds.has(row.id) : true,
+        })),
+      )
     }),
   )
 
   r.get(
     "/sites/:id",
+    requirePermission("wash:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -101,22 +122,36 @@ export function createApiRouter() {
 
   r.post(
     "/sites",
-    requireRole("owner", "manager"),
+    requirePermission("settings:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(catalogValidators.site, req.body)
-      const q = await db().query(
-        `INSERT INTO sites(organization_id, name, city, address, phone, email, description, is_active)
-         VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE($8,true)) RETURNING *`,
-        [t.organizationId, input.name, input.city, input.address ?? null, input.phone ?? null, input.email ?? null, input.description ?? null, input.is_active ?? null],
-      )
-      res.status(201).json(q.rows[0])
+      // Le plafond se vérifie sous verrou : deux créations simultanées
+      // passeraient toutes les deux un simple COUNT.
+      const client = await db().connect()
+      try {
+        await client.query("BEGIN")
+        await assertSiteCapacity(client, t.organizationId)
+        const created = await client.query(
+          `INSERT INTO sites(organization_id, name, city, address, phone, email, description, is_active)
+           VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE($8,true)) RETURNING *`,
+          [t.organizationId, input.name, input.city, input.address ?? null, input.phone ?? null, input.email ?? null, input.description ?? null, input.is_active ?? null],
+        )
+        await client.query("COMMIT")
+        res.status(201).json(created.rows[0])
+        return
+      } catch (error) {
+        await client.query("ROLLBACK")
+        throw error
+      } finally {
+        client.release()
+      }
     }),
   )
 
   r.patch(
     "/sites/:id",
-    requireRole("owner", "manager"),
+    requirePermission("settings:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -124,19 +159,31 @@ export function createApiRouter() {
       const oldQ = await db().query("SELECT * FROM sites WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!oldQ.rowCount) throw new HttpError(404, "site_not_found", "Station introuvable.")
       const merged = { ...oldQ.rows[0], ...input }
-      const q = await db().query(
-        `UPDATE sites SET name=$3, city=$4, address=$5, phone=$6, email=$7, description=$8, is_active=$9, updated_at=now()
-         WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING *`,
-        [id, t.organizationId, merged.name, merged.city, merged.address, merged.phone, merged.email, merged.description, merged.is_active],
-      )
-      res.json(q.rows[0])
+      const reactivating = oldQ.rows[0].is_active === false && merged.is_active === true
+      const client = await db().connect()
+      try {
+        await client.query("BEGIN")
+        if (reactivating) await assertSiteCapacity(client, t.organizationId)
+        const q = await client.query(
+          `UPDATE sites SET name=$3, city=$4, address=$5, phone=$6, email=$7, description=$8, is_active=$9, updated_at=now()
+           WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING *`,
+          [id, t.organizationId, merged.name, merged.city, merged.address, merged.phone, merged.email, merged.description, merged.is_active],
+        )
+        await client.query("COMMIT")
+        res.json(q.rows[0])
+      } catch (error) {
+        await client.query("ROLLBACK")
+        throw error
+      } finally {
+        client.release()
+      }
     }),
   )
 
   // DELETE /api/v1/sites/:id — refuse when washes, sessions, expenses or workers still reference the site.
   r.delete(
     "/sites/:id",
-    requireRole("owner", "manager"),
+    requirePermission("settings:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -162,6 +209,7 @@ export function createApiRouter() {
   // --------------------------------------------------- service categories --
   r.get(
     "/service-categories",
+    requirePermission("service:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -174,7 +222,7 @@ export function createApiRouter() {
 
   r.post(
     "/service-categories",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(catalogValidators.category, req.body)
@@ -195,7 +243,7 @@ export function createApiRouter() {
 
   r.patch(
     "/service-categories/:id",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -220,7 +268,7 @@ export function createApiRouter() {
 
   r.delete(
     "/service-categories/:id",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -237,6 +285,7 @@ export function createApiRouter() {
   // --------------------------------------------------- vehicle categories --
   r.get(
     "/vehicle-categories",
+    requirePermission("service:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -249,7 +298,7 @@ export function createApiRouter() {
 
   r.post(
     "/vehicle-categories",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(catalogValidators.category, req.body)
@@ -270,7 +319,7 @@ export function createApiRouter() {
 
   r.patch(
     "/vehicle-categories/:id",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -295,7 +344,7 @@ export function createApiRouter() {
 
   r.delete(
     "/vehicle-categories/:id",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -312,6 +361,7 @@ export function createApiRouter() {
   // ------------------------------------------------------------- services --
   r.get(
     "/services",
+    requirePermission("service:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -324,6 +374,7 @@ export function createApiRouter() {
 
   r.get(
     "/services/:id",
+    requirePermission("service:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -335,7 +386,7 @@ export function createApiRouter() {
 
   r.post(
     "/services",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(catalogValidators.service, req.body)
@@ -354,7 +405,7 @@ export function createApiRouter() {
 
   r.patch(
     "/services/:id",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -377,7 +428,7 @@ export function createApiRouter() {
 
   r.delete(
     "/services/:id",
-    requireRole("owner", "manager"),
+    requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -394,6 +445,7 @@ export function createApiRouter() {
   // --------------------------------------------------------------- washes --
   r.get(
     "/washes",
+    requirePermission("wash:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
@@ -406,6 +458,7 @@ export function createApiRouter() {
 
   r.get(
     "/washes/:id",
+    requirePermission("wash:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -435,7 +488,7 @@ export function createApiRouter() {
   // from the catalog, cash payments require an open cash session.
   r.post(
     "/washes",
-    requireRole("owner", "manager", "cashier"),
+    requirePermission("wash:create"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(washValidators.create, req.body)
@@ -506,9 +559,9 @@ export function createApiRouter() {
             cashSessionId = sessionQ.rows[0].id
           }
 
-          const paymentStatus =
-            input.amount_received_cents === 0 ? "unpaid" : input.amount_received_cents < totalCents ? "partial" : "paid"
+          const paymentStatus = resolvePaymentStatus(totalCents, input.amount_received_cents)
 
+          await assertSiteWritable(client, t.organizationId, input.site_id)
           const washQ = await client.query(
             `INSERT INTO washes(organization_id, site_id, vehicle_category_id, status, payment_status, total_cents, payment_method, created_by, reference)
              VALUES($1,$2,$3,'completed',$4,$5,$6,$7,
@@ -526,6 +579,11 @@ export function createApiRouter() {
               [wash.id, item.service_id, service.name, item.quantity, unitPrice, unitPrice * item.quantity],
             )
           }
+          // Ce que le lavage a consommé sort du stock dans la même
+          // transaction : si le lavage échoue, rien n'est déduit. Jamais
+          // bloquant — le produit a réellement été utilisé.
+          await consumeForWash(client, t.organizationId, wash.id, input.items, t.userId)
+
           for (const workerId of new Set(input.worker_ids)) {
             await client.query("INSERT INTO wash_assignments(wash_id, worker_id) VALUES($1,$2)", [wash.id, workerId])
           }
@@ -533,7 +591,7 @@ export function createApiRouter() {
           if (input.amount_received_cents > 0) {
             await client.query(
               "INSERT INTO payments(organization_id, wash_id, method, amount_cents, status) VALUES($1,$2,$3,$4,$5)",
-              [t.organizationId, wash.id, input.payment_method, input.amount_received_cents, input.payment_method === "cash" ? "verified" : "pending"],
+              [t.organizationId, wash.id, input.payment_method, input.amount_received_cents, initialPaymentStatus(input.payment_method)],
             )
           }
           if (isCash && cashSessionId) {
@@ -563,7 +621,7 @@ export function createApiRouter() {
   // POST /api/v1/washes/:id/cancel — soft cancellation with mandatory reason.
   r.post(
     "/washes/:id/cancel",
-    requireRole("owner", "manager"),
+    requirePermission("wash:cancel"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
@@ -598,6 +656,10 @@ export function createApiRouter() {
 
         const hadPayments = await client.query("SELECT 1 FROM payments WHERE wash_id=$1::uuid LIMIT 1", [id])
         await client.query("UPDATE payments SET status='refunded' WHERE wash_id=$1::uuid", [id])
+
+        // Le lavage n'a pas eu lieu : ce qu'il avait consommé revient au
+        // stock, par contrepassation et non par suppression.
+        await reverseWashConsumption(client, t.organizationId, id, t.userId)
 
         const q = await client.query(
           `UPDATE washes SET status='cancelled', payment_status=CASE WHEN $4 THEN 'refunded' ELSE payment_status END,

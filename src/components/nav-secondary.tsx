@@ -29,7 +29,7 @@ export function NavSecondary({
               <SidebarMenuButton
                 size="sm"
                 className="cursor-pointer"
-                render={<Link to={item.url} />}
+                render={<Link to={item.url} viewTransition />}
               >
                 <item.icon />
                 <span>{item.title}</span>

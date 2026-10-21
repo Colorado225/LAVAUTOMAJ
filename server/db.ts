@@ -1,6 +1,9 @@
 import pg from "pg";
+import { mkdir } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
+import { resolvePgliteLocation, describePgliteLocation } from "./pglite-location.ts";
 import { env } from "./env.ts";
+import { migrateLegacyPlatformAdmins, syncPlatformOperators } from "./console-auth.ts";
 import { hashPassword } from "./auth.ts";
 
 const { Pool } = pg;
@@ -55,6 +58,7 @@ CREATE TABLE IF NOT EXISTS organizations (
  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE users ADD COLUMN IF NOT EXISTS organization_id uuid;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_admin boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS plans (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), code text NOT NULL UNIQUE, name text NOT NULL,
  max_users integer, max_workers integer, max_sites integer, features jsonb NOT NULL DEFAULT '{}'::jsonb
@@ -64,10 +68,18 @@ ALTER TABLE plans ADD COLUMN IF NOT EXISTS price_cents integer NOT NULL DEFAULT 
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS billing_cycle text NOT NULL DEFAULT 'monthly';
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_services integer;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS sort_order integer NOT NULL DEFAULT 0;
+-- Migration du forfait d'entrée : « free » (0 F) devient « starter » (10 000 F),
+-- pour coller à la grille publique. Le renommage se fait AVANT le seed, sinon
+-- ON CONFLICT(code) insérerait un doublon en laissant « free » orphelin —
+-- or les abonnements existants pointent dessus par plan_id. En renommant,
+-- les abonnements en cours suivent sans la moindre réécriture.
+UPDATE plans SET code='starter' WHERE code='free';
+-- Chaque forfait est payant et ouvre un essai de 14 jours (voir
+-- server/entitlements.ts). Prix en centimes : 10 000 F = 1 000 000.
 INSERT INTO plans(code,name,description,price_cents,billing_cycle,max_users,max_workers,max_sites,max_services,sort_order,features) VALUES
- ('free','Gratuit','Pour démarrer : une station, une petite équipe.',0,'monthly',1,3,1,10,1,'{"reports.advanced":false,"reports.export":false,"sites.multiple":false}'::jsonb),
- ('pro','Pro','Pour les stations en croissance : rapports avancés et exports.',1000000,'monthly',10,20,1,NULL,2,'{"reports.advanced":true,"reports.export":true,"sites.multiple":false}'::jsonb),
- ('business','Business','Multi-stations, équipe illimitée, analyses consolidées.',2500000,'monthly',NULL,NULL,NULL,NULL,3,'{"reports.advanced":true,"reports.export":true,"sites.multiple":true}'::jsonb)
+ ('starter','Starter','Pour les petites stations qui veulent abandonner le cahier de caisse.',1000000,'monthly',2,3,1,10,1,'{"reports.advanced":false,"reports.export":false,"reports.consolidated":false,"audit.read":false,"sites.multiple":false}'::jsonb),
+ ('pro','Pro','Pour les stations qui ont plusieurs laveurs et veulent mieux contrôler leurs opérations.',2000000,'monthly',10,20,1,NULL,2,'{"reports.advanced":true,"reports.export":true,"reports.consolidated":false,"audit.read":true,"sites.multiple":false}'::jsonb),
+ ('business','Business','Pour les stations importantes ou les propriétaires qui gèrent plusieurs sites.',3500000,'monthly',NULL,NULL,NULL,NULL,3,'{"reports.advanced":true,"reports.export":true,"reports.consolidated":true,"audit.read":true,"sites.multiple":true}'::jsonb)
 ON CONFLICT(code) DO UPDATE SET
  name=EXCLUDED.name, description=EXCLUDED.description, price_cents=EXCLUDED.price_cents,
  billing_cycle=EXCLUDED.billing_cycle, max_users=EXCLUDED.max_users, max_workers=EXCLUDED.max_workers,
@@ -78,6 +90,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
  plan_id uuid NOT NULL REFERENCES plans(id), status text NOT NULL DEFAULT 'trialing',
  current_period_end timestamptz, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan_changed_at timestamptz;
+UPDATE subscriptions SET plan_changed_at = created_at WHERE plan_changed_at IS NULL;
 CREATE TABLE IF NOT EXISTS organization_members (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  user_id uuid NOT NULL REFERENCES users(id), role text NOT NULL DEFAULT 'cashier',
@@ -160,6 +174,103 @@ CREATE TABLE IF NOT EXISTS wash_items (
  service_id uuid REFERENCES services(id), service_name text NOT NULL, quantity integer NOT NULL CHECK(quantity > 0),
  unit_price_cents integer NOT NULL CHECK(unit_price_cents >= 0), line_total_cents integer NOT NULL CHECK(line_total_cents >= 0)
 );
+-- Emissions de recu.
+--
+-- Une ligne par impression, pas une par lavage : c'est le nombre de copies
+-- qui compte. Un recu est une preuve de paiement, et deux papiers
+-- indiscernables pour un seul versement permettent de justifier deux fois la
+-- meme somme. La copie n.2 et les suivantes portent la mention DUPLICATA.
+CREATE TABLE IF NOT EXISTS receipt_issues (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ organization_id uuid NOT NULL REFERENCES organizations(id),
+ wash_id uuid NOT NULL REFERENCES washes(id),
+ copy_number integer NOT NULL CHECK(copy_number > 0),
+ issued_by uuid REFERENCES users(id),
+ issued_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(wash_id, copy_number)
+);
+CREATE INDEX IF NOT EXISTS receipt_issues_wash_idx ON receipt_issues(wash_id, copy_number DESC);
+
+-- ------------------------------------------------------------------ stock --
+-- Regle structurelle : il n'existe NULLE PART une colonne « quantite en
+-- stock ». Le stock d'un produit est toujours la somme des mouvements qui le
+-- concernent. Aucune ecriture directe n'est donc possible, ni par l'API, ni
+-- par une requete manuelle distraite : pour changer un stock il faut laisser
+-- une trace datee, signee et motivee.
+CREATE TABLE IF NOT EXISTS product_categories (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ name text NOT NULL, is_active boolean NOT NULL DEFAULT true,
+ created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(organization_id,name)
+);
+CREATE TABLE IF NOT EXISTS products (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ category_id uuid REFERENCES product_categories(id),
+ name text NOT NULL,
+ -- Unite de mesure affichee. Les quantites sont stockees en milliemes de
+ -- cette unite (1 litre = 1000), pour la meme raison que l'argent est stocke
+ -- en centimes : un entier exact plutot qu'un flottant approximatif.
+ unit text NOT NULL DEFAULT 'unite' CHECK(unit IN ('unite','litre','kilogramme')),
+ unit_cost_cents integer NOT NULL DEFAULT 0 CHECK(unit_cost_cents >= 0),
+ low_stock_threshold_milli integer NOT NULL DEFAULT 0 CHECK(low_stock_threshold_milli >= 0),
+ is_active boolean NOT NULL DEFAULT true,
+ created_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(organization_id,name)
+);
+CREATE TABLE IF NOT EXISTS stock_movements (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ product_id uuid NOT NULL REFERENCES products(id), site_id uuid REFERENCES sites(id),
+ -- initial   : stock d'ouverture a la creation du produit
+ -- entry     : entree manuelle (correction, retour)
+ -- exit      : sortie manuelle (consommation, perte, casse)
+ -- inventory : ecart constate lors d'un comptage physique
+ -- reversal  : contrepassation d'un mouvement precedent
+ kind text NOT NULL CHECK(kind IN ('initial','entry','exit','inventory','reversal')),
+ -- Signe : positif pour une entree, negatif pour une sortie. Jamais zero,
+ -- un mouvement nul n'aurait rien a dire.
+ quantity_milli integer NOT NULL CHECK(quantity_milli <> 0),
+ -- Instantane du cout unitaire au moment du mouvement, exactement comme
+ -- wash_items fige le prix d'une prestation. Changer le cout d'un produit
+ -- demain ne doit pas reecrire la valeur des sorties d'hier.
+ unit_cost_cents integer NOT NULL DEFAULT 0 CHECK(unit_cost_cents >= 0),
+ reason text, reference text,
+ reverses_movement_id uuid REFERENCES stock_movements(id),
+ created_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS stock_movements_product_idx ON stock_movements(organization_id, product_id, created_at DESC);
+-- Un mouvement ne peut etre contrepasse qu'une seule fois.
+CREATE UNIQUE INDEX IF NOT EXISTS stock_movements_reversal_idx ON stock_movements(reverses_movement_id) WHERE reverses_movement_id IS NOT NULL;
+
+-- En Cote d'Ivoire les stations achetent de la lessive en sachets : l'unite
+-- reelle de comptage est le sachet, pas le litre. Les contraintes posees a la
+-- creation des tables sont elargies ici, pour que les bases deja en service
+-- soient migrees au demarrage au lieu de refuser les nouvelles valeurs.
+ALTER TABLE products DROP CONSTRAINT IF EXISTS products_unit_check;
+ALTER TABLE products ADD CONSTRAINT products_unit_check
+  CHECK (unit IN ('unite','sachet','litre','kilogramme'));
+
+-- Genre << consumption >> : sortie automatique declenchee par l'enregistrement d'un
+-- lavage. Elle se distingue d'une sortie manuelle parce qu'elle n'est jamais
+-- refusee : le produit a reellement ete utilise.
+ALTER TABLE stock_movements DROP CONSTRAINT IF EXISTS stock_movements_kind_check;
+ALTER TABLE stock_movements ADD CONSTRAINT stock_movements_kind_check
+  CHECK (kind IN ('initial','entry','exit','inventory','reversal','consumption'));
+
+-- Ce qu'une prestation consomme. C'est une recette : << un lavage complet
+-- utilise 2 sachets d'Omo >>. Elle ne touche pas au prix du service, qui
+-- reste fixe a la main dans la fiche de prestation.
+CREATE TABLE IF NOT EXISTS service_consumables (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ service_id uuid NOT NULL REFERENCES services(id), product_id uuid NOT NULL REFERENCES products(id),
+ quantity_milli integer NOT NULL CHECK(quantity_milli > 0),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(service_id, product_id)
+);
+CREATE INDEX IF NOT EXISTS service_consumables_service_idx ON service_consumables(organization_id, service_id);
+-- Rattache un mouvement au lavage qui l'a provoque : indispensable pour
+-- contrepasser exactement ce qui a ete deduit quand le lavage est annule.
+ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS wash_id uuid REFERENCES washes(id);
+CREATE INDEX IF NOT EXISTS stock_movements_wash_idx ON stock_movements(wash_id) WHERE wash_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS wash_assignments (
  wash_id uuid NOT NULL REFERENCES washes(id), worker_id uuid NOT NULL REFERENCES workers(id), PRIMARY KEY(wash_id,worker_id)
 );
@@ -203,6 +314,260 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
  key text NOT NULL, fingerprint text NOT NULL, response_status integer, response_body jsonb,
  created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(organization_id,key)
 );
+-- Désactivation d'un membre sans suppression du compte : ses requêtes
+-- protégées sont refusées dès le middleware d'appartenance.
+ALTER TABLE organization_members ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
+ALTER TABLE organization_members ADD COLUMN IF NOT EXISTS disabled_at timestamptz;
+ALTER TABLE organization_members ADD COLUMN IF NOT EXISTS updated_by uuid REFERENCES users(id);
+
+-- Exceptions de permissions accordées (ou retirées) par le propriétaire à un
+-- membre précis : granted = false retire une permission venant du rôle.
+CREATE TABLE IF NOT EXISTS member_permissions (
+ organization_id uuid NOT NULL REFERENCES organizations(id),
+ user_id uuid NOT NULL REFERENCES users(id),
+ permission text NOT NULL,
+ granted boolean NOT NULL DEFAULT true,
+ granted_by uuid REFERENCES users(id),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY (organization_id, user_id, permission)
+);
+CREATE INDEX IF NOT EXISTS idx_member_permissions_user ON member_permissions(organization_id,user_id);
+
+-- Relances d'échéance d'abonnement : une ligne par relance réellement envoyée,
+-- ce qui garantit qu'une même station n'est jamais relancée deux fois.
+CREATE TABLE IF NOT EXISTS subscription_reminders (
+ organization_id uuid NOT NULL REFERENCES organizations(id),
+ kind text NOT NULL,
+ sent_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY (organization_id, kind)
+);
+-- Intentions de paiement d'abonnement.
+--
+-- Une ligne est creee des que le client declare vouloir payer, AVANT tout
+-- encaissement. Elle sert de point de rendez-vous entre trois acteurs qui ne
+-- se parlent pas : le client qui paie sur son telephone, l'agregateur qui
+-- confirme par webhook, et l'editeur qui valide a la main quand il n'y a pas
+-- d'agregateur.
+--
+-- La colonne reference est UNIQUE : c'est elle qui rend l'encaissement
+-- idempotent. Un
+-- webhook rejoue deux fois (retransmission reseau, chose courante ici) ne
+-- doit jamais activer deux mois au lieu d'un.
+CREATE TABLE IF NOT EXISTS payment_intents (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+ reference text NOT NULL UNIQUE,
+ plan_code text NOT NULL,
+ months integer NOT NULL DEFAULT 1,
+ amount_cents integer NOT NULL,
+ provider text NOT NULL DEFAULT 'manual',
+ status text NOT NULL DEFAULT 'pending',
+ provider_transaction_id text,
+ declared_reference text,
+ declared_at timestamptz,
+ created_by uuid REFERENCES users(id),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ settled_at timestamptz,
+ metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS payment_intents_org_idx ON payment_intents(organization_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS payment_intents_status_idx ON payment_intents(status, created_at DESC);
+
+-- Registre des encaissements d'abonnement : la seule source de verite du
+-- chiffre d'affaires. Toute activation y ecrit une ligne, quel que soit son
+-- chemin -- parcours client, saisie console, futur webhook -- parce que
+-- 'activateSubscription()' est le point de passage unique.
+--
+-- Pourquoi une table a part plutot que 'payment_intents' : une intention est
+-- une *demande de payer*, qui peut echouer ou rester en attente. Le registre
+-- n'accueille que de l'argent recu. Les compter ensemble ferait apparaitre
+-- dans le chiffre d'affaires des paiements jamais arrives.
+--
+-- 'organization_id' est volontairement sans cle etrangere et nullable :
+-- l'ecriture comptable doit survivre a la suppression de la station, sinon
+-- purger un client ferait disparaitre le chiffre d'affaires deja encaisse.
+-- 'organization_name' en conserve une copie lisible.
+CREATE TABLE IF NOT EXISTS subscription_payments (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ organization_id uuid,
+ organization_name text NOT NULL,
+ plan_code text NOT NULL,
+ plan_name text NOT NULL,
+ -- Negatif pour une annulation : on contrepasse, on ne supprime pas.
+ amount_cents bigint NOT NULL,
+ months integer NOT NULL,
+ -- Periode couverte par l'encaissement : c'est elle qui permet d'etaler le
+ -- revenu reconnu mois par mois, independamment de la date d'encaissement.
+ period_start timestamptz NOT NULL,
+ period_end timestamptz NOT NULL,
+ channel text NOT NULL DEFAULT 'other',
+ payment_reference text,
+ payment_intent_id uuid,
+ source text NOT NULL,
+ operator_email text,
+ actor_user_id uuid,
+ note text,
+ -- Contrepassation : 'reverses_id' pointe la ligne annulee.
+ reverses_id uuid REFERENCES subscription_payments(id) ON DELETE SET NULL,
+ occurred_at timestamptz NOT NULL DEFAULT now(),
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS subscription_payments_when_idx ON subscription_payments(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS subscription_payments_org_idx ON subscription_payments(organization_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS subscription_payments_period_idx ON subscription_payments(period_start, period_end);
+
+-- Demandes d'assistance.
+--
+-- Jusqu'ici une demande d'aide etait un message WhatsApp : aucune trace, donc
+-- aucun moyen de savoir combien de demandes sont ouvertes, depuis quand, ni
+-- si l'engagement de delai a ete tenu. WhatsApp reste le canal de discussion ;
+-- cette table lui donne une memoire.
+CREATE TABLE IF NOT EXISTS support_requests (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+ created_by uuid REFERENCES users(id) ON DELETE SET NULL,
+ subject text NOT NULL,
+ category text NOT NULL DEFAULT 'autre',
+ status text NOT NULL DEFAULT 'open',
+ -- Forfait au moment de la demande, fige volontairement : l'engagement a ete
+ -- pris sous ce forfait. Si le client retrograde ensuite, la promesse tient.
+ plan_code text,
+ commitment_hours integer NOT NULL,
+ response_due_at timestamptz NOT NULL,
+ first_responded_at timestamptz,
+ resolved_at timestamptz,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+-- La file de la console : les demandes ouvertes, la plus urgente d'abord.
+CREATE INDEX IF NOT EXISTS support_requests_queue_idx ON support_requests(status, response_due_at);
+CREATE INDEX IF NOT EXISTS support_requests_org_idx ON support_requests(organization_id, created_at DESC);
+
+-- Messages d'un fil d'assistance.
+--
+-- 'internal' marque une note que le client ne doit jamais voir. Aucune
+-- contrainte CHECK ici : 'ON DELETE SET NULL' sur l'auteur declencherait une
+-- revalidation et ferait echouer la suppression du compte.
+CREATE TABLE IF NOT EXISTS support_messages (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ request_id uuid NOT NULL REFERENCES support_requests(id) ON DELETE CASCADE,
+ author_user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+ author_operator_email text,
+ internal boolean NOT NULL DEFAULT false,
+ body text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS support_messages_thread_idx ON support_messages(request_id, created_at);
+
+-- Supervision : compteurs agreges de toutes les requetes.
+--
+-- Agreger par tranche de cinq minutes plutot qu'echantillonner donne des taux
+-- exacts pour un volume borne par le nombre de routes, et non par le trafic.
+-- C'est la normalisation des chemins (voir normalizeRoute) qui rend cette
+-- borne possible : sans elle, chaque identifiant creerait sa propre ligne.
+CREATE TABLE IF NOT EXISTS request_metrics (
+ bucket_start timestamptz NOT NULL,
+ method text NOT NULL,
+ route text NOT NULL,
+ status_class text NOT NULL,
+ requests bigint NOT NULL DEFAULT 0,
+ total_duration_ms bigint NOT NULL DEFAULT 0,
+ max_duration_ms integer NOT NULL DEFAULT 0,
+ slow_requests integer NOT NULL DEFAULT 0,
+ PRIMARY KEY (bucket_start, method, route, status_class)
+);
+CREATE INDEX IF NOT EXISTS request_metrics_when_idx ON request_metrics(bucket_start DESC);
+
+-- Supervision : detail des pannes et des lenteurs.
+--
+-- 'request_body' est masque avant ecriture (voir redactBody) : aucun mot de
+-- passe n'y entre jamais. Le reste du corps est conserve, parce que c'est ce
+-- qui permet de reproduire un bug a l'identique.
+--
+-- Pas de cle etrangere sur organization_id : l'ecriture a lieu dans le
+-- gestionnaire d'erreurs, ou une contrainte qui echoue ferait perdre la trace
+-- de l'incident qu'on essaie justement d'enregistrer. La purge d'une station
+-- supprime ses lignes (voir PURGE_ORDER).
+CREATE TABLE IF NOT EXISTS error_events (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ kind text NOT NULL DEFAULT 'error',
+ method text NOT NULL,
+ route text NOT NULL,
+ path text NOT NULL,
+ status integer NOT NULL,
+ code text NOT NULL,
+ message text NOT NULL,
+ stack text,
+ duration_ms integer NOT NULL DEFAULT 0,
+ organization_id uuid,
+ user_id uuid,
+ operator_email text,
+ request_body jsonb,
+ occurred_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS error_events_when_idx ON error_events(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS error_events_route_idx ON error_events(route, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS error_events_org_idx ON error_events(organization_id, occurred_at DESC);
+-- Une ligne ne peut etre contrepassee qu'une fois.
+CREATE UNIQUE INDEX IF NOT EXISTS subscription_payments_reverses_idx
+ ON subscription_payments(reverses_id) WHERE reverses_id IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- Console de l'éditeur
+--
+-- Les comptes d'administration ne sont PAS des lignes de 'users'. C'était le
+-- cas avant : un drapeau 'platform_admin' posé sur un compte de station. Ce
+-- modèle liait l'administration du parc à l'exploitation d'un lavage — une
+-- session de station ouvrait le back-office, et le compte de l'éditeur
+-- traînait dans la liste des membres d'une organisation.
+--
+-- Deux tables séparées, donc, avec leurs propres sessions : aucune session de
+-- station ne peut ouvrir la console, et aucune session de console ne peut
+-- écrire dans une station par les routes ordinaires.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS platform_operators (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ email text NOT NULL UNIQUE, password_hash text, full_name text NOT NULL DEFAULT '',
+ status text NOT NULL DEFAULT 'active',
+ last_login_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(),
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS platform_operator_sessions (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ operator_id uuid NOT NULL REFERENCES platform_operators(id) ON DELETE CASCADE,
+ token_hash text NOT NULL UNIQUE, expires_at timestamptz NOT NULL,
+ last_used_at timestamptz, created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS platform_operator_sessions_op_idx ON platform_operator_sessions(operator_id);
+
+-- Journal de la console. Distinct de 'audit_logs', qui appartient au client.
+--
+-- Les deux sont alimentés : le client doit voir chez lui qu'on a touché à son
+-- forfait (pas de porte dérobée), et l'éditeur doit pouvoir relire ses propres
+-- actions sans parcourir les journaux de trois cents stations. Celui-ci
+-- survit à la purge d'une organisation : c'est la trace qu'elle a existé.
+CREATE TABLE IF NOT EXISTS platform_audit_logs (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ operator_id uuid REFERENCES platform_operators(id) ON DELETE SET NULL,
+ operator_email text NOT NULL, action text NOT NULL,
+ organization_id uuid, organization_name text,
+ metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS platform_audit_logs_created_idx ON platform_audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS platform_audit_logs_org_idx ON platform_audit_logs(organization_id, created_at DESC);
+
+-- Suppression en deux temps.
+--
+-- 'deletion_requested_at' coupe l'accès immédiatement ; l'effacement physique
+-- n'a lieu qu'à 'deletion_scheduled_for'. Entre les deux, le client est
+-- restaurable d'un clic. Une suppression décidée sur un malentendu — un
+-- paiement cru perdu, un homonyme — reste rattrapable.
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS deletion_requested_at timestamptz;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS deletion_scheduled_for timestamptz;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS deletion_reason text;
+CREATE INDEX IF NOT EXISTS organizations_deletion_idx ON organizations(deletion_scheduled_for)
+ WHERE deletion_scheduled_for IS NOT NULL;
 CREATE TABLE IF NOT EXISTS clerk_webhook_events (
  id text PRIMARY KEY, event_type text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -217,6 +582,10 @@ CREATE INDEX IF NOT EXISTS idx_washes_org_created ON washes(organization_id,crea
 CREATE INDEX IF NOT EXISTS idx_expenses_org_created ON expenses(organization_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workers_org_status ON workers(organization_id,status);
 CREATE INDEX IF NOT EXISTS idx_payments_org_created ON payments(organization_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payments_org_status ON payments(organization_id,status);
+CREATE INDEX IF NOT EXISTS idx_payments_wash ON payments(wash_id);
+CREATE INDEX IF NOT EXISTS idx_wash_assignments_worker ON wash_assignments(worker_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_org_created ON audit_logs(organization_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cash_movements_session ON cash_movements(cash_session_id);
 CREATE INDEX IF NOT EXISTS idx_cash_sessions_org_site ON cash_sessions(organization_id,site_id,status);
 CREATE INDEX IF NOT EXISTS idx_wash_items_wash ON wash_items(wash_id);
@@ -236,6 +605,19 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
+-- Réinitialisation de mot de passe : seul le SHA-256 du jeton est stocké, ------
+-- le jeton en clair ne vit que dans le lien envoyé par e-mail. ----------------
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ token_hash text NOT NULL UNIQUE,
+ expires_at timestamptz NOT NULL,
+ used_at timestamptz,
+ requested_ip text,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user ON password_reset_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_expires ON password_reset_tokens(expires_at);
 `;
 
 async function seedDemoData(
@@ -267,12 +649,34 @@ async function seedDemoData(
     [orgId, userId]
   );
 
-  const proPlanRes = await queryFn("SELECT id FROM plans WHERE code = 'pro'");
-  if (proPlanRes.rows.length > 0) {
+  // Trois comptes de démonstration supplémentaires, un par rôle, pour que la
+  // gestion des accès soit testable immédiatement (même mot de passe).
+  const demoTeam = [
+    { email: "gerant@washpilot.ci", first: "Serge", last: "N'Guessan", phone: "+225 07 11 22 33 44", role: "manager" },
+    { email: "caisse@washpilot.ci", first: "Fatou", last: "Diarra", phone: "+225 07 55 66 77 88", role: "cashier" },
+    { email: "laveur@washpilot.ci", first: "Koffi", last: "Yao", phone: "+225 07 99 00 11 22", role: "washer" },
+  ];
+  for (const member of demoTeam) {
+    const memberRes = await queryFn(
+      `INSERT INTO users (email, first_name, last_name, phone, password_hash, status, organization_id)
+       VALUES ($1, $2, $3, $4, $5, 'active', $6) RETURNING id`,
+      [member.email, member.first, member.last, member.phone, demoPasswordHash, orgId]
+    );
     await queryFn(
-      `INSERT INTO subscriptions (organization_id, plan_id, status)
-       VALUES ($1, $2, 'active')`,
-      [orgId, proPlanRes.rows[0].id]
+      `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, $3)`,
+      [orgId, memberRes.rows[0].id, member.role]
+    );
+  }
+
+  // Démonstration : la station est sur le forfait Starter, en cours d'essai.
+  // L'essai de 14 jours a démarré il y a 3 jours → il reste 11 jours, ce qui
+  // rend le compte à rebours visible dès la première connexion.
+  const freePlanRes = await queryFn("SELECT id FROM plans WHERE code = 'starter'");
+  if (freePlanRes.rows.length > 0) {
+    await queryFn(
+      `INSERT INTO subscriptions (organization_id, plan_id, status, current_period_end)
+       VALUES ($1, $2, 'trialing', NOW() + interval '11 days')`,
+      [orgId, freePlanRes.rows[0].id]
     );
   }
 
@@ -413,7 +817,7 @@ async function seedDemoData(
 
   await queryFn(
     `INSERT INTO onboarding_progress (organization_id, current_stage, completed_at, plan_code)
-     VALUES ($1, 'completed', NOW(), 'pro')
+     VALUES ($1, 'completed', NOW(), 'starter')
      ON CONFLICT (organization_id) DO UPDATE SET current_stage = 'completed', completed_at = NOW()`,
     [orgId]
   );
@@ -494,6 +898,55 @@ function createPglitePool(pglite: PGlite): pg.Pool {
   } as unknown as pg.Pool;
 }
 
+
+
+// ---------------------------------------------------------------------------
+// Verse au registre les activations anterieures a son existence.
+//
+// Avant la table subscription_payments, une activation ne laissait qu'une
+// ligne d'audit chez le client, le montant enfoui dans du JSON. Sans ce
+// rattrapage la courbe de revenu demarrerait a zero le jour de la mise a
+// jour, et tout l'historique deja encaisse serait invisible.
+//
+// Idempotent : la cle est le couple (station, instant). Relancer au
+// demarrage est sans effet.
+// ---------------------------------------------------------------------------
+async function backfillRevenueLedger(
+  query: (text: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount: number | null }>,
+): Promise<void> {
+  const inserted = await query(
+    `INSERT INTO subscription_payments(
+       organization_id, organization_name, plan_code, plan_name, amount_cents, months,
+       period_start, period_end, channel, payment_reference, source, note, occurred_at)
+     SELECT a.organization_id,
+            COALESCE(o.name, 'Station supprimee'),
+            COALESCE(a.metadata->>'plan_code', 'inconnu'),
+            COALESCE(a.metadata->>'plan_name', 'Forfait'),
+            COALESCE((a.metadata->>'price_cents')::bigint, 0)
+              * COALESCE((a.metadata->>'months')::int, 1),
+            COALESCE((a.metadata->>'months')::int, 1),
+            COALESCE((a.metadata->>'period_end')::timestamptz, a.created_at)
+              - (COALESCE((a.metadata->>'months')::int, 1) || ' months')::interval,
+            COALESCE((a.metadata->>'period_end')::timestamptz, a.created_at),
+            'other',
+            a.metadata->>'payment_reference',
+            'backfill',
+            'Reprise automatique depuis le journal d audit',
+            a.created_at
+       FROM audit_logs a
+       LEFT JOIN organizations o ON o.id = a.organization_id
+      WHERE a.action = 'subscription.activated'
+        AND a.organization_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM subscription_payments sp
+           WHERE sp.organization_id = a.organization_id
+             AND sp.occurred_at = a.created_at)
+     RETURNING id`,
+  )
+  const n = inserted.rowCount ?? 0
+  if (n) console.log(`[revenu] ${n} encaissement(s) repris depuis le journal d'audit.`)
+}
+
 export async function initDatabaseSchema(): Promise<boolean> {
   if (env.DATABASE_URL) {
     try {
@@ -508,6 +961,9 @@ export async function initDatabaseSchema(): Promise<boolean> {
       });
       await externalPool.query("SELECT 1");
       await externalPool.query(schemaSql);
+      await migrateLegacyPlatformAdmins(externalPool.query.bind(externalPool));
+      await syncPlatformOperators(externalPool.query.bind(externalPool));
+      await backfillRevenueLedger(externalPool.query.bind(externalPool));
       pool = externalPool;
       ready = true;
       console.info("[db] Connecté à PostgreSQL via DATABASE_URL");
@@ -521,12 +977,28 @@ export async function initDatabaseSchema(): Promise<boolean> {
   }
 
   try {
-    pgliteInstance = new PGlite();
+    // Emplacement décidé par une fonction pure, testée à part : sans dossier,
+    // PGlite garde tout en mémoire et le travail de la journée disparaît au
+    // redémarrage. Le défaut est donc le disque, et une base volatile se
+    // signale bruyamment dans les journaux.
+    const location = resolvePgliteLocation({
+      nodeEnv: env.NODE_ENV,
+      dataDir: env.PGLITE_DATA_DIR,
+    });
+    if (location.dataDir) {
+      // PGlite ne crée que le dernier niveau : sans cela, un chemin imbriqué
+      // comme `.data/pglite` échoue avec ENOENT au tout premier démarrage.
+      await mkdir(location.dataDir, { recursive: true });
+    }
+    pgliteInstance = location.dataDir ? new PGlite(location.dataDir) : new PGlite();
     pool = createPglitePool(pgliteInstance);
     await pool.query(schemaSql);
     await seedDemoData(pool.query.bind(pool));
+    await migrateLegacyPlatformAdmins(pool.query.bind(pool));
+    await syncPlatformOperators(pool.query.bind(pool));
+    await backfillRevenueLedger(pool.query.bind(pool));
     ready = true;
-    console.info("[db] PostgreSQL embarqué (PGlite) initialisé avec les données de démonstration");
+    console.info(describePgliteLocation(location, env.NODE_ENV));
     return true;
   } catch (error) {
     ready = false;

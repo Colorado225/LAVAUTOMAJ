@@ -30,8 +30,18 @@ export function useCircularTransition(): CircularTransitionHook {
       document.documentElement.style.setProperty("--x", `${x}%`)
       document.documentElement.style.setProperty("--y", `${y}%`)
 
-      // Check if View Transitions API is supported
-      if ("startViewTransition" in document) {
+      // Mouvement réduit demandé : on change le thème sans la révélation.
+      // Un cercle qui balaie tout l'écran est exactement le type d'animation
+      // plein cadre que ce réglage vise à supprimer.
+      const prefersReducedMotion =
+        typeof window !== "undefined" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches
+
+      if (!prefersReducedMotion && "startViewTransition" in document) {
+        // Marque la transition pour que le CSS applique la révélation
+        // circulaire au lieu du fondu utilisé par les changements de page.
+        document.documentElement.setAttribute("data-theme-transition", "")
+
         const transition = (
           document as Document & {
             startViewTransition: (callback: () => void) => {
@@ -43,6 +53,7 @@ export function useCircularTransition(): CircularTransitionHook {
         })
 
         transition.finished.finally(() => {
+          document.documentElement.removeAttribute("data-theme-transition")
           isTransitioningRef.current = false
         })
       } else {
@@ -65,7 +76,14 @@ export function useCircularTransition(): CircularTransitionHook {
       }
 
       startTransition(coords, () => {
-        setTheme(theme === "dark" ? "light" : "dark")
+        // « system » doit basculer vers l'inverse de ce qui est réellement
+        // affiché, sinon le premier clic ne change rien à l'écran.
+        const isDark =
+          theme === "dark" ||
+          (theme === "system" &&
+            typeof window !== "undefined" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches)
+        setTheme(isDark ? "light" : "dark")
       })
     },
     [theme, setTheme, startTransition]

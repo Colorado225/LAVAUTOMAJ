@@ -97,7 +97,7 @@ export function CreateServiceCategoryModal({
     try {
       const response = await apiFetch(
         isEditing
-          ? `/api/v1/service-categories/${encodeURIComponent(category.id)}`
+          ? `/api/v1/service-categories/${encodeURIComponent(category!.id)}`
           : "/api/v1/service-categories",
         {
           method: isEditing ? "PATCH" : "POST",

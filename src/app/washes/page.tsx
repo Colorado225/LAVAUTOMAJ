@@ -1,14 +1,27 @@
 "use client"
 
 import { useMemo, useState, type FormEvent } from "react"
-import { Link } from "react-router-dom"
+import { Link, useViewTransitionState } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
+import { useAccess } from "@/lib/permissions"
+import { BlockedReason } from "@/components/access/blocked-reason"
+import {
+  isWashButtonClickable,
+  resolvePendingOpen,
+  washButtonState,
+  washSubmitBlockedReason,
+} from "@/lib/action-blocking"
 import { apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { ArrowRight, Check, Plus, RefreshCw } from "lucide-react"
+import { TableSkeleton } from "@/components/ui/table-skeleton"
+import { SubmitButton } from "@/components/ui/submit-button"
+import { Skeleton } from "@/components/ui/skeleton"
+import { EmptyState } from "@/components/ui/empty-state"
+import { useSuccessFlash } from "@/hooks/use-success-flash"
+import { ArrowRight, Check, Droplets, Loader2, Lock, Plus } from "lucide-react"
 
 interface Site {
   id: string
@@ -90,7 +103,24 @@ function paymentStatusLabel(status: string): string {
   return status
 }
 
+/**
+ * Référence du lavage : pendant la navigation vers la fiche, cet élément porte
+ * le même `view-transition-name` que le titre de la page de détail. Le
+ * navigateur fait glisser l'un vers l'autre — on comprend d'où vient l'écran.
+ */
+function WashReference({ washId, reference }: { washId: string; reference: string }) {
+  const isTransitioning = useViewTransitionState(`/washes/${washId}`)
+  return (
+    <span
+      style={{ viewTransitionName: isTransitioning ? "wash-reference" : undefined }}
+    >
+      {reference}
+    </span>
+  )
+}
+
 export default function WashesPage() {
+  const createWash = useAccess("wash:create", "washes.create")
   const [selectedSiteId, setSelectedSiteId] = useState("")
   const sitePath = "/api/v1/sites"
   const { data: sites, loading: sitesLoading, error: sitesError } = useApi<Site[]>(sitePath)
@@ -110,6 +140,9 @@ export default function WashesPage() {
     `/api/v1/washes?refresh=${refreshKey}`
   )
   const [formOpen, setFormOpen] = useState(false)
+  // Clic reçu avant que les droits soient connus : on le garde pour l'honorer
+  // dès qu'ils arrivent, plutôt que de griser le bouton par précaution.
+  const [openRequested, setOpenRequested] = useState(false)
   const [vehicleCategoryId, setVehicleCategoryId] = useState("")
   const [quantities, setQuantities] = useState<Record<string, number>>({})
   const [selectedWorkerIds, setSelectedWorkerIds] = useState<string[]>([])
@@ -117,10 +150,36 @@ export default function WashesPage() {
   const [amountReceived, setAmountReceived] = useState("0")
   const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  // Coche verte du bouton après enregistrement, puis retour à l'état normal.
+  const [saveSuccess, flashSaveSuccess] = useSuccessFlash()
+  // Identifiant du dernier lavage créé : sa ligne est surlignée une seconde
+  // dans l'historique, pour que l'œil retrouve immédiatement l'opération.
+  const [highlightedWashId, setHighlightedWashId] = useState<string | null>(null)
   const [mutationError, setMutationError] = useState<string | null>(null)
   const [mutationSuccess, setMutationSuccess] = useState<string | null>(null)
 
   const activeSites = sites ?? []
+
+  const washFormBlocked = washButtonState({
+    sitesLoading,
+    accessLoading: createWash.loading,
+    activeSiteCount: activeSites.length,
+    allowed: createWash.allowed,
+    reason: createWash.reason,
+  })
+  // Le bouton reste actif tant qu'on ne sait pas : un clic reçu pendant
+  // l'attente est honoré dès que les droits arrivent, ou abandonné si le
+  // refus se confirme — auquel cas le motif est déjà affiché sous le bouton.
+  const pendingOutcome = resolvePendingOpen(washFormBlocked)
+  // Dérivé plutôt que recopié dans un effet : un clic en attente ouvre le
+  // formulaire de lui-même dès que les droits le permettent, et s'efface tout
+  // seul si le refus se confirme — le motif est alors déjà sous le bouton.
+  const awaitingRights = openRequested && pendingOutcome === "attendre"
+  const showForm = formOpen || (openRequested && pendingOutcome === "ouvrir")
+  const closeForm = () => {
+    setFormOpen(false)
+    setOpenRequested(false)
+  }
   const activeCategories = (categories ?? []).filter((item) => item.is_active)
   const activeServices = (serviceCatalog ?? []).filter((item) => item.is_active)
   const activeWorkers = (workers ?? []).filter((worker) => worker.status === "active")
@@ -137,6 +196,18 @@ export default function WashesPage() {
   const amountReceivedCents = parseXofAmount(amountReceived)
   const amountIsValid = amountReceivedCents != null && amountReceivedCents <= totalCents
   const cashNeedsSession = amountReceivedCents != null && amountReceivedCents > 0 && paymentMethod === "cash"
+
+  const submitBlockedReason = washSubmitBlockedReason({
+    allowed: createWash.allowed,
+    accessReason: createWash.reason,
+    siteId,
+    vehicleCategoryId,
+    selectedServiceCount: selectedServices.length,
+    amountIsValid,
+    cashNeedsSession,
+    cashSessionLoading,
+    hasCashSession: Boolean(cashSession),
+  })
 
   function markFormChanged() {
     setIdempotencyKey(null)
@@ -217,6 +288,9 @@ export default function WashesPage() {
         throw new Error((await response.text()) || `Erreur ${response.status}`)
       }
       const replayed = response.headers.get("Idempotency-Replayed") === "true"
+      const created = (await response.json().catch(() => null)) as { id?: string } | null
+      if (created?.id) setHighlightedWashId(created.id)
+      flashSaveSuccess()
       setMutationSuccess(replayed ? "Cette opération avait déjà été enregistrée." : "Lavage enregistré avec succès.")
       setQuantities({})
       setSelectedWorkerIds([])
@@ -224,7 +298,7 @@ export default function WashesPage() {
       setAmountReceived("0")
       setIdempotencyKey(null)
       setRefreshKey((key) => key + 1)
-      setFormOpen(false)
+      closeForm()
     } catch (err) {
       // Keep the key while the payload stays unchanged: retrying after a lost
       // response returns the original record instead of creating a duplicate.
@@ -263,16 +337,36 @@ export default function WashesPage() {
                 ))}
               </select>
             </label>
-            <Button
-              onClick={() => {
-                setMutationError(null)
-                setMutationSuccess(null)
-                setFormOpen((open) => !open)
-              }}
-              disabled={sitesLoading || activeSites.length === 0}
-            >
-              <Plus className="mr-2 size-4" /> Nouveau lavage
-            </Button>
+            <div className="flex flex-col gap-1.5">
+              <Button
+                onClick={() => {
+                  setMutationError(null)
+                  setMutationSuccess(null)
+                  if (washFormBlocked.preparing) {
+                    setOpenRequested(true)
+                    return
+                  }
+                  if (showForm) {
+                    closeForm()
+                    return
+                  }
+                  setFormOpen(true)
+                }}
+                disabled={!isWashButtonClickable(washFormBlocked)}
+                aria-busy={awaitingRights}
+                title={washFormBlocked.reason ?? undefined}
+              >
+                {awaitingRights ? (
+                  <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
+                ) : washFormBlocked.denied ? (
+                  <Lock className="mr-2 size-4" />
+                ) : (
+                  <Plus className="mr-2 size-4" />
+                )}{" "}
+                Nouveau lavage
+              </Button>
+              <BlockedReason reason={washFormBlocked.reason} className="max-w-72" />
+            </div>
           </div>
         </div>
 
@@ -287,8 +381,8 @@ export default function WashesPage() {
           </div>
         )}
 
-        {formOpen && (
-          <section className="rounded-lg border bg-card p-4 shadow-sm md:p-6">
+        {showForm && (
+          <section className="elev-1 rounded-lg border bg-card p-4 md:p-6">
             <div className="mb-5 flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">Nouveau lavage</h2>
@@ -296,7 +390,7 @@ export default function WashesPage() {
                   Les prix du catalogue seront copiés sur le lavage à l’enregistrement.
                 </p>
               </div>
-              <Button variant="ghost" onClick={() => setFormOpen(false)}>Fermer</Button>
+              <Button variant="ghost" onClick={closeForm}>Fermer</Button>
             </div>
 
             <form onSubmit={submitWash} className="space-y-6">
@@ -330,7 +424,21 @@ export default function WashesPage() {
               <fieldset className="space-y-3">
                 <legend className="mb-2 text-sm font-semibold">Prestations</legend>
                 {servicesLoading ? (
-                  <p className="text-sm text-muted-foreground">Chargement du catalogue…</p>
+                  <div className="grid gap-3 sm:grid-cols-2" role="status" aria-busy="true" aria-label="Chargement du catalogue">
+                    {[0, 1, 2, 3].map((item) => (
+                      <div
+                        key={item}
+                        className="row-in flex items-center gap-3 rounded-md border p-3"
+                        style={{ "--row": item } as React.CSSProperties}
+                      >
+                        <Skeleton className="size-4 rounded" />
+                        <div className="flex-1 space-y-2">
+                          <Skeleton className="h-4 w-32" />
+                          <Skeleton className="h-3 w-20" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 ) : activeServices.length === 0 ? (
                   <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
                     Aucune prestation active. Configurez le catalogue avant d’enregistrer un lavage.
@@ -340,7 +448,12 @@ export default function WashesPage() {
                     {activeServices.map((service) => {
                       const quantity = quantities[service.id] ?? 0
                       return (
-                        <div key={service.id} className="flex items-center gap-3 rounded-md border p-3">
+                        <div
+                          key={service.id}
+                          className={`flex items-center gap-3 rounded-md border p-3 transition-all duration-150 ${
+                            quantity > 0 ? "border-primary/50 bg-primary/5" : "hover:border-primary/30 hover:bg-muted/40"
+                          }`}
+                        >
                           <input
                             id={`service-${service.id}`}
                             type="checkbox"
@@ -377,7 +490,15 @@ export default function WashesPage() {
               <fieldset className="space-y-3">
                 <legend className="mb-2 text-sm font-semibold">Employés affectés <span className="font-normal text-muted-foreground">(facultatif)</span></legend>
                 {workersLoading ? (
-                  <p className="text-sm text-muted-foreground">Chargement des employés…</p>
+                  <div className="flex flex-wrap gap-2" role="status" aria-busy="true" aria-label="Chargement des employés">
+                    {[0, 1, 2].map((item) => (
+                      <Skeleton
+                        key={item}
+                        className="row-in h-9 w-32 rounded-md"
+                        style={{ "--row": item } as React.CSSProperties}
+                      />
+                    ))}
+                  </div>
                 ) : activeWorkers.length === 0 ? (
                   <p className="text-sm text-muted-foreground">Aucun employé actif à affecter.</p>
                 ) : (
@@ -475,18 +596,20 @@ export default function WashesPage() {
                 </div>
               )}
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>Annuler</Button>
-                <Button
+                <Button type="button" variant="outline" onClick={closeForm}>Annuler</Button>
+                <SubmitButton
                   type="submit"
-                  disabled={
-                    saving || !siteId || !vehicleCategoryId || selectedServices.length === 0 ||
-                    !amountIsValid || (cashNeedsSession && (cashSessionLoading || !cashSession))
-                  }
+                  pending={saving}
+                  success={saveSuccess}
+                  successLabel="Lavage enregistré"
+                  idleIcon={<Check className="size-4" />}
+                  disabled={submitBlockedReason !== null}
+                  title={submitBlockedReason ?? undefined}
                 >
-                  {saving ? <RefreshCw className="mr-2 size-4 animate-spin" /> : <Check className="mr-2 size-4" />}
-                  {saving ? "Enregistrement…" : "Enregistrer le lavage"}
-                </Button>
+                  Enregistrer le lavage
+                </SubmitButton>
               </div>
+              <BlockedReason reason={submitBlockedReason} className="sm:justify-end sm:text-right" />
             </form>
           </section>
         )}
@@ -496,7 +619,7 @@ export default function WashesPage() {
             <h2 className="text-lg font-semibold">Historique des lavages</h2>
             <p className="text-sm text-muted-foreground">Les 200 opérations les plus récentes de l’organisation.</p>
           </div>
-          {washesLoading && <div className="p-4 text-sm text-muted-foreground">Chargement de l’historique…</div>}
+          {washesLoading && <div className="p-4"><TableSkeleton rows={6} cols={6} label="Chargement de l’historique des lavages" /></div>}
           {washesError && <div className="p-4 text-sm text-destructive">{washesError}</div>}
           {!washesLoading && !washesError && (
             <div className="overflow-x-auto">
@@ -516,14 +639,24 @@ export default function WashesPage() {
                 <TableBody>
                   {washes.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
-                        Aucun lavage enregistré.
+                      <TableCell colSpan={8} className="p-0">
+                        <EmptyState
+                          icon={Droplets}
+                          title="Aucun lavage enregistré"
+                          description="Enregistrez votre premier lavage : il apparaîtra ici avec sa référence, son montant et son statut de paiement."
+                        />
                       </TableCell>
                     </TableRow>
                   )}
-                  {washes.map((wash) => (
-                    <TableRow key={wash.id}>
-                      <TableCell className="font-medium">{wash.reference}</TableCell>
+                  {washes.map((wash, index) => (
+                    <TableRow
+                      key={wash.id}
+                      className={`row-in transition-colors hover:bg-muted/40 ${wash.id === highlightedWashId ? "row-flash" : ""}`}
+                      style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
+                    >
+                      <TableCell className="font-medium">
+                        <WashReference washId={wash.id} reference={wash.reference} />
+                      </TableCell>
                       <TableCell>{activeSites.find((site) => site.id === wash.site_id)?.name ?? "—"}</TableCell>
                       <TableCell>{activeCategories.find((category) => category.id === wash.vehicle_category_id)?.name ?? "—"}</TableCell>
                       <TableCell className="text-right">{formatXof(wash.total_cents)}</TableCell>
@@ -532,12 +665,12 @@ export default function WashesPage() {
                       <TableCell>{new Date(wash.created_at).toLocaleString("fr-CI")}</TableCell>
                       <TableCell>
                         <Button
-                          render={<Link to={`/washes/${wash.id}`} />}
+                          render={<Link to={`/washes/${wash.id}`} viewTransition />}
                           variant="ghost"
                           size="icon-sm"
                           aria-label={`Voir ${wash.reference}`}
                         >
-                          <ArrowRight className="size-4" />
+                          <ArrowRight className="size-4 transition-transform group-hover/button:translate-x-0.5" />
                         </Button>
                       </TableCell>
                     </TableRow>

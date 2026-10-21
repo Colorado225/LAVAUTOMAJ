@@ -1,8 +1,10 @@
 import { createBrowserRouter, RouterProvider } from "react-router-dom"
+import { MotionConfig } from "framer-motion"
 import { ThemeProvider } from "@/components/theme-provider"
 import { Toaster } from "@/components/ui/toast"
 import { RootFallback, RootLayout } from "@/components/router/root-layout"
 import { routes } from "@/config/routes"
+import { consoleRoutes } from "@/console/routes"
 import { useEffect } from "react"
 import { initGTM } from "@/utils/analytics"
 import { AuthProvider } from "@/lib/auth"
@@ -12,6 +14,23 @@ const basename = import.meta.env.VITE_BASENAME || ""
 
 const router = createBrowserRouter(
   [
+    // -----------------------------------------------------------------------
+    // Console de l'éditeur — branche soeur, et non enfant, de `RootLayout`.
+    //
+    // La placer sous la racine commune lui imposerait la garde de session des
+    // stations : une session absente renverrait vers `/auth/sign-in`, et une
+    // session de station présente ferait croire à une entrée légitime. La
+    // console porte donc sa propre racine, sa propre authentification et sa
+    // propre redirection.
+    //
+    // Conséquence voulue : aucun composant de l'application cliente n'est
+    // monté sous /console, et aucun de ses contextes n'y est disponible.
+    // -----------------------------------------------------------------------
+    {
+      path: "/console",
+      lazy: async () => ({ Component: (await import("@/console/root")).ConsoleRoot }),
+      children: consoleRoutes,
+    },
     {
       element: <RootLayout />,
       HydrateFallback: RootFallback,
@@ -32,13 +51,17 @@ function App() {
       className="font-sans antialiased"
       style={{ fontFamily: "var(--font-inter)" }}
     >
-      <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
-        <AuthProvider>
-          <Toaster>
-            <RouterProvider router={router} />
-          </Toaster>
-        </AuthProvider>
-      </ThemeProvider>
+      {/* reducedMotion="user" : framer-motion neutralise automatiquement les
+          animations si le système demande un mouvement réduit. */}
+      <MotionConfig reducedMotion="user">
+        <ThemeProvider defaultTheme="system">
+          <AuthProvider>
+            <Toaster>
+              <RouterProvider router={router} />
+            </Toaster>
+          </AuthProvider>
+        </ThemeProvider>
+      </MotionConfig>
     </div>
   )
 }

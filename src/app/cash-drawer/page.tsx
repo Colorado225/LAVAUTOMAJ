@@ -2,7 +2,13 @@
 
 import * as React from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
-import { useApi, apiFetch } from "@/lib/api"
+import { useAccess } from "@/lib/permissions"
+import { actionGate } from "@/lib/action-blocking"
+import { BlockedReason } from "@/components/access/blocked-reason"
+import { motion } from "framer-motion"
+import { TRANSITION } from "@/lib/motion"
+import { useApi } from "@/lib/api"
+import { useMutation } from "@/lib/use-mutation"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import {
   Table,
@@ -22,7 +28,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { ArrowDownToLine, ArrowUpFromLine, Plus, WalletCards } from "lucide-react"
+import { AnimatedNumber } from "@/components/ui/animated-number"
+import { Skeleton } from "@/components/ui/skeleton"
+import { EmptyState } from "@/components/ui/empty-state"
+import { ArrowDownToLine, ArrowUpFromLine, Lock, Plus, WalletCards } from "lucide-react"
 
 interface Site {
   id: string
@@ -59,7 +68,11 @@ function xofToCents(value: string, requirePositive = false): number | null {
   return cents
 }
 
+/** Clé d'occupation des formulaires de caisse. */
+const FORM_KEY = "formulaire"
+
 export default function CashDrawerPage() {
+  const manageCash = useAccess("cash_session:manage", "cash.manage")
   const { data: sites, loading: sitesLoading, error: sitesError } = useApi<Site[]>("/api/v1/sites")
   const [selectedSiteId, setSelectedSiteId] = React.useState("")
   const siteId = selectedSiteId || sites?.[0]?.id || ""
@@ -75,12 +88,34 @@ export default function CashDrawerPage() {
   const [countedAmount, setCountedAmount] = React.useState("")
   const [discrepancyReason, setDiscrepancyReason] = React.useState("")
   const [refreshKey, setRefreshKey] = React.useState(0)
-  const [saving, setSaving] = React.useState(false)
-  const [mutationError, setMutationError] = React.useState<string | null>(null)
+  // Un contrôleur unique pour les trois écritures de caisse.
+  const mutation = useMutation()
+  const saving = mutation.busyKey === FORM_KEY
   const sessionPath = siteId
     ? `/api/v1/cash-sessions/current?site_id=${encodeURIComponent(siteId)}&refresh=${refreshKey}`
     : ""
   const { data: session, loading, error } = useApi<CashSession | null>(sessionPath)
+
+  // Les quatre actions de caisse ouvrent toutes une boîte de dialogue : rien
+  // n'est écrit avant validation, donc l'attente des droits ne les grise pas.
+  // L'ouverture a ses propres prérequis, qui ne sont pas des refus de droit.
+  const openSession = actionGate({
+    loading: manageCash.loading,
+    allowed: manageCash.allowed,
+    reason: manageCash.reason,
+    blockedBy: sitesLoading || loading
+      ? null
+      : !siteId
+        ? "Choisissez une station pour ouvrir une session."
+        : session
+          ? "Une session est déjà ouverte sur cette station. Clôturez-la avant d'en ouvrir une autre."
+          : null,
+  })
+  const cashAction = actionGate({
+    loading: manageCash.loading,
+    allowed: manageCash.allowed,
+    reason: manageCash.reason,
+  })
   const movementPath = session
     ? `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/movements?refresh=${refreshKey}`
     : ""
@@ -89,7 +124,7 @@ export default function CashDrawerPage() {
   async function openCashSession() {
     const amountCents = xofToCents(openingAmount)
     if (!siteId || amountCents == null) {
-      setMutationError("Sélectionnez un site et saisissez un montant valide.")
+      mutation.fail("Sélectionnez un site et saisissez un montant valide.")
       return
     }
 
@@ -101,36 +136,26 @@ export default function CashDrawerPage() {
       openingRequestKeys.current.set(fingerprint, requestKey)
     }
 
-    setSaving(true)
-    setMutationError(null)
-    try {
-      const response = await apiFetch(
-        "/api/v1/cash-sessions/open",
-        {
-          method: "POST",
-          headers: { "Idempotency-Key": requestKey },
-          body: JSON.stringify(body),
-        }
-      )
-      if (!response.ok) {
-        throw new Error((await response.text()) || `Erreur ${response.status}`)
-      }
-      setOpenDialog(false)
-      setOpeningAmount("0")
-      openingRequestKeys.current.clear()
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Impossible d’ouvrir la caisse.")
-    } finally {
-      setSaving(false)
-    }
+    const outcome = await mutation.run({
+      url: "/api/v1/cash-sessions/open",
+      method: "POST",
+      headers: { "Idempotency-Key": requestKey },
+      body,
+      failure: "Impossible d’ouvrir la caisse.",
+      busyKey: FORM_KEY,
+    })
+    if (!outcome.ok) return
+    setOpenDialog(false)
+    setOpeningAmount("0")
+    openingRequestKeys.current.clear()
+    setRefreshKey((key) => key + 1)
   }
 
   async function addMovement() {
     if (!session) return
     const amountCents = xofToCents(movementAmount, true)
     if (amountCents == null) {
-      setMutationError("Saisissez un montant positif valide.")
+      mutation.fail("Saisissez un montant positif valide.")
       return
     }
 
@@ -146,70 +171,50 @@ export default function CashDrawerPage() {
       movementRequestKeys.current.set(fingerprint, requestKey)
     }
 
-    setSaving(true)
-    setMutationError(null)
-    try {
-      const response = await apiFetch(
-        `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/movements`,
-        {
-          method: "POST",
-          headers: { "Idempotency-Key": requestKey },
-          body: JSON.stringify(body),
-        }
-      )
-      if (!response.ok) {
-        throw new Error((await response.text()) || `Erreur ${response.status}`)
-      }
-      setMovementDialogOpen(false)
-      setMovementAmount("")
-      setMovementDescription("")
-      movementRequestKeys.current.clear()
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Impossible d’enregistrer le mouvement.")
-    } finally {
-      setSaving(false)
-    }
+    const outcome = await mutation.run({
+      url: `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/movements`,
+      method: "POST",
+      headers: { "Idempotency-Key": requestKey },
+      body,
+      failure: "Impossible d’enregistrer le mouvement.",
+      busyKey: FORM_KEY,
+    })
+    if (!outcome.ok) return
+    setMovementDialogOpen(false)
+    setMovementAmount("")
+    setMovementDescription("")
+    movementRequestKeys.current.clear()
+    setRefreshKey((key) => key + 1)
   }
 
   async function closeCashSession() {
     if (!session) return
     const countedAmountCents = xofToCents(countedAmount)
     if (countedAmountCents == null) {
-      setMutationError("Saisissez le montant réellement compté.")
+      mutation.fail("Saisissez le montant réellement compté.")
       return
     }
     const hasDiscrepancy = countedAmountCents !== session.theoretical_balance_cents
     if (hasDiscrepancy && !discrepancyReason.trim()) {
-      setMutationError("Justifiez l’écart avant de clôturer la session.")
+      mutation.fail("Justifiez l’écart avant de clôturer la session.")
       return
     }
 
-    setSaving(true)
-    setMutationError(null)
-    try {
-      const response = await apiFetch(
-        `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/close`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            counted_amount_cents: countedAmountCents,
-            discrepancy_reason: discrepancyReason.trim() || null,
-          }),
-        }
-      )
-      if (!response.ok) {
-        throw new Error((await response.text()) || `Erreur ${response.status}`)
-      }
-      setCloseDialogOpen(false)
-      setCountedAmount("")
-      setDiscrepancyReason("")
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Impossible de clôturer la caisse.")
-    } finally {
-      setSaving(false)
-    }
+    const outcome = await mutation.run({
+      url: `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/close`,
+      method: "POST",
+      body: {
+        counted_amount_cents: countedAmountCents,
+        discrepancy_reason: discrepancyReason.trim() || null,
+      },
+      failure: "Impossible de clôturer la caisse.",
+      busyKey: FORM_KEY,
+    })
+    if (!outcome.ok) return
+    setCloseDialogOpen(false)
+    setCountedAmount("")
+    setDiscrepancyReason("")
+    setRefreshKey((key) => key + 1)
   }
 
   const parsedCountedAmount = xofToCents(countedAmount)
@@ -245,14 +250,21 @@ export default function CashDrawerPage() {
             </label>
             <Button
               onClick={() => {
-                setMutationError(null)
+                mutation.reset()
                 setOpenDialog(true)
               }}
-              disabled={!siteId || !!session || loading || sitesLoading}
+              disabled={openSession.disabled || loading || sitesLoading}
+              aria-busy={openSession.busy || loading || sitesLoading}
+              title={openSession.reason ?? undefined}
             >
-              <Plus className="mr-2 size-4" />
+              {openSession.denied ? (
+                <Lock className="mr-2 size-4" />
+              ) : (
+                <Plus className="mr-2 size-4" />
+              )}
               {session ? "Session ouverte" : "Nouvelle session"}
             </Button>
+            <BlockedReason reason={openSession.reason} className="max-w-72" />
           </div>
         </div>
 
@@ -262,7 +274,20 @@ export default function CashDrawerPage() {
             Aucun site n’est associé à cette organisation. Terminez l’onboarding pour créer le premier site.
           </div>
         )}
-        {loading && <div className="text-muted-foreground">Chargement de la caisse…</div>}
+        {loading && (
+          <div className="grid gap-4 md:grid-cols-3" role="status" aria-busy="true" aria-label="Chargement de la caisse">
+            {[0, 1, 2].map((card) => (
+              <div
+                key={card}
+                className="row-in rounded border bg-card p-4"
+                style={{ "--row": card } as React.CSSProperties}
+              >
+                <Skeleton className="h-3 w-28" />
+                <Skeleton className="mt-3 h-7 w-36" />
+              </div>
+            ))}
+          </div>
+        )}
         {error && <div className="text-destructive">{error}</div>}
 
         {!loading && !error && siteId && !session && (
@@ -276,23 +301,45 @@ export default function CashDrawerPage() {
         {!loading && !error && session && (
           <>
             <div className="grid gap-4 md:grid-cols-3">
-              <div className="rounded border bg-card p-4">
-                <p className="text-sm text-muted-foreground">Solde théorique</p>
+              <div className="row-in rounded border bg-card p-4" style={{ "--row": 0 } as React.CSSProperties}>
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                  {/* Pastille qui respire : la caisse est ouverte, visible en vision périphérique. */}
+                  <span className="pulse-soft size-2 rounded-full bg-emerald-500" aria-hidden="true" />
+                  Solde théorique
+                </p>
+                {/* Lecture seule : le compteur peut être animé sans gêner un comptage. */}
                 <p className="text-2xl font-bold">
-                  {(session.theoretical_balance_cents / 100).toLocaleString("fr-CI")} XOF
+                  <AnimatedNumber
+                    value={session.theoretical_balance_cents}
+                    format={(cents) => `${(cents / 100).toLocaleString("fr-CI")} XOF`}
+                  />
                 </p>
               </div>
-              <div className="rounded border bg-card p-4">
+              <div className="row-in rounded border bg-card p-4" style={{ "--row": 1 } as React.CSSProperties}>
                 <p className="text-sm text-muted-foreground">Montant compté</p>
-                <p className="text-2xl font-bold">
+                {/* Jamais animé : c'est le chiffre que le gérant vérifie. */}
+                <p className="text-2xl font-bold tabular-nums">
                   {session.counted_amount_cents != null
                     ? `${(session.counted_amount_cents / 100).toLocaleString("fr-CI")} XOF`
                     : "—"}
                 </p>
               </div>
-              <div className="rounded border bg-card p-4">
+              <div
+                className={`row-in rounded border bg-card p-4 transition-colors ${
+                  session.discrepancy_cents ? "shake-x border-destructive/40 bg-destructive/5" : ""
+                }`}
+                style={{ "--row": 2 } as React.CSSProperties}
+              >
                 <p className="text-sm text-muted-foreground">Écart de caisse</p>
-                <p className={`text-2xl font-bold ${session.discrepancy_cents ? "text-destructive" : ""}`}>
+                <p
+                  className={`text-2xl font-bold tabular-nums transition-colors ${
+                    session.discrepancy_cents
+                      ? "text-destructive"
+                      : session.counted_amount_cents != null
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : ""
+                  }`}
+                >
                   {session.discrepancy_cents != null
                     ? `${(session.discrepancy_cents / 100).toLocaleString("fr-CI")} XOF`
                     : "—"}
@@ -306,9 +353,12 @@ export default function CashDrawerPage() {
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="outline"
+                    disabled={cashAction.disabled}
+                    aria-busy={cashAction.busy}
+                    title={cashAction.reason ?? undefined}
                     onClick={() => {
                       setMovementType("entry")
-                      setMutationError(null)
+                      mutation.reset()
                       setMovementDialogOpen(true)
                     }}
                   >
@@ -316,25 +366,32 @@ export default function CashDrawerPage() {
                   </Button>
                   <Button
                     variant="outline"
+                    disabled={cashAction.disabled}
+                    aria-busy={cashAction.busy}
+                    title={cashAction.reason ?? undefined}
                     onClick={() => {
                       setMovementType("exit")
-                      setMutationError(null)
+                      mutation.reset()
                       setMovementDialogOpen(true)
                     }}
                   >
                     <ArrowUpFromLine className="mr-2 size-4" /> Sortie
                   </Button>
                   <Button
+                    disabled={cashAction.disabled}
+                    aria-busy={cashAction.busy}
+                    title={cashAction.reason ?? undefined}
                     onClick={() => {
                       setCountedAmount("")
                       setDiscrepancyReason("")
-                      setMutationError(null)
+                      mutation.reset()
                       setCloseDialogOpen(true)
                     }}
                   >
                     <WalletCards className="mr-2 size-4" /> Clôturer
                   </Button>
                 </div>
+                <BlockedReason reason={cashAction.reason} />
               </div>
               <div className="overflow-x-auto">
                 <Table>
@@ -349,16 +406,34 @@ export default function CashDrawerPage() {
                   <TableBody>
                     {(movements?.length ?? 0) === 0 && (
                       <TableRow>
-                        <TableCell colSpan={4} className="text-center text-muted-foreground">
-                          Aucun mouvement enregistré.
+                        <TableCell colSpan={4} className="p-0">
+                          <EmptyState
+                            icon={WalletCards}
+                            title="Aucun mouvement enregistré"
+                            description="Les encaissements de lavages et les sorties de caisse s'afficheront ici au fil de la journée."
+                          />
                         </TableCell>
                       </TableRow>
                     )}
-                    {movements?.map((movement) => (
-                      <TableRow key={movement.id}>
+                    {movements?.map((movement, index) => (
+                      <TableRow
+                        key={movement.id}
+                        className="row-in"
+                        style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
+                      >
                         <TableCell>{new Date(movement.created_at).toLocaleDateString("fr-CI")}</TableCell>
-                        <TableCell>{movement.type === "entry" ? "Entrée" : "Sortie"}</TableCell>
-                        <TableCell className="text-right">
+                        <TableCell>
+                          <span
+                            className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${
+                              movement.type === "entry"
+                                ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                                : "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                            }`}
+                          >
+                            {movement.type === "entry" ? "Entrée" : "Sortie"}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
                           {(movement.amount_cents / 100).toLocaleString("fr-CI")}
                         </TableCell>
                         <TableCell>{movement.source}</TableCell>
@@ -391,7 +466,7 @@ export default function CashDrawerPage() {
                 disabled={saving}
               />
             </label>
-            {mutationError && <p className="text-sm text-destructive">{mutationError}</p>}
+            {mutation.error && <p className="text-sm text-destructive">{mutation.error}</p>}
             <DialogFooter>
               <Button variant="outline" onClick={() => setOpenDialog(false)} disabled={saving}>
                 Annuler
@@ -434,7 +509,7 @@ export default function CashDrawerPage() {
                 disabled={saving}
               />
             </label>
-            {mutationError && <p className="text-sm text-destructive">{mutationError}</p>}
+            {mutation.error && <p className="text-sm text-destructive">{mutation.error}</p>}
             <DialogFooter>
               <Button variant="outline" onClick={() => setMovementDialogOpen(false)} disabled={saving}>
                 Annuler
@@ -469,7 +544,16 @@ export default function CashDrawerPage() {
               />
             </label>
             {countHasDiscrepancy && (
-              <label className="flex flex-col gap-2 text-sm font-medium" htmlFor="discrepancy-reason">
+              /* Apparition en fondu simple : pendant un comptage de caisse,
+                 rien ne doit bouger sous les doigts de la personne qui saisit.
+                 La lueur rouge est fixe, elle ne clignote pas. */
+              <motion.label
+                className="glow-danger glow-static flex flex-col gap-2 rounded-lg p-3 text-sm font-medium"
+                htmlFor="discrepancy-reason"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={TRANSITION.enter}
+              >
                 Motif de l’écart obligatoire
                 <Input
                   id="discrepancy-reason"
@@ -477,9 +561,9 @@ export default function CashDrawerPage() {
                   onChange={(event) => setDiscrepancyReason(event.target.value)}
                   disabled={saving}
                 />
-              </label>
+              </motion.label>
             )}
-            {mutationError && <p className="text-sm text-destructive">{mutationError}</p>}
+            {mutation.error && <p className="text-sm text-destructive">{mutation.error}</p>}
             <DialogFooter>
               <Button variant="outline" onClick={() => setCloseDialogOpen(false)} disabled={saving}>
                 Annuler

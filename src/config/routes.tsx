@@ -19,10 +19,15 @@ export const routes: RouteObject[] = [
   { path: "/onboarding", lazy: page(() => import("@/app/onboarding/page")) },
   { path: "/washes", lazy: page(() => import("@/app/washes/page")) },
   { path: "/washes/:washID", lazy: page(() => import("@/app/washes/[washID]/page")) },
+  { path: "/payments", lazy: page(() => import("@/app/payments/page")) },
   { path: "/cash-drawer", lazy: page(() => import("@/app/cash-drawer/page")) },
   { path: "/expenses", lazy: page(() => import("@/app/expenses/page")) },
   { path: "/reports", lazy: page(() => import("@/app/reports/page")) },
+  { path: "/history", lazy: page(() => import("@/app/history/page")) },
+  { path: "/support", lazy: page(() => import("@/app/support/page")) },
+  { path: "/sites", lazy: page(() => import("@/app/sites/page")) },
   { path: "/team", lazy: page(() => import("@/app/team/page")) },
+  { path: "/stock", lazy: page(() => import("@/app/stock/page")) },
   { path: "/services", lazy: page(() => import("@/app/services/page")) },
   { path: "/service-categories", lazy: page(() => import("@/app/service-categories/page")) },
   { path: "/vehicle-categories", lazy: page(() => import("@/app/vehicle-categories/page")) },
@@ -38,6 +43,10 @@ export const routes: RouteObject[] = [
   {
     path: "/auth/forgot-password",
     lazy: page(() => import("@/app/auth/forgot-password/page")),
+  },
+  {
+    path: "/auth/reset-password",
+    lazy: page(() => import("@/app/auth/reset-password/page")),
   },
   // Error Pages
   {
@@ -68,6 +77,14 @@ export const routes: RouteObject[] = [
   {
     path: "/settings/billing",
     lazy: page(() => import("@/app/settings/billing/page")),
+  },
+  {
+    path: "/settings/data",
+    lazy: page(() => import("@/app/settings/data/page")),
+  },
+  {
+    path: "/settings/access",
+    lazy: page(() => import("@/app/settings/access/page")),
   },
   // Catch-all route for 404
   { path: "*", lazy: page(() => import("@/app/errors/not-found/page")) },

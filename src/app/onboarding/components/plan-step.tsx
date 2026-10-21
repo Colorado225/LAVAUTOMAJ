@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Check, Info } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { TiltCard } from "@/components/ui/tilt-card"
 import type { Plan } from "@/lib/onboarding-api"
 import { saveStage } from "./save-stage"
 import type { OnboardingWizardProps } from "./onboarding-wizard"
@@ -51,7 +52,7 @@ export function PlanStep({ progress, onDone, onQuit }: OnboardingWizardProps) {
     setSaving(true)
     setServerError(null)
     try {
-      // Le plan_code provient du catalogue Neon, validé à nouveau côté serveur.
+      // Le plan_code provient du catalogue serveur, validé à nouveau côté serveur.
       const response = await saveStage("plan", { plan: selectedCode }, selectedCode ?? undefined, quit)
       if (!response.ok) {
         const text = await response.text()
@@ -86,20 +87,25 @@ export function PlanStep({ progress, onDone, onQuit }: OnboardingWizardProps) {
         {error && <p className="text-destructive text-sm">{error}</p>}
 
         <div className="grid gap-4 md:grid-cols-3">
-          {(plans ?? []).map((p) => (
+          {(plans ?? []).map((p, index) => (
+            <TiltCard key={p.code} className="row-in" maxTilt={5}>
             <button
-              key={p.code}
               type="button"
               onClick={() => setSelectedCode(p.code)}
+              style={{ "--row": index } as React.CSSProperties}
               className={cn(
-                "flex flex-col gap-3 rounded-lg border p-4 text-left transition-colors hover:bg-muted/50",
-                selectedCode === p.code && "border-primary bg-primary/5"
+                "surface-3d surface-press flex h-full w-full flex-col gap-3 rounded-lg border bg-card p-4 text-left hover:bg-muted/50",
+                // Le forfait retenu garde une lueur permanente : son état doit
+                // rester lisible quand le curseur est ailleurs.
+                selectedCode === p.code && "glow-primary glow-static border-primary bg-primary/5"
               )}
               aria-pressed={selectedCode === p.code}
             >
               <div className="flex items-center justify-between">
                 <p className="font-semibold">{p.name}</p>
-                {selectedCode === p.code && <Check className="size-4 text-primary" />}
+                {selectedCode === p.code && (
+                  <Check className="size-4 animate-in text-primary zoom-in-50 duration-200" />
+                )}
               </div>
               <p className="text-sm text-muted-foreground">{p.description}</p>
               <p className="text-lg font-bold">{formatXOF(p.price_cents)}</p>
@@ -111,17 +117,19 @@ export function PlanStep({ progress, onDone, onQuit }: OnboardingWizardProps) {
                 ))}
               </ul>
             </button>
+            </TiltCard>
           ))}
         </div>
 
-        {selectedCode && selectedCode !== "free" && (
+        {selectedCode && (
           <p className="flex items-start gap-2 rounded-lg bg-muted p-3 text-xs text-muted-foreground">
             <Info className="mt-0.5 size-4 shrink-0" />
-            Votre abonnement {plans?.find((p) => p.code === selectedCode)?.name} sera
-            créé avec l'état « en attente ». Un administrateur validera le paiement.
+            Votre forfait {plans?.find((p) => p.code === selectedCode)?.name} démarre
+            par 14 jours d’essai gratuit, sans carte bancaire. Vous essayez
+            exactement ce que vous achetez : aucune fonctionnalité ne disparaîtra
+            au quinzième jour. Vous pouvez changer de forfait pendant l’essai.
           </p>
         )}
-
         {serverError && <p className="text-destructive text-sm">{serverError}</p>}
 
         <div className="flex items-center justify-between gap-2">

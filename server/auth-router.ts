@@ -1,14 +1,19 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
 import { getPool } from "./db.ts";
+import { env } from "./env.ts";
 import { asyncRoute } from "./http.ts";
+import { isMailerConfigured, passwordResetMessage, sendMail } from "./mailer.ts";
 import {
   HttpError,
   clearSessionCookie,
+  consumePasswordResetToken,
+  createPasswordResetToken,
   createSession,
   destroySession,
   getSessionUser,
   hashPassword,
+  isPasswordResetTokenValid,
   readSessionToken,
   setSessionCookie,
   verifyPassword,
@@ -91,6 +96,43 @@ const passwordSchema = z.object({
     .max(200),
 });
 
+const forgotPasswordSchema = z.object({
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .email("Adresse e-mail invalide.")
+    .max(254),
+});
+
+const resetPasswordSchema = z.object({
+  token: z.string().trim().min(10, "Lien invalide.").max(300),
+  password: z
+    .string()
+    .min(
+      MIN_PASSWORD_LENGTH,
+      `Le mot de passe doit contenir au moins ${MIN_PASSWORD_LENGTH} caractères.`,
+    )
+    .max(200),
+});
+
+/**
+ * Construit l'URL publique du lien de réinitialisation.
+ * Priorité à APP_URL ; sinon l'origine de la requête si elle est autorisée ;
+ * sinon l'hôte vu par le serveur (utile derrière le proxy d'aperçu).
+ */
+export function buildResetUrl(req: Request, token: string): string {
+  const candidates = [
+    env.APP_URL,
+    req.get("origin") && env.CORS_ORIGINS.includes(req.get("origin") as string)
+      ? req.get("origin")
+      : "",
+    `${req.get("x-forwarded-proto") || req.protocol}://${req.get("host") ?? "localhost"}`,
+  ];
+  const base = (candidates.find((value) => Boolean(value)) ?? "").replace(/\/+$/, "");
+  return `${base}/auth/reset-password?token=${encodeURIComponent(token)}`;
+}
+
 interface MePayload {
   user: {
     id: string;
@@ -142,6 +184,9 @@ async function buildMePayload(userId: string): Promise<MePayload> {
       last_name: row.last_name,
       phone: row.phone,
       avatar_url: row.avatar_url,
+      // Administrateur de plateforme (l'éditeur). Exposé ici parce que le
+      // back-office vit hors du contexte de station : un administrateur peut
+      // n'appartenir à aucune organisation.
     },
     organization: row.organization_id
       ? {
@@ -422,6 +467,141 @@ export function createAuthRouter() {
         [session.userId, session.sessionId],
       );
       res.json({ ok: true });
+    }),
+  );
+
+  // POST /api/v1/auth/forgot-password — envoie un lien de réinitialisation.
+  // La réponse est toujours identique pour ne pas révéler si un compte existe.
+  r.post(
+    "/forgot-password",
+    asyncRoute(async (req, res) => {
+      assertRateLimit(req);
+      const parsed = forgotPasswordSchema.safeParse(req.body);
+      if (!parsed.success) {
+        throw new HttpError(
+          400,
+          "invalid_data",
+          parsed.error.issues[0]?.message ?? "Données invalides.",
+        );
+      }
+      const { email } = parsed.data;
+      const pool = getPool();
+      if (!pool)
+        throw new HttpError(
+          503,
+          "database_not_configured",
+          "Base de données indisponible.",
+        );
+
+      const genericResponse: {
+        ok: true;
+        message: string;
+        delivery: "email" | "manual";
+        reset_url?: string;
+      } = {
+        ok: true,
+        message:
+          "Si un compte existe avec cette adresse, un lien de réinitialisation vient d'être envoyé. Pensez à vérifier vos indésirables.",
+        delivery: isMailerConfigured() ? "email" : "manual",
+      };
+
+      const q = await pool.query(
+        "SELECT id, email, status FROM users WHERE lower(email) = $1 LIMIT 1",
+        [email],
+      );
+      const row = q.rows[0] as
+        | { id: string; email: string; status: string }
+        | undefined;
+
+      // Compte inconnu ou désactivé : même réponse, aucun jeton créé.
+      if (!row || row.status !== "active") {
+        res.json(genericResponse);
+        return;
+      }
+
+      const token = await createPasswordResetToken(
+        pool,
+        row.id,
+        env.PASSWORD_RESET_TTL_MINUTES,
+        req.ip ?? null,
+      );
+      const resetUrl = buildResetUrl(req, token);
+      const sent = await sendMail(
+        passwordResetMessage(row.email, resetUrl, env.PASSWORD_RESET_TTL_MINUTES),
+      );
+
+      // Sans fournisseur e-mail, le lien est exposé uniquement hors production
+      // afin de permettre les tests et la réinitialisation assistée en local.
+      if (!sent && env.NODE_ENV !== "production") {
+        genericResponse.reset_url = resetUrl;
+        genericResponse.message =
+          "Aucun service d'e-mail n'est configuré sur cet environnement : utilisez le lien ci-dessous pour réinitialiser le mot de passe.";
+      }
+
+      res.json(genericResponse);
+    }),
+  );
+
+  // GET /api/v1/auth/reset-password?token=… — vérifie un lien sans le consommer.
+  r.get(
+    "/reset-password",
+    asyncRoute(async (req, res) => {
+      const token = typeof req.query.token === "string" ? req.query.token : "";
+      const pool = getPool();
+      if (!pool)
+        throw new HttpError(
+          503,
+          "database_not_configured",
+          "Base de données indisponible.",
+        );
+      res.json({ valid: await isPasswordResetTokenValid(pool, token) });
+    }),
+  );
+
+  // POST /api/v1/auth/reset-password — consomme le lien et change le mot de passe.
+  r.post(
+    "/reset-password",
+    asyncRoute(async (req, res) => {
+      assertRateLimit(req);
+      const parsed = resetPasswordSchema.safeParse(req.body);
+      if (!parsed.success) {
+        throw new HttpError(
+          400,
+          "invalid_data",
+          parsed.error.issues[0]?.message ?? "Données invalides.",
+        );
+      }
+      const pool = getPool();
+      if (!pool)
+        throw new HttpError(
+          503,
+          "database_not_configured",
+          "Base de données indisponible.",
+        );
+
+      const userId = await consumePasswordResetToken(pool, parsed.data.token);
+      if (!userId) {
+        throw new HttpError(
+          400,
+          "invalid_reset_token",
+          "Ce lien de réinitialisation est invalide ou a expiré. Demandez-en un nouveau.",
+        );
+      }
+
+      const newHash = await hashPassword(parsed.data.password);
+      await pool.query(
+        "UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1",
+        [userId, newHash],
+      );
+      // Toutes les sessions existantes sont révoquées : seul le nouveau mot de
+      // passe donne accès au compte.
+      await pool.query("DELETE FROM auth_sessions WHERE user_id = $1", [userId]);
+
+      res.json({
+        ok: true,
+        message:
+          "Votre mot de passe a été réinitialisé. Vous pouvez maintenant vous connecter.",
+      });
     }),
   );
 

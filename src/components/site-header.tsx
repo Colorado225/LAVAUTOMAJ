@@ -4,6 +4,7 @@ import * as React from "react"
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { CommandSearch, SearchTrigger } from "@/components/command-search"
+import { ThemeMenu, ThemeToggle } from "@/components/theme-toggle"
 
 export function SiteHeader() {
   const [searchOpen, setSearchOpen] = React.useState(false)
@@ -31,6 +32,15 @@ export function SiteHeader() {
           />
           <div className="max-w-sm flex-1">
             <SearchTrigger onClick={() => setSearchOpen(true)} />
+          </div>
+          <div className="ml-auto flex items-center gap-1">
+            {/* Bascule rapide pour le geste quotidien, menu pour revenir au
+                réglage du système. Le menu est masqué sur mobile : la place
+                y est comptée, et le choix complet reste dans les réglages. */}
+            <ThemeToggle />
+            <span className="hidden sm:inline-flex">
+              <ThemeMenu />
+            </span>
           </div>
         </div>
       </header>

@@ -1,3 +1,4 @@
+import type * as React from "react"
 import { useState } from "react"
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion"
 import {
@@ -14,6 +15,7 @@ import {
   WalletCards,
 } from "lucide-react"
 import { Reveal, SectionHeading } from "./landing-motion"
+import { CountUpOnView } from "@/components/ui/count-up-on-view"
 
 type DemoTab = "dashboard" | "washes" | "cash"
 
@@ -31,7 +33,7 @@ function MiniMetric({
   note,
 }: {
   label: string
-  value: string
+  value: React.ReactNode
   icon: import("lucide-react").LucideIcon
   tint: string
   note?: string
@@ -59,14 +61,14 @@ function DashboardScreen() {
       <div className="grid gap-3 sm:grid-cols-2">
         <MiniMetric
           label="Recettes totales"
-          value="186 500 XOF"
+          value={<CountUpOnView value={186500} format={(amount) => `${amount.toLocaleString("fr-FR")} XOF`} />}
           icon={CircleDollarSign}
           tint="text-emerald-600"
           note="Somme des paiements confirmés"
         />
         <MiniMetric
           label="Lavages"
-          value="24"
+          value={<CountUpOnView value={24} duration={700} />}
           icon={CarFront}
           tint="text-blue-600"
           note="Nombre de lavages enregistrés"

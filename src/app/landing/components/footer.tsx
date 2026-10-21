@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom"
-import { Logo } from "@/components/logo"
+import { BrandMark } from "@/components/brand"
 
 const footerLinks = [
   { label: "Les enjeux", href: "#enjeux" },
@@ -15,9 +15,7 @@ export function LandingFooter() {
         <div className="flex flex-col gap-8 border-b border-white/10 pb-8 md:flex-row md:items-center md:justify-between">
           <div className="max-w-md">
             <Link to="/landing" className="inline-flex items-center gap-3">
-              <span className="grid size-10 place-items-center rounded-2xl bg-white/10 text-white">
-                <Logo size={25} />
-              </span>
+              <BrandMark height={36} tone="dark" />
               <span className="text-lg font-extrabold tracking-[-0.04em]">WashPilot <span className="text-sky-300">CI</span></span>
             </Link>
             <p className="mt-4 text-sm leading-6 text-blue-100/65">

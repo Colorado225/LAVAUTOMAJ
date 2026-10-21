@@ -2,13 +2,25 @@ import type { NextFunction, Request, Response } from "express"
 import type { PoolClient } from "pg"
 import { getPool } from "./db.ts"
 import { HttpError } from "./auth.ts"
+import { effectivePermissions, type Permission, type PermissionOverride } from "./permissions.ts"
 
 interface TenantRow {
   organization_id: string
   role: string
+  status: string
+  deletion_requested_at: string | null
 }
 
-/** Resolve the user's organization membership and attach the tenant to the request. */
+/**
+ * Résout l'appartenance de l'utilisateur à une station, puis attache au
+ * contexte de la requête l'organisation, le rôle **et les permissions
+ * effectives**.
+ *
+ * Deux règles de sécurité structurelles :
+ *   • l'organisation vient toujours de l'appartenance en base, jamais d'un
+ *     identifiant fourni par le navigateur ;
+ *   • un membre désactivé est refusé ici, avant d'atteindre la moindre route.
+ */
 export async function requireTenantContext(req: Request, _res: Response, next: NextFunction) {
   try {
     const auth = req.auth
@@ -17,10 +29,11 @@ export async function requireTenantContext(req: Request, _res: Response, next: N
     if (!pool) throw new HttpError(503, "database_not_configured", "La base de données n'est pas configurée.")
 
     const q = await pool.query(
-      `SELECT m.organization_id, m.role
+      `SELECT m.organization_id, m.role, m.status, o.deletion_requested_at
        FROM organization_members m
+       JOIN organizations o ON o.id = m.organization_id
        WHERE m.user_id = $1::uuid
-       ORDER BY m.created_at ASC
+       ORDER BY (m.status = 'active') DESC, m.created_at ASC
        LIMIT 1`,
       [auth.userId],
     )
@@ -28,7 +41,42 @@ export async function requireTenantContext(req: Request, _res: Response, next: N
     if (!row) {
       throw new HttpError(403, "organization_required", "Votre compte n'est rattaché à aucune organisation. Contactez votre administrateur.")
     }
-    req.tenant = { organizationId: row.organization_id, userId: auth.userId, role: row.role }
+    if (row.status !== "active") {
+      throw new HttpError(
+        403,
+        "membership_disabled",
+        "Votre accès à cette station a été désactivé. Contactez le propriétaire.",
+      )
+    }
+
+    // Suppression programmée : l'accès est coupé dès la décision, pas à
+    // l'échéance. Le délai de grâce protège les données contre une erreur de
+    // l'éditeur ; il n'est pas un sursis d'exploitation accordé au client.
+    //
+    // Contrôlé ici plutôt que route par route : c'est le seul endroit que
+    // toute requête de station traverse obligatoirement.
+    if (row.deletion_requested_at) {
+      throw new HttpError(
+        403,
+        "organization_deleted",
+        "Cette station a été fermée. Contactez WashPilot CI si vous pensez qu'il s'agit d'une erreur.",
+      )
+    }
+
+    // Exceptions posées par le propriétaire sur ce membre précis.
+    const overridesQ = await pool.query<PermissionOverride>(
+      "SELECT permission, granted FROM member_permissions WHERE organization_id=$1::uuid AND user_id=$2::uuid",
+      [row.organization_id, auth.userId],
+    )
+    const permissions = effectivePermissions(row.role, overridesQ.rows)
+
+    req.tenant = {
+      organizationId: row.organization_id,
+      userId: auth.userId,
+      role: row.role,
+      permissions,
+      can: (permission: Permission) => permissions.has(permission),
+    }
     next()
   } catch (error) {
     next(error)
@@ -47,7 +95,7 @@ export async function assertOrganizationUserCapacity(client: PoolClient, organiz
     `SELECT p.max_users, COUNT(m.id)::int AS active_count FROM organizations o
      LEFT JOIN subscriptions s ON s.organization_id = o.id
      LEFT JOIN plans p ON p.id = s.plan_id
-     LEFT JOIN organization_members m ON m.organization_id = o.id
+     LEFT JOIN organization_members m ON m.organization_id = o.id AND m.status = 'active'
      WHERE o.id = $1 GROUP BY p.max_users`,
     [organizationId],
   )

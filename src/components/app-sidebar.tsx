@@ -10,12 +10,17 @@ import {
   Users,
   Plus,
   List,
+  BadgeCheck,
+  ShieldCheck,
+  History,
+  Building2,
+  Package,
 } from "lucide-react"
 import { Link } from "react-router-dom"
-import { Logo } from "@/components/logo"
+import { BrandBadge } from "@/components/brand"
 import { useOnboardingStatus } from "@/lib/onboarding-api"
-import { useApi } from "@/lib/api"
-import type { OnboardingSummary } from "@/lib/onboarding-api"
+import { TrialCountdown } from "@/components/trial/trial-countdown"
+import { usePermissions, type Permission } from "@/lib/permissions"
 
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
@@ -43,36 +48,61 @@ const data = {
           title: "Tableau de bord",
           url: "/dashboard",
           icon: LayoutPanelLeft,
+          permission: "dashboard:read" as Permission,
         },
         {
           title: "Nouveau lavage",
           url: "/washes",
           icon: Plus,
+          permission: "wash:read" as Permission,
+        },
+        {
+          title: "Encaissements",
+          url: "/payments",
+          icon: BadgeCheck,
+          permission: "payment:read" as Permission,
         },
         {
           title: "Caisse",
           url: "/cash-drawer",
           icon: Wallet,
+          permission: "cash_session:read" as Permission,
         },
         {
           title: "Dépenses",
           url: "/expenses",
           icon: Receipt,
+          permission: "expense:read" as Permission,
+        },
+        {
+          title: "Stock",
+          url: "/stock",
+          icon: Package,
+          permission: "stock:read" as Permission,
         },
         {
           title: "Rapports",
           url: "/reports",
           icon: BarChart3,
+          permission: "report:operational" as Permission,
+        },
+        {
+          title: "Historique",
+          url: "/history",
+          icon: History,
+          permission: "audit:read" as Permission,
         },
         {
           title: "Équipe",
           url: "/team",
           icon: Users,
+          permission: "worker:read" as Permission,
         },
         {
           title: "Catalogue",
           url: "#",
           icon: List,
+          permission: "service:read" as Permission,
           items: [
             {
               title: "Prestations",
@@ -94,6 +124,24 @@ const data = {
       label: "Configuration",
       items: [
         {
+          // `settings:manage` et non `wash:read` : le serveur laisse tout le
+          // monde *lire* la liste des stations, mais créer, modifier et
+          // désactiver exigent `settings:manage`. Avec `wash:read`, un agent
+          // de lavage voyait une rubrique « Configuration » ne contenant
+          // qu'un écran aux boutons tous grisés. On n'annonce pas une porte
+          // qu'on ne peut pas ouvrir ; l'URL reste accessible en lecture.
+          title: "Stations",
+          url: "/sites",
+          icon: Building2,
+          permission: "settings:manage" as Permission,
+        },
+        {
+          title: "Gestion des accès",
+          url: "/settings/access",
+          icon: ShieldCheck,
+          permission: "user:manage" as Permission,
+        },
+        {
           title: "Paramètres",
           url: "#",
           icon: Settings,
@@ -105,6 +153,12 @@ const data = {
             {
               title: "Facturation",
               url: "/settings/billing",
+              permission: "subscription:manage" as Permission,
+            },
+            {
+              title: "Données et sauvegarde",
+              url: "/settings/data",
+              permission: "data:export" as Permission,
             },
           ],
         },
@@ -113,29 +167,23 @@ const data = {
   ],
 }
 
-function TrialCountdown() {
-  const { data } = useApi<OnboardingSummary>("/api/v1/onboarding/summary")
-  const end = data?.subscription_period_end ? new Date(data.subscription_period_end).getTime() : null
-  const [now, setNow] = React.useState(Date.now())
-  React.useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [])
-  if (!end || data?.subscription_status !== "trialing") return null
-  const diff = Math.max(0, end - now)
-  const days = Math.floor(diff / 86400000)
-  const hours = Math.floor((diff % 86400000) / 3600000)
-  const mins = Math.floor((diff % 3600000) / 60000)
-  const secs = Math.floor((diff % 60000) / 1000)
-  return (
-    <div className="px-2 py-2 text-xs text-muted-foreground">
-      Essai gratuit: {days}j {hours}h {mins}m {secs}s
-    </div>
-  )
+type NavItems = React.ComponentProps<typeof NavMain>["items"]
+type NavEntry = NavItems[number] & { permission?: Permission; items?: NavEntry[] }
+
+/**
+ * Masque les entrées dont l'utilisateur n'a pas la permission.
+ * Un groupe dont toutes les sous-entrées sont masquées disparaît à son tour.
+ */
+function filterNav(items: NavEntry[], can: (permission: Permission) => boolean): NavEntry[] {
+  return items
+    .filter((item) => !item.permission || can(item.permission))
+    .map((item) => (item.items ? { ...item, items: filterNav(item.items, can) } : item))
+    .filter((item) => !item.items || item.items.length > 0 || item.url !== "#")
 }
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { data: status } = useOnboardingStatus()
+  const { can, loading: permissionsLoading } = usePermissions()
   const stationName = status?.station?.name ?? status?.org_name ?? "WashPilot CI"
   const stationCity = status?.station?.city
 
@@ -144,10 +192,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link to="/dashboard" />}>
-              <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <Logo size={24} className="text-current" />
-              </div>
+            <SidebarMenuButton size="lg" render={<Link to="/dashboard" viewTransition />}>
+              <BrandBadge height={32} />
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">{stationName}</span>
                 <span className="truncate text-xs">
@@ -159,9 +205,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        {data.navGroups.map((group) => (
-          <NavMain key={group.label} label={group.label} items={group.items} />
-        ))}
+        {data.navGroups.map((group) => {
+          // Tant que les permissions ne sont pas chargées, on n'affiche rien
+          // plutôt qu'un menu complet qui se réduirait sous les yeux.
+          const items = permissionsLoading
+            ? []
+            : (filterNav(group.items as NavEntry[], can) as NavItems)
+          if (items.length === 0) return null
+          return <NavMain key={group.label} label={group.label} items={items} />
+        })}
       </SidebarContent>
       <SidebarFooter>
         <TrialCountdown />

@@ -44,10 +44,24 @@ Variables d'environnement (voir [`.env.example`](.env.example)) :
 
 - `DATABASE_URL` — connexion Neon/PostgreSQL. **Obligatoire en production.**
 - `CORS_ORIGINS` — origines frontend autorisées (séparées par des virgules).
+- `APP_URL` — URL publique utilisée pour construire les liens envoyés par e-mail.
+- `PASSWORD_RESET_TTL_MINUTES` — validité d'un lien de réinitialisation (défaut `60`).
+- `RESEND_API_KEY` / `MAIL_FROM` — envoi des e-mails transactionnels via Resend.
+- `PLATFORM_ADMIN_EMAILS` — adresses des opérateurs de la console de
+  l'éditeur (`/console`), séparées par des virgules. Les comptes sont créés au
+  démarrage. **Vide = console entièrement fermée.**
+- `PLATFORM_ADMIN_PASSWORD` — mot de passe posé sur les comptes d'opérateur
+  **créés** au démarrage. Ne réécrit jamais un mot de passe existant.
 
 > L'authentification ne dépend d'aucun service externe : les comptes (mot de passe
 > haché scrypt) et les sessions (cookies httpOnly, table `auth_sessions`) vivent
 > dans la base PostgreSQL/Neon.
+
+> **Mot de passe oublié.** `POST /auth/forgot-password` crée un jeton à usage unique
+> (seul son SHA-256 est stocké dans `password_reset_tokens`) et envoie le lien par
+> e-mail. Sans `RESEND_API_KEY`, le lien est journalisé côté serveur ; **hors
+> production uniquement**, il est aussi renvoyé dans la réponse pour faciliter les
+> tests. La réponse est toujours identique, qu'un compte existe ou non.
 
 ## Architecture
 
@@ -58,7 +72,9 @@ server/
   db.ts              # Pool pg + schéma SQL idempotent (CREATE/ALTER IF NOT EXISTS)
   auth.ts            # Hachage scrypt, sessions cookie httpOnly, middleware requireSession
   tenant.ts          # Résolution du tenant (organisation + rôle) de l'utilisateur
-  auth-router.ts     # /auth/register, /auth/login, /auth/logout, /auth/me, /auth/profile, /auth/password
+  auth-router.ts     # /auth/register, /auth/login, /auth/logout, /auth/me, /auth/profile,
+                     # /auth/password, /auth/forgot-password, /auth/reset-password
+  mailer.ts          # E-mails transactionnels (Resend via fetch, journalisation sinon)
   onboarding.ts      # Assistant : status, progress, summary, confirm, plans, catalogue
   api.ts             # CRUD sites, services, catégories + lavages (création idempotente, annulation)
   operations.ts      # Sessions de caisse, mouvements, clôture, dépenses
@@ -109,3 +125,59 @@ tests/               # Tests unitaires (node:test via tsx)
    justification de tout écart.
 4. **Annulation de lavage** : motif obligatoire, paiements marqués `refunded`, contre-passation
    en caisse si la session d'origine est encore ouverte.
+5. **Reçu de lavage** : format thermique 80 mm imprimé par le navigateur, un reçu
+   par lavage (prestations, règlements, solde restant). Toute réimpression porte
+   la mention DUPLICATA et laisse une trace. Ce n'est **pas** un reçu normalisé
+   de la DGI — voir [`RECU-LAVAGE.md`](RECU-LAVAGE.md).
+6. **Abonnement** : essai de 14 jours à l'inscription, puis lecture seule à
+   l'expiration. Le client demande l'activation depuis l'application
+   (`POST /support/upgrade-request`) ; l'éditeur encaisse hors application et
+   valide — ou décline — depuis la console `/console`. Voir
+   [`BACK-OFFICE.md`](BACK-OFFICE.md).
+
+## Console de l'éditeur
+
+Application **séparée** réservée au créateur, servie sous `/console` : suivi du
+parc, registre des encaissements avec exports comptables, recherche de comptes
+dans tout le parc avec rôles et sessions, file d'assistance avec délai de
+réponse mesuré par forfait, surveillance technique du service (taux d'erreur,
+latence, pannes regroupées), suppression d'une organisation en deux temps.
+
+```bash
+# .env — puis redémarrer le serveur
+PLATFORM_ADMIN_EMAILS=vous@exemple.ci
+PLATFORM_ADMIN_PASSWORD=UnMotDePasseLongEtUnique
+```
+
+Les comptes sont **créés automatiquement** au démarrage et vivent dans leur
+propre table, `platform_operators`, sans aucun lien avec les comptes de
+station : ni le même mot de passe, ni la même session, ni la même durée (2
+jours contre 30). Retirer une adresse de la liste désactive l'opérateur et
+coupe ses sessions au redémarrage suivant.
+
+**Aucune passerelle depuis le produit** : rien dans l'application station ne
+mentionne la console — pas d'entrée de menu, pas de lien, pas de redirection —
+et un test échoue si `/console` apparaît hors de `src/console/`. Le serveur
+répond `404`, et non `403`, à toute requête de console sans opérateur valide :
+pour qui sonde l'application, la console n'existe pas.
+
+Le créateur **n'a pas besoin d'exploiter une station** : la console ne réclame
+ni organisation, ni abonnement, ni parcours de mise en service.
+
+Détail des décisions, des routes et des tests : [`BACK-OFFICE.md`](BACK-OFFICE.md).
+
+### Encaisser un abonnement
+
+Le client ouvre une **intention de paiement** depuis son tableau de bord
+(`POST /subscription/checkout`), reçoit une référence courte à mentionner lors
+du transfert mobile money, paie, puis déclare sa transaction. Une déclaration
+n'active rien : vous validez en un clic depuis `/admin`, l'intention portant
+déjà le forfait, la durée et le montant.
+
+Les trois déclencheurs d'activation prévus — validation manuelle, webhook
+d'agrégateur, rattrapage — convergent tous sur `activateSubscription()`
+(`server/subscription-service.ts`). Brancher CinetPay ou PayDunya revient donc
+à écrire un adaptateur, sans rien réécrire.
+
+Workflow complet, pièges d'intégration et ordre recommandé :
+[`WORKFLOW-PAIEMENT.md`](WORKFLOW-PAIEMENT.md).

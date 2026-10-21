@@ -7,6 +7,7 @@ import {
   Users,
 } from "lucide-react"
 import { Reveal, SectionHeading } from "./landing-motion"
+import { TiltCard } from "@/components/ui/tilt-card"
 
 const features = [
   {
@@ -68,13 +69,16 @@ export function FeaturesSection() {
         <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 sm:mt-16">
           {features.map((feature, index) => (
             <Reveal key={feature.title} delay={(index % 3) * 0.06}>
-              <article className="group h-full rounded-3xl border border-slate-200/80 bg-white p-6 shadow-[0_12px_38px_rgba(16,35,66,0.04)] transition duration-300 hover:-translate-y-1 hover:shadow-[0_22px_50px_rgba(16,35,66,0.09)] motion-reduce:transition-none sm:p-7">
-                <div className={`mb-5 grid size-12 place-items-center rounded-2xl ${feature.tone} transition-transform duration-300 group-hover:scale-105 motion-reduce:transition-none`}>
-                  <feature.icon className="size-5" aria-hidden="true" />
-                </div>
-                <h3 className="text-base font-bold leading-6 text-[#102342]">{feature.title}</h3>
-                <p className="mt-3 text-sm leading-6 text-slate-500">{feature.description}</p>
-              </article>
+              {/* Inclinaison 3D limitée à 6°, souris uniquement. */}
+              <TiltCard>
+                <article className="group h-full rounded-3xl border border-slate-200/80 bg-white p-6 shadow-[0_12px_38px_rgba(16,35,66,0.04)] transition duration-300 hover:-translate-y-1 hover:shadow-[0_22px_50px_rgba(16,35,66,0.09)] motion-reduce:transition-none sm:p-7">
+                  <div className={`mb-5 grid size-12 place-items-center rounded-2xl ${feature.tone} transition-transform duration-300 group-hover:scale-105 motion-reduce:transition-none`}>
+                    <feature.icon className="size-5" aria-hidden="true" />
+                  </div>
+                  <h3 className="text-base font-bold leading-6 text-[#102342]">{feature.title}</h3>
+                  <p className="mt-3 text-sm leading-6 text-slate-500">{feature.description}</p>
+                </article>
+              </TiltCard>
             </Reveal>
           ))}
         </div>

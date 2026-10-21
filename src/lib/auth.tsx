@@ -14,6 +14,11 @@ export interface AuthUser {
   lastName: string | null
   phone: string | null
   avatarUrl: string | null
+  /**
+   * Administrateur de plateforme (l'éditeur), et non un rôle de station.
+   * Porté par le compte et non par l'appartenance : un administrateur peut
+   * n'être rattaché à aucune organisation.
+   */
 }
 
 export interface AuthOrganization {

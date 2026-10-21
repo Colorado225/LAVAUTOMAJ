@@ -3,6 +3,7 @@ import { Check, CreditCard, Info } from "lucide-react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Card,
   CardContent,
@@ -12,6 +13,9 @@ import {
 } from "@/components/ui/card"
 import { useApi } from "@/lib/api"
 import type { OnboardingSummary } from "@/lib/onboarding-api"
+import { TrialStatusCard } from "@/components/trial/trial-status-card"
+import { UpgradeRequestCard } from "@/components/trial/upgrade-request-card"
+import { TrialSimulator } from "@/components/trial/trial-simulator"
 
 const statusLabels: Record<string, string> = {
   active: "Actif",
@@ -59,10 +63,24 @@ export default function BillingSettings() {
           </p>
         </div>
 
+        <TrialStatusCard />
+        <UpgradeRequestCard currentPlanCode={plan?.code ?? null} />
+
         {loading ? (
-          <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
-              Chargement du forfait…
+          <Card role="status" aria-busy="true" aria-label="Chargement du forfait">
+            <CardContent className="space-y-4 p-6">
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-2">
+                  <Skeleton className="h-5 w-40" />
+                  <Skeleton className="h-3 w-56" />
+                </div>
+                <Skeleton className="h-6 w-20 rounded-full" />
+              </div>
+              <Skeleton className="h-8 w-32" />
+              <div className="space-y-2">
+                <Skeleton className="h-3 w-full" />
+                <Skeleton className="h-3 w-4/5" />
+              </div>
             </CardContent>
           </Card>
         ) : error ? (
@@ -132,6 +150,8 @@ export default function BillingSettings() {
             </CardContent>
           </Card>
         )}
+
+        <TrialSimulator />
       </div>
     </BaseLayout>
   )

@@ -2,50 +2,77 @@
 
 import * as React from "react"
 import { ThemeProviderContext } from "@/contexts/theme-context"
-
-type Theme = "dark" | "light" | "system"
+import {
+  MEDIA_DARK,
+  applyTheme,
+  readStoredTheme,
+  resolveTheme,
+  storeTheme,
+  type ResolvedTheme,
+  type Theme,
+} from "@/lib/theme"
 
 type ThemeProviderProps = {
   children: React.ReactNode
   defaultTheme?: Theme
-  storageKey?: string
 }
+
+// Pas de prop `storageKey` : la clé doit rester identique à celle du script
+// inline de `index.html`, qu'aucune prop React ne peut atteindre. La rendre
+// configurable donnerait un réglage sans effet — et un éclair blanc au
+// chargement pour qui s'en servirait.
 
 export function ThemeProvider({
   children,
   defaultTheme = "system",
-  storageKey = "vite-ui-theme",
   ...props
 }: ThemeProviderProps) {
-  const [theme, setTheme] = React.useState<Theme>(
-    () => (localStorage.getItem(storageKey) as Theme) || defaultTheme
+  // Lu une seule fois : le script inline de `index.html` a déjà posé la bonne
+  // classe sur `<html>`, on se contente de reprendre la même source.
+  const [theme, setThemeState] = React.useState<Theme>(() =>
+    readStoredTheme(defaultTheme)
+  )
+  const [systemResolved, setSystemResolved] = React.useState<ResolvedTheme>(
+    () => resolveTheme("system")
   )
 
+  const resolvedTheme: ResolvedTheme =
+    theme === "system" ? systemResolved : theme
+
+  // Suit le système d'exploitation en continu. Sans cet abonnement, un
+  // téléphone qui bascule en sombre au coucher du soleil laissait
+  // l'application en clair jusqu'au rechargement suivant.
   React.useEffect(() => {
-    const root = window.document.documentElement
-
-    root.classList.remove("light", "dark")
-
-    if (theme === "system") {
-      const systemTheme = window.matchMedia("(prefers-color-scheme: dark)")
-        .matches
-        ? "dark"
-        : "light"
-
-      root.classList.add(systemTheme)
-      return
+    if (!window.matchMedia) return
+    const query = window.matchMedia(MEDIA_DARK)
+    const onChange = (event: MediaQueryListEvent) => {
+      setSystemResolved(event.matches ? "dark" : "light")
     }
+    query.addEventListener("change", onChange)
+    return () => query.removeEventListener("change", onChange)
+  }, [])
 
-    root.classList.add(theme)
-  }, [theme])
+  React.useEffect(() => {
+    applyTheme(resolvedTheme)
+  }, [resolvedTheme])
 
-  const value = {
-    theme,
-    setTheme: (theme: Theme) => {
-      localStorage.setItem(storageKey, theme)
-      setTheme(theme)
-    },
-  }
+  // Un même compte ouvert dans deux onglets doit rester cohérent : l'événement
+  // `storage` n'est émis que vers les *autres* onglets, donc pas de boucle.
+  React.useEffect(() => {
+    const onStorage = () => setThemeState(readStoredTheme(defaultTheme))
+    window.addEventListener("storage", onStorage)
+    return () => window.removeEventListener("storage", onStorage)
+  }, [defaultTheme])
+
+  const setTheme = React.useCallback((next: Theme) => {
+    storeTheme(next)
+    setThemeState(next)
+  }, [])
+
+  const value = React.useMemo(
+    () => ({ theme, resolvedTheme, setTheme }),
+    [theme, resolvedTheme, setTheme]
+  )
 
   return (
     <ThemeProviderContext.Provider {...props} value={value}>

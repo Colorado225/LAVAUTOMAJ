@@ -185,7 +185,7 @@ export function CreateServiceModal({
         is_active: data.is_active,
       }
       const res = await apiFetch(
-        isEditing ? `/api/v1/services/${encodeURIComponent(service.id)}` : "/api/v1/services",
+        isEditing ? `/api/v1/services/${encodeURIComponent(service!.id)}` : "/api/v1/services",
         {
           method: isEditing ? "PATCH" : "POST",
           headers: {
@@ -220,7 +220,7 @@ export function CreateServiceModal({
     if (!service) return
     setDeleting(true)
     try {
-      const res = await apiFetch(`/api/v1/services/${encodeURIComponent(service.id)}`, {
+      const res = await apiFetch(`/api/v1/services/${encodeURIComponent(service!.id)}`, {
         method: "DELETE",
       })
       if (!res.ok) throw new Error(await apiErrorMessage(res))
@@ -377,7 +377,7 @@ export function CreateServiceModal({
           open={confirmDeleteOpen}
           onOpenChange={setConfirmDeleteOpen}
           title="Supprimer la prestation ?"
-          description={`« ${service.name} » sera définitivement supprimée. Cette action est irréversible.`}
+          description={`« ${service!.name} » sera définitivement supprimée. Cette action est irréversible.`}
           confirmLabel="Supprimer"
           destructive
           loading={deleting}

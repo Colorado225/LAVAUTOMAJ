@@ -11,6 +11,7 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { LoadingSpinner } from "@/components/ui/loading-spinner"
 import { PartyPopper } from "lucide-react"
+import { Confetti } from "@/components/ui/confetti"
 import { useApi, apiFetch } from "@/lib/api"
 import {
   type OnboardingSummary,
@@ -62,10 +63,12 @@ export function ReviewStep({ onQuit, onCompleted }: ReviewStepProps) {
 
   if (success) {
     return (
-      <Card className="border-primary/50">
+      <Card className="relative overflow-hidden border-primary/50">
+        {/* Célébration : une seule fois, à la confirmation du serveur. */}
+        <Confetti />
         <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
-          <PartyPopper className="size-12 text-primary" />
-          <div>
+          <PartyPopper className="size-12 animate-in text-primary zoom-in-50 spin-in-12 duration-500" />
+          <div className="animate-in fade-in-0 slide-in-from-bottom-2 delay-150 duration-300">
             <p className="text-xl font-bold">Votre station est prête !</p>
             <p className="text-muted-foreground">
               Redirection vers votre tableau de bord…

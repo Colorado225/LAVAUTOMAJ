@@ -4,6 +4,13 @@ import * as React from "react"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { SubscriptionProvider } from "@/lib/subscription"
+import { PermissionProvider } from "@/lib/permissions"
+import { TrialBanner } from "@/components/trial/trial-banner"
+import { SupportButton } from "@/components/support/support-button"
+import { motion } from "framer-motion"
+import { useLocation } from "react-router-dom"
+import { pageEnter } from "@/lib/motion"
 
 interface BaseLayoutProps {
   children: React.ReactNode
@@ -12,7 +19,14 @@ interface BaseLayoutProps {
 }
 
 export function BaseLayout({ children, title, description }: BaseLayoutProps) {
+  // La clé change à chaque route : React remonte le bloc, l'animation d'entrée
+  // se rejoue. Une seule déclaration ici évite de l'écrire dans chaque écran —
+  // et évite surtout que chaque écran choisisse sa propre durée.
+  const { pathname } = useLocation()
+
   return (
+    <SubscriptionProvider>
+    <PermissionProvider>
     <SidebarProvider
       style={
         {
@@ -27,7 +41,14 @@ export function BaseLayout({ children, title, description }: BaseLayoutProps) {
         <SiteHeader />
         <div className="flex flex-1 flex-col">
           <div className="@container/main flex flex-1 flex-col gap-2">
-            <div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6">
+            <motion.div
+              key={pathname}
+              variants={pageEnter}
+              initial="hidden"
+              animate="visible"
+              className="flex flex-col gap-4 py-4 md:gap-6 md:py-6"
+            >
+              <TrialBanner className="mx-4 lg:mx-6" />
               {title && (
                 <div className="px-4 lg:px-6">
                   <div className="flex flex-col gap-2">
@@ -39,10 +60,13 @@ export function BaseLayout({ children, title, description }: BaseLayoutProps) {
                 </div>
               )}
               {children}
-            </div>
+            </motion.div>
           </div>
         </div>
+        <SupportButton />
       </SidebarInset>
     </SidebarProvider>
+    </PermissionProvider>
+    </SubscriptionProvider>
   )
 }

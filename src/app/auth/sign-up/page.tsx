@@ -23,6 +23,7 @@ export default function SignUpPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmation, setShowConfirmation] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [signedUp, setSignedUp] = useState(false)
   const [error, setError] = useState("")
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -57,6 +58,7 @@ export default function SignUpPage() {
         organizationName: organizationName.trim() || undefined,
       })
       // Workflow : inscription → onboarding (configuration de la station).
+      setSignedUp(true)
       navigate("/onboarding", { replace: true })
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : "L’inscription a échoué. Réessayez dans un instant.")
@@ -190,7 +192,7 @@ export default function SignUpPage() {
 
         {error ? <AuthNotice>{error}</AuthNotice> : null}
 
-        <AuthSubmitButton pending={isSubmitting}>
+        <AuthSubmitButton pending={isSubmitting} success={signedUp} successLabel="Compte créé">
           Créer mon compte <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" aria-hidden="true" />
         </AuthSubmitButton>
 

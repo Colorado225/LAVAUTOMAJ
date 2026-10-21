@@ -2,6 +2,9 @@
 
 import { useMemo, useState, type FormEvent } from "react"
 import { BaseLayout } from "@/components/layouts/base-layout"
+import { useAccess } from "@/lib/permissions"
+import { actionGate } from "@/lib/action-blocking"
+import { BlockedReason } from "@/components/access/blocked-reason"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -28,9 +31,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
+import { useApi } from "@/lib/api"
+import { useMutation } from "@/lib/use-mutation"
 import type { OnboardingSummary } from "@/lib/onboarding-api"
 import type { CurrentMember, OrganizationAccount, WorkerInput, WorkerRecord, WorkerRole } from "@/lib/team-api"
+import { TableSkeleton } from "@/components/ui/table-skeleton"
+import { EmptyState } from "@/components/ui/empty-state"
 import { Search, UserPlus, Users, RefreshCw, Pencil, UserRoundX, UserRoundCheck } from "lucide-react"
 
 const roleLabels: Record<WorkerRole, string> = {
@@ -63,7 +69,15 @@ function roleLabel(worker: WorkerRecord) {
     : roleLabels[worker.role]
 }
 
+/** Clé d'occupation du formulaire. */
+const FORM_KEY = "formulaire"
+
 export default function TeamPage() {
+  const manageTeam = useAccess("worker:create", "team.manage")
+  // Le plafond de laveurs du forfait n'est pas un refus de droit : le
+  // distinguer évite de faire croire qu'on manque d'une permission.
+  const teamLimitReached = (limit: number | null | undefined, actifs: number) =>
+    limit !== null && limit !== undefined && actifs >= limit
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<WorkerRecord[]>(`/api/v1/workers?refresh=${refreshKey}`)
   const { data: accounts, loading: accountsLoading, error: accountsError } = useApi<OrganizationAccount[]>(`/api/v1/users?refresh=${refreshKey}`)
@@ -73,6 +87,29 @@ export default function TeamPage() {
   const activeWorkers = useMemo(() => workers.filter((worker) => worker.status === "active"), [workers])
   const inactiveWorkers = workers.length - activeWorkers.length
   const workerLimit = summary?.plan?.max_workers
+
+  // Ouvrir le formulaire n'écrit rien ; basculer un statut écrit tout de suite.
+  const teamForm = actionGate({
+    loading: manageTeam.loading,
+    allowed: manageTeam.allowed,
+    reason: manageTeam.reason,
+    blockedBy: teamLimitReached(workerLimit, activeWorkers.length)
+      ? `Votre forfait est limité à ${workerLimit} laveur${workerLimit === 1 ? "" : "s"} actif${workerLimit === 1 ? "" : "s"}. Désactivez-en un ou changez de forfait.`
+      : null,
+  })
+  // Modifier un laveur existant ne crée rien : le plafond du forfait n'a pas
+  // à s'y appliquer.
+  const teamEdit = actionGate({
+    loading: manageTeam.loading,
+    allowed: manageTeam.allowed,
+    reason: manageTeam.reason,
+  })
+  const teamWrite = actionGate({
+    loading: manageTeam.loading,
+    allowed: manageTeam.allowed,
+    reason: manageTeam.reason,
+    writesImmediately: true,
+  })
   const canManage = currentMember?.role === "owner" || currentMember?.role === "manager"
 
   const [search, setSearch] = useState("")
@@ -80,10 +117,9 @@ export default function TeamPage() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingWorker, setEditingWorker] = useState<WorkerRecord | null>(null)
   const [form, setForm] = useState<WorkerInput>(emptyForm)
-  const [saving, setSaving] = useState(false)
-  const [busyWorkerId, setBusyWorkerId] = useState<string | null>(null)
-  const [mutationError, setMutationError] = useState<string | null>(null)
-  const [mutationSuccess, setMutationSuccess] = useState<string | null>(null)
+  // Un contrôleur unique : occupation, ligne concernée et deux messages.
+  const mutation = useMutation()
+  const saving = mutation.busyKey === FORM_KEY
 
   const filteredWorkers = useMemo(() => {
     const query = search.trim().toLocaleLowerCase("fr-CI")
@@ -99,8 +135,7 @@ export default function TeamPage() {
   function openCreateDialog() {
     setEditingWorker(null)
     setForm(emptyForm())
-    setMutationError(null)
-    setMutationSuccess(null)
+    mutation.reset()
     setDialogOpen(true)
   }
 
@@ -115,15 +150,14 @@ export default function TeamPage() {
       custom_role: worker.custom_role,
       joined_at: worker.joined_at,
     })
-    setMutationError(null)
-    setMutationSuccess(null)
+    mutation.reset()
     setDialogOpen(true)
   }
 
   function handleDialogChange(open: boolean) {
     if (!open && !saving) {
       setDialogOpen(false)
-      setMutationError(null)
+      mutation.reset()
     } else if (open) {
       setDialogOpen(true)
     }
@@ -131,7 +165,7 @@ export default function TeamPage() {
 
   async function saveWorker(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setMutationError(null)
+    mutation.reset()
     const input: WorkerInput = {
       ...form,
       first_name: form.first_name.trim(),
@@ -143,55 +177,45 @@ export default function TeamPage() {
     }
 
     if (!input.first_name || !input.last_name) {
-      setMutationError("Le prénom et le nom sont obligatoires.")
+      mutation.fail("Le prénom et le nom sont obligatoires.")
       return
     }
     if (input.role === "custom" && (!input.custom_role || input.custom_role.length < 2)) {
-      setMutationError("Précisez la fonction personnalisée (2 caractères minimum).")
+      mutation.fail("Précisez la fonction personnalisée (2 caractères minimum).")
       return
     }
 
-    setSaving(true)
-    try {
-      const response = await apiFetch(
-        editingWorker ? `/api/v1/workers/${encodeURIComponent(editingWorker.id)}` : "/api/v1/workers",
-        {
-          method: editingWorker ? "PATCH" : "POST",
-          body: JSON.stringify(input),
-        },
-      )
-      if (!response.ok) throw new Error(await apiErrorMessage(response))
-      setDialogOpen(false)
-      setMutationSuccess(editingWorker ? "Les informations du travailleur ont été mises à jour." : "Le travailleur a été ajouté à l’équipe.")
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Impossible d’enregistrer le travailleur.")
-    } finally {
-      setSaving(false)
-    }
+    const outcome = await mutation.run({
+      url: editingWorker ? `/api/v1/workers/${encodeURIComponent(editingWorker.id)}` : "/api/v1/workers",
+      method: editingWorker ? "PATCH" : "POST",
+      body: input,
+      success: editingWorker
+        ? "Les informations du travailleur ont été mises à jour."
+        : "Le travailleur a été ajouté à l’équipe.",
+      failure: "Impossible d’enregistrer le travailleur.",
+      busyKey: FORM_KEY,
+    })
+    if (!outcome.ok) return
+    setDialogOpen(false)
+    setRefreshKey((key) => key + 1)
   }
 
   async function toggleWorkerStatus(worker: WorkerRecord) {
     const nextStatus = worker.status === "active" ? "inactive" : "active"
-    if (nextStatus === "inactive" && !window.confirm(`Désactiver ${worker.first_name} ${worker.last_name} ? Son historique de lavages sera conservé.`)) {
-      return
-    }
-    setBusyWorkerId(worker.id)
-    setMutationError(null)
-    setMutationSuccess(null)
-    try {
-      const response = await apiFetch(`/api/v1/workers/${encodeURIComponent(worker.id)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status: nextStatus }),
-      })
-      if (!response.ok) throw new Error(await apiErrorMessage(response))
-      setMutationSuccess(nextStatus === "active" ? "Le travailleur a été réactivé." : "Le travailleur a été désactivé.")
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Impossible de modifier le statut du travailleur.")
-    } finally {
-      setBusyWorkerId(null)
-    }
+    const outcome = await mutation.run({
+      url: `/api/v1/workers/${encodeURIComponent(worker.id)}`,
+      method: "PATCH",
+      body: { status: nextStatus },
+      confirm: nextStatus === "inactive"
+        ? `Désactiver ${worker.first_name} ${worker.last_name} ? Son historique de lavages sera conservé.`
+        : undefined,
+      success: nextStatus === "active"
+        ? "Le travailleur a été réactivé."
+        : "Le travailleur a été désactivé.",
+      failure: "Impossible de modifier le statut du travailleur.",
+      busyKey: worker.id,
+    })
+    if (outcome.ok) setRefreshKey((key) => key + 1)
   }
 
   return (
@@ -204,14 +228,22 @@ export default function TeamPage() {
             </p>
           </div>
           {canManage && (
-            <Button onClick={openCreateDialog} disabled={workerLimit !== null && workerLimit !== undefined && activeWorkers.length >= workerLimit}>
+            <div className="flex flex-col items-start gap-1.5">
+            <Button
+              onClick={openCreateDialog}
+              title={teamForm.reason ?? undefined}
+              aria-busy={teamForm.busy}
+              disabled={teamForm.disabled}
+            >
               <UserPlus className="mr-2 size-4" /> Ajouter un travailleur
             </Button>
+            <BlockedReason reason={teamForm.reason} className="max-w-72" />
+            </div>
           )}
         </div>
 
-        {mutationSuccess && <p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">{mutationSuccess}</p>}
-        {mutationError && !dialogOpen && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{mutationError}</p>}
+        {mutation.success && <p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">{mutation.success}</p>}
+        {mutation.error && !dialogOpen && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{mutation.error}</p>}
 
         {!canManage && currentMember && (
           <p className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
@@ -273,7 +305,7 @@ export default function TeamPage() {
             </div>
 
             {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-            {loading && <p role="status" className="text-sm text-muted-foreground">Chargement de l’équipe…</p>}
+            {loading && <TableSkeleton rows={5} cols={6} label="Chargement de l’équipe" />}
             {!loading && !error && (
               <div className="overflow-x-auto rounded-lg border">
                 <Table>
@@ -291,13 +323,29 @@ export default function TeamPage() {
                   <TableBody>
                     {filteredWorkers.length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={canManage ? 7 : 6} className="h-28 text-center text-muted-foreground">
-                          {workers.length === 0 ? "Aucun travailleur enregistré. Ajoutez l’équipe de votre station pour attribuer les lavages." : "Aucun travailleur ne correspond à ces filtres."}
+                        <TableCell colSpan={canManage ? 7 : 6} className="p-0">
+                          <EmptyState
+                            icon={Users}
+                            title={workers.length === 0 ? "Aucun travailleur enregistré" : "Aucun résultat"}
+                            description={
+                              workers.length === 0
+                                ? "Ajoutez l’équipe de votre station pour pouvoir attribuer les lavages et suivre les performances."
+                                : "Aucun travailleur ne correspond à ces filtres. Modifiez la recherche ou le statut."
+                            }
+                          />
                         </TableCell>
                       </TableRow>
                     )}
-                    {filteredWorkers.map((worker) => (
-                      <TableRow key={worker.id}>
+                    {filteredWorkers.map((worker, index) => (
+                      <TableRow
+                        key={worker.id}
+                        /* Ligne en cours de mise à jour : estompée tant que le
+                           serveur n'a pas répondu (retour immédiat). */
+                        className={`row-in transition-all duration-200 ${
+                          mutation.busyKey === worker.id ? "scale-[0.995] opacity-50" : "hover:bg-muted/40"
+                        }`}
+                        style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
+                      >
                         <TableCell>
                           <div className="font-medium">{worker.first_name} {worker.last_name}</div>
                         </TableCell>
@@ -309,11 +357,11 @@ export default function TeamPage() {
                         {canManage && (
                           <TableCell>
                             <div className="flex justify-end gap-1">
-                              <Button variant="ghost" size="icon" aria-label={`Modifier ${worker.first_name} ${worker.last_name}`} onClick={() => openEditDialog(worker)}>
+                              <Button variant="ghost" size="icon" disabled={teamEdit.disabled} title={teamEdit.reason ?? undefined} aria-label={`Modifier ${worker.first_name} ${worker.last_name}`} onClick={() => openEditDialog(worker)}>
                                 <Pencil className="size-4" />
                               </Button>
-                              <Button variant="ghost" size="icon" disabled={busyWorkerId === worker.id || (worker.status !== "active" && workerLimit !== null && workerLimit !== undefined && activeWorkers.length >= workerLimit)} aria-label={worker.status === "active" ? `Désactiver ${worker.first_name} ${worker.last_name}` : `Réactiver ${worker.first_name} ${worker.last_name}`} onClick={() => void toggleWorkerStatus(worker)}>
-                                {busyWorkerId === worker.id ? <RefreshCw className="size-4 animate-spin" /> : worker.status === "active" ? <UserRoundX className="size-4" /> : <UserRoundCheck className="size-4" />}
+                              <Button variant="ghost" size="icon" title={teamWrite.reason ?? undefined} disabled={teamWrite.disabled || mutation.busyKey === worker.id || (worker.status !== "active" && teamLimitReached(workerLimit, activeWorkers.length))} aria-label={worker.status === "active" ? `Désactiver ${worker.first_name} ${worker.last_name}` : `Réactiver ${worker.first_name} ${worker.last_name}`} onClick={() => void toggleWorkerStatus(worker)}>
+                                {mutation.busyKey === worker.id ? <RefreshCw className="size-4 animate-spin" /> : worker.status === "active" ? <UserRoundX className="size-4" /> : <UserRoundCheck className="size-4" />}
                               </Button>
                             </div>
                           </TableCell>
@@ -335,7 +383,7 @@ export default function TeamPage() {
           <CardContent>
             {accountsError && <p role="alert" className="mb-3 text-sm text-destructive">{accountsError}</p>}
             {accountsLoading ? (
-              <p role="status" className="text-sm text-muted-foreground">Chargement des comptes…</p>
+              <TableSkeleton rows={3} cols={3} label="Chargement des comptes" />
             ) : accounts && accounts.length > 0 ? (
               <div className="overflow-x-auto rounded-lg border">
                 <Table>
@@ -409,7 +457,7 @@ export default function TeamPage() {
                 <Input type="date" value={form.joined_at ?? ""} onChange={(event) => setForm((previous) => ({ ...previous, joined_at: event.target.value || null }))} />
               </label>
             </div>
-            {mutationError && <p role="alert" className="text-sm text-destructive">{mutationError}</p>}
+            {mutation.error && <p role="alert" className="text-sm text-destructive">{mutation.error}</p>}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => handleDialogChange(false)} disabled={saving}>Annuler</Button>
               <Button type="submit" disabled={saving || !form.first_name.trim() || !form.last_name.trim()}>

@@ -1,6 +1,9 @@
-import { motion, useReducedMotion } from "framer-motion"
+import { useRef } from "react"
+import { motion, useReducedMotion, useScroll, useSpring, useTransform } from "framer-motion"
 import { ArrowDown, ArrowRight, CarFront, Check, MapPin, Smartphone, WalletCards } from "lucide-react"
 import { Link } from "react-router-dom"
+import { useIsDesktop } from "@/hooks/use-media-query"
+import { useCountUp } from "@/hooks/use-count-up"
 
 const reassurance = [
   "Simple à utiliser",
@@ -11,10 +14,33 @@ const reassurance = [
 export function HeroSection() {
   const motionPreference = useReducedMotion()
   const reduceMotion = motionPreference !== false
+  const isDesktop = useIsDesktop()
+  const sectionRef = useRef<HTMLElement>(null)
+
+  // Parallax : le visuel glisse de 40 px au maximum pendant le défilement.
+  // Désactivé sous 768 px et si l'utilisateur veut moins de mouvement.
+  const parallaxEnabled = isDesktop && !reduceMotion
+  const { scrollYProgress } = useScroll({
+    target: sectionRef,
+    offset: ["start start", "end start"],
+  })
+  const rawParallax = useTransform(scrollYProgress, [0, 1], [0, -40])
+  const visualY = useSpring(rawParallax, { stiffness: 120, damping: 24, mass: 0.4 })
+
+  // Chiffres de l'aperçu : ils se composent à l'arrivée, comme une vraie
+  // journée qui se remplit (données explicitement fictives).
+  const sampleWashes = useCountUp(24, 900)
+  const sampleRevenue = useCountUp(186500, 1100)
 
   return (
-    <section id="hero" className="relative isolate overflow-hidden bg-[#081b38] text-white">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_78%_36%,rgba(37,99,235,0.35),transparent_42%)]" />
+    <section
+      id="hero"
+      ref={sectionRef}
+      className="relative isolate overflow-hidden bg-[#081b38] text-white"
+    >
+      {/* Dégradé qui respire très lentement (16 s) : la page paraît vivante
+          sans jamais attirer l'œil pendant la lecture. */}
+      <div className="gradient-pan pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_78%_36%,rgba(37,99,235,0.35),transparent_42%)]" />
       <div className="pointer-events-none absolute -left-28 top-20 size-80 rounded-full bg-blue-700/20 blur-3xl" />
       <div className="relative mx-auto grid max-w-7xl items-center gap-12 px-4 pb-20 pt-14 sm:px-6 sm:pb-24 sm:pt-20 lg:grid-cols-[1.02fr_0.98fr] lg:gap-10 lg:px-8 lg:pb-28 lg:pt-20">
         <motion.div
@@ -78,6 +104,7 @@ export function HeroSection() {
           initial={reduceMotion ? false : { opacity: 0, scale: 0.98, y: 10 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           transition={{ duration: reduceMotion ? 0 : 0.58, delay: reduceMotion ? 0 : 0.08, ease: "easeOut" }}
+          style={parallaxEnabled ? { y: visualY } : undefined}
           className="relative mx-auto w-full max-w-[610px] lg:mx-0"
         >
           <div className="absolute -inset-4 rounded-[34px] bg-blue-500/20 blur-2xl" />
@@ -119,14 +146,16 @@ export function HeroSection() {
                     <CarFront className="size-3.5 text-blue-600" aria-hidden="true" />
                     Lavages enregistrés
                   </div>
-                  <p className="mt-1.5 text-lg font-extrabold tracking-tight text-[#102342] sm:text-xl">24</p>
+                  <p className="mt-1.5 text-lg font-extrabold tabular-nums tracking-tight text-[#102342] sm:text-xl">{sampleWashes}</p>
                 </div>
                 <div className="rounded-xl border border-slate-100 bg-white p-3">
                   <div className="flex items-center gap-1.5 text-[10px] font-medium text-slate-500 sm:text-xs">
                     <WalletCards className="size-3.5 text-emerald-600" aria-hidden="true" />
                     Recettes confirmées
                   </div>
-                  <p className="mt-1.5 truncate text-lg font-extrabold tracking-tight text-[#102342] sm:text-xl">186 500 XOF</p>
+                  <p className="mt-1.5 truncate text-lg font-extrabold tabular-nums tracking-tight text-[#102342] sm:text-xl">
+                    {sampleRevenue.toLocaleString("fr-FR")} XOF
+                  </p>
                 </div>
               </div>
               <p className="mt-3 text-[9px] leading-4 text-slate-400 sm:text-[10px]">

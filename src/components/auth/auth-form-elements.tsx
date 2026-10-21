@@ -1,6 +1,7 @@
 import type { InputHTMLAttributes, ReactNode } from "react"
 import {
   AlertCircle,
+  Check,
   CheckCircle2,
   Eye,
   EyeOff,
@@ -127,17 +128,48 @@ interface AuthSubmitButtonProps {
   children: ReactNode
   pending?: boolean
   disabled?: boolean
+  /** Succès confirmé par le serveur : coche verte avant la redirection. */
+  success?: boolean
+  successLabel?: string
 }
 
-export function AuthSubmitButton({ children, pending = false, disabled = false }: AuthSubmitButtonProps) {
+export function AuthSubmitButton({
+  children,
+  pending = false,
+  disabled = false,
+  success = false,
+  successLabel = "C'est bon",
+}: AuthSubmitButtonProps) {
   return (
     <button
       type="submit"
-      disabled={pending || disabled}
-      className="group flex h-[50px] w-full items-center justify-center gap-2.5 rounded-xl bg-[#123d79] px-5 text-sm font-bold text-white shadow-lg shadow-blue-900/15 transition duration-200 hover:-translate-y-0.5 hover:bg-[#0d3268] hover:shadow-xl hover:shadow-blue-900/20 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/25 disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none"
+      disabled={pending || disabled || success}
+      aria-busy={pending}
+      className={`group flex h-[50px] w-full items-center justify-center gap-2.5 rounded-xl px-5 text-sm font-bold text-white shadow-lg shadow-blue-900/15 transition duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-blue-900/20 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/25 disabled:translate-y-0 disabled:cursor-not-allowed motion-reduce:transition-none ${
+        success
+          ? "bg-emerald-600 opacity-100 hover:bg-emerald-600"
+          : "bg-[#123d79] hover:bg-[#0d3268] disabled:opacity-60"
+      }`}
     >
-      {pending ? <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
-      {pending ? "Patientez…" : children}
+      {/* Le libellé change d'état en fondu : attente, puis confirmation. */}
+      <span
+        key={pending ? "pending" : success ? "success" : "idle"}
+        className="inline-flex animate-in items-center gap-2.5 fade-in-0 zoom-in-95 duration-200"
+      >
+        {pending ? (
+          <>
+            <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            Patientez…
+          </>
+        ) : success ? (
+          <>
+            <Check className="size-4" aria-hidden="true" />
+            {successLabel}
+          </>
+        ) : (
+          children
+        )}
+      </span>
     </button>
   )
 }
