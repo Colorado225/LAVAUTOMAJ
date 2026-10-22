@@ -50,6 +50,7 @@ const PURGE_ORDER: { table: string; where: string }[] = [
   { table: "cash_movements", where: "organization_id = $1::uuid" },
   { table: "payments", where: "organization_id = $1::uuid" },
   { table: "washes", where: "organization_id = $1::uuid" },
+  { table: "notifications", where: "organization_id = $1::uuid" },
   { table: "cash_sessions", where: "organization_id = $1::uuid" },
   { table: "expenses", where: "organization_id = $1::uuid" },
   { table: "expense_categories", where: "organization_id = $1::uuid" },

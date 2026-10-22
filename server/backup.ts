@@ -39,6 +39,7 @@ export const EXPORT_QUERIES: { key: string; sql: string }[] = [
   { key: "workers", sql: "SELECT * FROM workers WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "customers", sql: "SELECT * FROM customers WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "washes", sql: "SELECT * FROM washes WHERE organization_id=$1::uuid ORDER BY created_at" },
+  { key: "notifications", sql: "SELECT * FROM notifications WHERE organization_id=$1::uuid ORDER BY created_at" },
   {
     key: "wash_items",
     sql: `SELECT i.* FROM wash_items i JOIN washes w ON w.id = i.wash_id

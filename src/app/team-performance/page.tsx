@@ -74,12 +74,15 @@ function dureeHeures(minutes: number): string {
   return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")}`
 }
 
-function ProductiviteLigne({ l }: { l: LigneRendement }) {
+function ProductiviteLigne({ l, noSchedule }: { l: LigneRendement; noSchedule: boolean }) {
   return (
     <TableRow className={l.status !== "active" ? "opacity-60" : undefined}>
       <TableCell className="font-medium">
         {l.first_name} {l.last_name}
-        <span className="block text-xs text-muted-foreground">{l.role}</span>
+        <span className="block text-xs text-muted-foreground">
+          {l.role}
+          {noSchedule ? " · horaire non configuré" : ""}
+        </span>
       </TableCell>
       <TableCell className="text-right tabular-nums">{l.participations}</TableCell>
       <TableCell className="text-right font-medium tabular-nums">{parts(l.share_milli)}</TableCell>
