@@ -12,7 +12,7 @@ import {
   washPrerequisites,
   washSubmitBlockedReason,
 } from "@/lib/action-blocking"
-import { apiFetch, useApi } from "@/lib/api"
+import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { isNetworkError } from "@/lib/offline-queue"
 import { enqueueMutation } from "@/lib/offline-sync"
@@ -21,6 +21,13 @@ import { Input } from "@/components/ui/input"
 import { plateKey } from "@/lib/plate"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
+import {
+  OperationStatusBadge,
+} from "@/components/washes/operation-status-badge"
+import { ActiveWashTasks } from "@/components/washes/active-wash-tasks"
+import { taskLabel } from "@/lib/wash-tasks"
+import { toast } from "@/components/ui/toast"
+import type { OperationStatus } from "@/lib/wash-operation-status"
 import { SubmitButton } from "@/components/ui/submit-button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
@@ -79,6 +86,15 @@ interface Wash {
   vehicle_category_id: string | null
   total_cents: number
   status: string
+  operation_status: string
+  operation_started_at: string | null
+  estimated_minutes: number | null
+  customer_name: string | null
+  /**
+   * Les laveurs affectes. Facultatif : un serveur plus ancien que l'ecran
+   * ne les envoie pas encore.
+   */
+  washers?: Array<{ id: string; name: string; role: string }>
   payment_status: string
   created_at: string
 }
@@ -102,13 +118,6 @@ function parseXofAmount(value: string): number | null {
 
 function formatXof(cents: number): string {
   return `${(cents / 100).toLocaleString("fr-CI", { maximumFractionDigits: 2 })} XOF`
-}
-
-function washStatusLabel(status: string): string {
-  if (status === "completed") return "Terminé"
-  if (status === "pending") return "En cours"
-  if (status === "cancelled") return "Annulé"
-  return status
 }
 
 function paymentStatusLabel(status: string): string {
@@ -178,6 +187,7 @@ export default function WashesPage() {
   )
   const [quantities, setQuantities] = useState<Record<string, number>>({})
   const [selectedWorkerIds, setSelectedWorkerIds] = useState<string[]>([])
+  const [principalWorkerId, setPrincipalWorkerId] = useState<string | null>(null)
   const [paymentMethod, setPaymentMethod] = useState("cash")
   const [amountReceived, setAmountReceived] = useState("0")
   const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null)
@@ -197,6 +207,19 @@ export default function WashesPage() {
    * tant que le client est encore devant le comptoir.
    */
   const [washToReceipt, setWashToReceipt] = useState<{ id: string; reference: string } | null>(null)
+  // Lavages dont l'avancement est en cours de changement : leur pastille est
+  // figee tant que la reponse du serveur n'est pas revenue.
+  const [advancingWashIds, setAdvancingWashIds] = useState<string[]>([])
+  // Avancement affichée localement, le temps que la liste se recharge.
+  // sans cela, la pastille ne bougerait qu'après un aller-retour reseau.
+  const [operationOverrides, setOperationOverrides] = useState<Record<string, OperationStatus>>({})
+  // Erreur d'avancement : elle se lit dans l'historique, la ou le geste a ete
+  // fait, et non dans le formulaire de creation, qui n'a rien a voir.
+  const [advanceError, setAdvanceError] = useState<string | null>(null)
+  const advanceStatus = useAccess("wash:status")
+  // Nom du client saisi au comptoir. Une etiquette, pas une fiche : ni
+  // telephone, ni historique.
+  const [customerName, setCustomerName] = useState("")
 
   // Deux listes, deux usages distincts.
   //
@@ -232,6 +255,46 @@ export default function WashesPage() {
   const activeWorkers = (workers ?? []).filter((worker) => worker.status === "active")
 
   const washes = washesData ?? []
+
+  /**
+   * L'avancement affichee d'un lavage.
+   *
+   * L'affichage local prime sur la valeur du serveur tant qu'il n'a pas ete
+   * confirme : c'est lui qui donne au doigt la sensation que la pastille a
+   * repondu. Le serveur reste seul juge — des qu'il tranche, c'est sa valeur
+   * qui s'affiche.
+   */
+  function currentOperationStatus(washId: string): OperationStatus | undefined {
+    const wash = washes.find((item) => item.id === washId)
+    if (!wash) return undefined
+    const override = operationOverrides[washId]
+    if (!override) return wash.operation_status as OperationStatus
+    // Tant que l'ecriture est en cours, l'ecran montre la valeur posee.
+    if (advancingWashIds.includes(washId)) return override
+    // Sinon le serveur a tranche : s'il dit autre chose, c'est lui qui compte.
+    if (wash.operation_status === override) return override
+    return wash.operation_status as OperationStatus
+  }
+
+  /**
+   * Les taches que la station a en main.
+   *
+   * Ce qui attend encore et ce qui tourne. Un lavage annule n'en fait pas
+   * partie : il est annule, c'est tout, et une carte qui compte du temps
+   * pour un travail qui n'aura pas lieu serait un mensonge de plus.
+   *
+   * L'avancement local compte aussi : une carte qui vient de demarrer doit
+   * le montrer tout de suite, sans attendre le rafraichissement.
+   */
+  const tachesActives = washes
+    .filter((wash) => wash.status !== "cancelled")
+    .map((wash) => ({
+      ...wash,
+      operation_status: currentOperationStatus(wash.id) ?? wash.operation_status,
+    }))
+    .filter(
+      (wash) => wash.operation_status === "pending" || wash.operation_status === "in_progress" || wash.operation_status === "overtime",
+    )
 
   const selectedServices = useMemo(
     () => activeServices.filter((service) => (quantities[service.id] ?? 0) > 0),
@@ -297,9 +360,21 @@ export default function WashesPage() {
 
   function toggleWorker(workerId: string, checked: boolean) {
     markFormChanged()
-    setSelectedWorkerIds((current) =>
-      checked ? [...current, workerId] : current.filter((id) => id !== workerId)
-    )
+    setSelectedWorkerIds((current) => {
+      const next = checked ? [...current, workerId] : current.filter((id) => id !== workerId)
+      // Si le responsable principal n'est plus sélectionné, on le dégage.
+      if (principalWorkerId && !next.includes(principalWorkerId)) {
+        setPrincipalWorkerId(null)
+      }
+      return next
+    })
+  }
+
+  function setPrincipal(workerId: string | null) {
+    // Le responsable doit figurer parmi les laveurs sélectionnés.
+    if (workerId && !selectedWorkerIds.includes(workerId)) return
+    setPrincipalWorkerId(workerId)
+    markFormChanged()
   }
 
   async function submitWash(event: FormEvent<HTMLFormElement>) {
@@ -336,11 +411,13 @@ export default function WashesPage() {
       site_id: siteId,
       vehicle_category_id: vehicleCategoryId,
       ...(plate.trim() ? { plate: plate.trim() } : {}),
+      ...(customerName.trim() ? { customer_name: customerName.trim() } : {}),
       items: selectedServices.map((service) => ({
         service_id: service.id,
         quantity: quantities[service.id],
       })),
       worker_ids: selectedWorkerIds,
+      ...(principalWorkerId ? { principal_worker_id: principalWorkerId } : {}),
       payment_method: paymentMethod,
       amount_received_cents: amountReceivedCents,
       ...(cashNeedsSession && cashSession ? { cash_session_id: cashSession.id } : {}),
@@ -372,8 +449,10 @@ export default function WashesPage() {
       setMutationSuccess(replayed ? "Cette opération avait déjà été enregistrée." : "Lavage enregistré avec succès.")
       setQuantities({})
       setSelectedWorkerIds([])
+      setPrincipalWorkerId(null)
       setVehicleCategoryId("")
       setPlate("")
+      setCustomerName("")
       setAmountReceived("0")
       setIdempotencyKey(null)
       setRefreshKey((key) => key + 1)
@@ -398,8 +477,10 @@ export default function WashesPage() {
           )
           setQuantities({})
           setSelectedWorkerIds([])
+          setPrincipalWorkerId(null)
           setVehicleCategoryId("")
           setPlate("")
+          setCustomerName("")
           setAmountReceived("0")
           setIdempotencyKey(null)
           closeForm()
@@ -412,6 +493,117 @@ export default function WashesPage() {
       setMutationError(err instanceof Error ? err.message : "Impossible d’enregistrer le lavage.")
     } finally {
       setSaving(false)
+    }
+  }
+
+  /**
+   * Ecrit l'avancement du lavage. Leve si le serveur refuse.
+   *
+   * Un seul endroit ecrit, donc un seul endroit peut se tromper : le bouton
+   * de l'historique, la carte de la tache et la fin automatique du decompte
+   * passent tous par la meme porte.
+   */
+  async function writeOperationStatus(washId: string, next: OperationStatus): Promise<void> {
+    const response = await apiFetch(`/api/v1/washes/${washId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: next }),
+    })
+    if (!response.ok) {
+      throw new Error(await apiErrorMessage(response))
+    }
+  }
+
+  /**
+   * Fait avancer l'avancement d'un lavage d'un cran.
+   *
+   * L'affichage bouge tout de suite, avant l'aller-retour reseau : sur le
+   * terrain, la pasteille doit repondre au doigt. Si le serveur refuse, on
+   * remet l'ancien et on dit pourquoi — un affichage optimiste qui laisse
+   * croire a un changement annule serait pire que pas d'affichage du tout.
+   */
+  async function advanceWashStatus(washId: string, next: OperationStatus) {
+    const precedent = currentOperationStatus(washId)
+    setAdvancingWashIds((ids) => [...ids, washId])
+    setOperationOverrides((overrides) => ({ ...overrides, [washId]: next }))
+    setAdvanceError(null)
+    try {
+      await writeOperationStatus(washId, next)
+      setRefreshKey((key) => key + 1)
+    } catch (err) {
+      setOperationOverrides((overrides) => {
+        const suivant = { ...overrides }
+        if (precedent) suivant[washId] = precedent
+        else delete suivant[washId]
+        return suivant
+      })
+      setAdvanceError(
+        err instanceof Error ? err.message : "Impossible de changer l’avancement de ce lavage.",
+      )
+    } finally {
+      setAdvancingWashIds((ids) => ids.filter((id) => id !== washId))
+    }
+  }
+
+  /**
+   * Lance le decompte d'une tache.
+   *
+   * C'est le clic sur la carte : le serveur note l'instant du depart, et
+   * l'ecran ne fait plus que compter.
+   */
+  async function startTask(washId: string) {
+    setAdvancingWashIds((ids) => [...ids, washId])
+    setAdvanceError(null)
+    try {
+      await writeOperationStatus(washId, "in_progress")
+      setRefreshKey((key) => key + 1)
+    } catch (err) {
+      setAdvanceError(
+        err instanceof Error ? err.message : "Impossible de démarrer cette tâche.",
+      )
+    } finally {
+      setAdvancingWashIds((ids) => ids.filter((id) => id !== washId))
+    }
+  }
+
+  /**
+   * Termine une tache.
+   *
+   * La carte disparait, la tache rejoint l'historique, et le comptoir est
+   * prevenu par une notification : une tache terminee sans bruit est une
+   * tache dont personne ne sait qu'elle l'est.
+   */
+  async function finishTask(washId: string) {
+    const wash = washes.find((item) => item.id === washId)
+    setAdvancingWashIds((ids) => [...ids, washId])
+    setAdvanceError(null)
+    try {
+      await writeOperationStatus(washId, "completed")
+      setRefreshKey((key) => key + 1)
+      toast.add({
+        type: "success",
+        title: "Tâche terminée",
+        description: `${taskLabel(wash)} — le lavage est terminé et rejoint l’historique.`,
+      })
+    } catch (err) {
+      setAdvanceError(
+        err instanceof Error ? err.message : "Impossible de terminer cette tâche.",
+      )
+    } finally {
+      setAdvancingWashIds((ids) => ids.filter((id) => id !== washId))
+    }
+  }
+
+  async function moveToOvertime(washId: string) {
+    setAdvancingWashIds((ids) => [...ids, washId])
+    setAdvanceError(null)
+    try {
+      await writeOperationStatus(washId, "overtime")
+      setRefreshKey((key) => key + 1)
+    } catch (_err) {
+      // If can't move to overtime, just ask to finish
+      finishTask(washId)
+    } finally {
+      setAdvancingWashIds((ids) => ids.filter((id) => id !== washId))
     }
   }
 
@@ -541,6 +733,23 @@ export default function WashesPage() {
 
             <form onSubmit={submitWash} className="space-y-6">
               <div className="grid gap-4 md:grid-cols-3">
+                <label className="flex flex-col gap-1.5 text-sm font-medium">
+                  Client <span className="font-normal text-muted-foreground">(facultatif)</span>
+                  <Input
+                    value={customerName}
+                    onChange={(event) => {
+                      setCustomerName(event.target.value)
+                      markFormChanged()
+                    }}
+                    placeholder="Ex. Mme Konan"
+                    maxLength={80}
+                    autoComplete="off"
+                    className="h-10"
+                  />
+                  <span className="text-xs font-normal text-muted-foreground">
+                    Un simple nom pour appeler la voiture. Ni téléphone, ni fiche.
+                  </span>
+                </label>
                 <label className="flex flex-col gap-1.5 text-sm font-medium">
                   Catégorie du véhicule
                   <select
@@ -704,6 +913,27 @@ export default function WashesPage() {
                     })}
                   </div>
                 )}
+                {selectedWorkerIds.length > 0 && (
+                  <div className="mt-3 flex items-center gap-2">
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      Responsable principal
+                    </label>
+                    <select
+                      className="h-9 rounded-md border border-input bg-background px-3 text-sm flex-1"
+                      value={principalWorkerId ?? ""}
+                      onChange={(event) => setPrincipal(event.target.value || null)}
+                    >
+                      <option value="">Aucun — responsabilité partagée</option>
+                      {activeWorkers
+                        .filter((worker) => selectedWorkerIds.includes(worker.id))
+                        .map((worker) => (
+                          <option key={worker.id} value={worker.id}>
+                            {worker.first_name} {worker.last_name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                )}
               </fieldset>
 
               <div className="rounded-lg border bg-muted/20 p-4">
@@ -799,6 +1029,15 @@ export default function WashesPage() {
           </section>
         )}
 
+        <ActiveWashTasks
+          washes={tachesActives}
+          canAdvance={advanceStatus.allowed}
+          busyWashIds={advancingWashIds}
+          onStart={(washId) => void startTask(washId)}
+          onFinish={(washId) => void finishTask(washId)}
+          onAutoFinish={(washId) => void moveToOvertime(washId)}
+        />
+
         <section className="rounded-lg border bg-card">
           <div className="border-b p-4">
             <h2 className="text-lg font-semibold">Historique des lavages</h2>
@@ -806,6 +1045,11 @@ export default function WashesPage() {
           </div>
           {washesLoading && <div className="p-4"><TableSkeleton rows={6} cols={6} label="Chargement de l’historique des lavages" /></div>}
           {washesError && <div className="p-4 text-sm text-destructive">{washesError}</div>}
+          {advanceError && (
+            <div role="alert" className="mx-4 mb-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+              {advanceError}
+            </div>
+          )}
           {!washesLoading && !washesError && (
             <div className="overflow-x-auto">
               <Table>
@@ -847,7 +1091,15 @@ export default function WashesPage() {
                       <TableCell>{allSites.find((site) => site.id === wash.site_id)?.name ?? "—"}</TableCell>
                       <TableCell>{activeCategories.find((category) => category.id === wash.vehicle_category_id)?.name ?? "—"}</TableCell>
                       <TableCell className="text-right">{formatXof(wash.total_cents)}</TableCell>
-                      <TableCell>{washStatusLabel(wash.status)}</TableCell>
+                      <TableCell>
+                        <OperationStatusBadge
+                          status={currentOperationStatus(wash.id)}
+                          cancelled={wash.status === "cancelled"}
+                          canAdvance={advanceStatus.allowed}
+                          busy={advancingWashIds.includes(wash.id)}
+                          onAdvance={(next) => void advanceWashStatus(wash.id, next)}
+                        />
+                      </TableCell>
                       <TableCell>{paymentStatusLabel(wash.payment_status)}</TableCell>
                       <TableCell>{new Date(wash.created_at).toLocaleString("fr-CI")}</TableCell>
                       <TableCell>
