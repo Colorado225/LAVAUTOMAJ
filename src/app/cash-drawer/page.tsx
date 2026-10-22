@@ -124,7 +124,7 @@ export default function CashDrawerPage() {
   async function openCashSession() {
     const amountCents = xofToCents(openingAmount)
     if (!siteId || amountCents == null) {
-      mutation.fail("Sélectionnez un site et saisissez un montant valide.")
+      mutation.fail("Sélectionnez une station et saisissez un montant valide.")
       return
     }
 
@@ -223,7 +223,7 @@ export default function CashDrawerPage() {
     parsedCountedAmount !== session.theoretical_balance_cents
 
   return (
-    <BaseLayout title="Caisse" description="Ouverture, clôture et suivi de la caisse.">
+    <BaseLayout title="Caisse" description="Ouverture, clôture et suivi de la caisse." hideHeading>
       <div className="p-4">
         <div className="mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-center">
           <div className="flex flex-col gap-2">

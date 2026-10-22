@@ -97,7 +97,7 @@ export function SupportButton() {
         role="dialog"
         aria-label="Assistance WashPilot CI"
         className={cn(
-          "fixed right-4 bottom-20 z-50 w-[min(22rem,calc(100vw-2rem))] rounded-xl border bg-popover p-4 shadow-lg",
+          "fixed right-4 bottom-36 z-50 w-[min(22rem,calc(100vw-2rem))] rounded-xl border bg-popover p-4 shadow-lg md:bottom-20",
           "duration-200 ease-out data-[visible=true]:animate-in data-[visible=true]:fade-in-0 data-[visible=true]:zoom-in-95",
         )}
         data-visible={open}
@@ -179,7 +179,7 @@ export function SupportButton() {
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-label="Assistance"
-        className="fixed right-4 bottom-4 z-50 h-12 gap-2 rounded-full px-5 shadow-lg transition-transform duration-150 hover:scale-[1.03] active:scale-[0.97]"
+        className="fixed right-4 bottom-20 z-50 h-12 gap-2 rounded-full px-5 shadow-lg transition-transform duration-150 hover:scale-[1.03] active:scale-[0.97] md:bottom-4"
       >
         <LifeBuoy className="size-5" aria-hidden="true" />
         <span className="hidden sm:inline">Aide</span>

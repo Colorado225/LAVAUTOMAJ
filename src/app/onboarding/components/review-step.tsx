@@ -1,12 +1,6 @@
 import * as React from "react"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { FrameFooter } from "@/components/ui/frame"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { LoadingSpinner } from "@/components/ui/loading-spinner"
@@ -63,117 +57,107 @@ export function ReviewStep({ onQuit, onCompleted }: ReviewStepProps) {
 
   if (success) {
     return (
-      <Card className="relative overflow-hidden border-primary/50">
+      <div className="relative flex flex-col items-center gap-4 overflow-hidden rounded-xl border border-primary/50 bg-card py-12 text-center">
         {/* Célébration : une seule fois, à la confirmation du serveur. */}
         <Confetti />
-        <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
-          <PartyPopper className="size-12 animate-in text-primary zoom-in-50 spin-in-12 duration-500" />
-          <div className="animate-in fade-in-0 slide-in-from-bottom-2 delay-150 duration-300">
-            <p className="text-xl font-bold">Votre station est prête !</p>
-            <p className="text-muted-foreground">
-              Redirection vers votre tableau de bord…
-            </p>
-          </div>
-          <LoadingSpinner className="size-6" />
-        </CardContent>
-      </Card>
+        <PartyPopper className="size-12 animate-in text-primary zoom-in-50 spin-in-12 duration-500" />
+        <div className="animate-in fade-in-0 slide-in-from-bottom-2 delay-150 duration-300">
+          <p className="text-xl font-bold">Votre station est prête !</p>
+          <p className="text-muted-foreground">
+            Redirection vers votre tableau de bord…
+          </p>
+        </div>
+        <LoadingSpinner className="size-6" />
+      </div>
     )
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Récapitulatif</CardTitle>
-        <CardDescription>
-          Vérifiez les informations avant de créer votre station.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {loading && (
-          <div className="flex flex-col gap-3">
-            {[...Array(4)].map((_, i) => (
-              <Skeleton key={i} className="h-10 w-full" />
-            ))}
-          </div>
-        )}
-        {error && <p className="text-destructive text-sm">{error}</p>}
-
-        {summary && (
-          <>
-            <section className="flex flex-col gap-1">
-              <p className="text-sm font-medium text-muted-foreground">Station</p>
-              <p className="font-semibold">{station?.name ?? summary.org_name}</p>
-              <p className="text-sm text-muted-foreground">
-                {[station?.address, station?.city].filter(Boolean).join(", ") || "Adresse non renseignée"}
-                {station?.phone ? ` — ${station.phone}` : ""}
-              </p>
-            </section>
-            <Separator />
-            <section className="flex flex-col gap-1">
-              <p className="text-sm font-medium text-muted-foreground">
-                Services ({(services?.selected.length ?? 0) + (services?.custom.length ?? 0)})
-              </p>
-              <div className="flex flex-wrap gap-1.5 text-xs">
-                {services?.selected.map((s) => (
-                  <span key={s.template_id} className="rounded-full bg-muted px-2.5 py-1">
-                    {s.name} — {formatXOF(s.price_cents)}
-                  </span>
-                ))}
-                {services?.custom.map((c) => (
-                  <span key={c.name} className="rounded-full border border-dashed px-2.5 py-1">
-                    {c.name} (personnalisé) — {formatXOF(c.price_cents)}
-                  </span>
-                ))}
-                {((services?.selected.length ?? 0) + (services?.custom.length ?? 0)) === 0 && "—"}
-              </div>
-            </section>
-            <Separator />
-            <section className="flex flex-col gap-1">
-              <p className="text-sm font-medium text-muted-foreground">
-                Travailleurs ({workers?.workers.length ?? 0})
-              </p>
-              {workers?.workers.length ? (
-                <ul className="text-sm">
-                  {workers.workers.map((w, i) => (
-                    <li key={i}>
-                      {w.first_name} {w.last_name} — {w.role}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Aucun — vous exercez seul.
-                </p>
-              )}
-            </section>
-            <Separator />
-            <section className="flex flex-col gap-1">
-              <p className="text-sm font-medium text-muted-foreground">Forfait</p>
-              {summary.plan ? (
-                <p className="font-semibold">
-                  {summary.plan.name} —{" "}
-                  {summary.plan.price_cents === 0
-                    ? "Gratuit"
-                    : `${formatXOF(summary.plan.price_cents)} (en attente de validation)`}
-                </p>
-              ) : (
-                "—"
-              )}
-            </section>
-          </>
-        )}
-
-        {serverError && <p className="text-destructive text-sm">{serverError}</p>}
-
-        <div className="flex items-center justify-between gap-2 pt-2">
-          <Button variant="ghost" onClick={onQuit} disabled={confirming}>
-            Enregistrer et quitter
-          </Button>
-          <Button onClick={confirm} disabled={confirming || loading || !!error}>
-            {confirming ? "Création en cours…" : "Confirmer et créer ma station"}
-          </Button>
+    <div className="flex flex-col gap-4">
+      {loading && (
+        <div className="flex flex-col gap-3">
+          {[...Array(4)].map((_, i) => (
+            <Skeleton key={i} className="h-10 w-full" />
+          ))}
         </div>
-      </CardContent>
-    </Card>
+      )}
+      {error && <p className="text-destructive text-sm">{error}</p>}
+
+      {summary && (
+        <>
+          <section className="flex flex-col gap-1">
+            <p className="text-sm font-medium text-muted-foreground">Station</p>
+            <p className="font-semibold">{station?.name ?? summary.org_name}</p>
+            <p className="text-sm text-muted-foreground">
+              {[station?.address, station?.city].filter(Boolean).join(", ") || "Adresse non renseignée"}
+              {station?.phone ? ` — ${station.phone}` : ""}
+            </p>
+          </section>
+          <Separator />
+          <section className="flex flex-col gap-1">
+            <p className="text-sm font-medium text-muted-foreground">
+              Services ({(services?.selected.length ?? 0) + (services?.custom.length ?? 0)})
+            </p>
+            <div className="flex flex-wrap gap-1.5 text-xs">
+              {services?.selected.map((s) => (
+                <span key={s.template_id} className="rounded-full bg-muted px-2.5 py-1">
+                  {s.name} — {formatXOF(s.price_cents)}
+                </span>
+              ))}
+              {services?.custom.map((c) => (
+                <span key={c.name} className="rounded-full border border-dashed px-2.5 py-1">
+                  {c.name} (personnalisé) — {formatXOF(c.price_cents)}
+                </span>
+              ))}
+              {((services?.selected.length ?? 0) + (services?.custom.length ?? 0)) === 0 && "—"}
+            </div>
+          </section>
+          <Separator />
+          <section className="flex flex-col gap-1">
+            <p className="text-sm font-medium text-muted-foreground">
+              Travailleurs ({workers?.workers.length ?? 0})
+            </p>
+            {workers?.workers.length ? (
+              <ul className="text-sm">
+                {workers.workers.map((w, i) => (
+                  <li key={i}>
+                    {w.first_name} {w.last_name} — {w.role}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Aucun — vous exercez seul.
+              </p>
+            )}
+          </section>
+          <Separator />
+          <section className="flex flex-col gap-1">
+            <p className="text-sm font-medium text-muted-foreground">Forfait</p>
+            {summary.plan ? (
+              <p className="font-semibold">
+                {summary.plan.name} —{" "}
+                {summary.plan.price_cents === 0
+                  ? "Gratuit"
+                  : `${formatXOF(summary.plan.price_cents)} (en attente de validation)`}
+              </p>
+            ) : (
+              "—"
+            )}
+          </section>
+        </>
+      )}
+
+      {serverError && <p className="text-destructive text-sm">{serverError}</p>}
+
+      <FrameFooter>
+        <Button variant="ghost" onClick={onQuit} disabled={confirming}>
+          Enregistrer et quitter
+        </Button>
+        <Button onClick={confirm} disabled={confirming || loading || !!error}>
+          {confirming ? "Création en cours…" : "Confirmer et créer ma station"}
+        </Button>
+      </FrameFooter>
+    </div>
   )
 }

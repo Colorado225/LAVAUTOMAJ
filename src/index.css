@@ -605,3 +605,152 @@ html[data-theme-transition]::view-transition-new(root) {
   size: 80mm auto;
   margin: 3mm;
 }
+
+/* ---------------------------------------------------------------------------
+   Accessibilité et confort tactile
+   ---------------------------------------------------------------------------
+   Trois règles transversales, écrites une fois pour toute l'application :
+
+   1. **Focus clavier toujours visible.** Le contour natif disparaît sur fond
+      coloré et sur les éléments stylés ; on impose un anneau à fort contraste,
+      avec un décalage qui le détache du composant.
+   2. **Cibles tactiles d'au moins 44 px.** Uniquement sur les pointeurs
+      grossiers : à la souris, un bouton de 28 px reste confortable et dense,
+      mais au doigt il devient une devinette.
+   3. **Contenu sous la barre d'actions mobile.** La barre fixe mesure environ
+      4 rem ; sans réserve, elle recouvre la dernière ligne d'un tableau.
+--------------------------------------------------------------------------- */
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Les champs gèrent déjà leur anneau : pas de double contour. */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[data-slot="toggle"]:focus-visible,
+[role="combobox"]:focus-visible {
+  outline: none;
+}
+
+@media (pointer: coarse) {
+  [data-slot="button"],
+  button:not([data-slot="toast-close"]),
+  [role="button"],
+  [role="tab"],
+  [role="menuitem"],
+  [role="option"] {
+    min-height: 44px;
+  }
+
+  [data-slot="button"][data-size="icon"],
+  [data-slot="button"][data-size="icon-sm"],
+  [data-slot="button"][data-size="icon-xs"],
+  [data-slot="button"][data-size="icon-lg"] {
+    min-width: 44px;
+  }
+
+  a[data-slot="button"] {
+    min-height: 44px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Tableaux → cartes sur petit écran
+   ---------------------------------------------------------------------------
+   Le tableau reste un vrai `<table>` (en-têtes, `aria-sort`, scope) sur
+   desktop. Sous 768 px, chaque ligne devient une carte : le libellé de la
+   colonne est repris via `data-label`, la valeur reste alignée à droite.
+   Aucun composant dupliqué, aucune donnée masquée.
+--------------------------------------------------------------------------- */
+@media (max-width: 767px) {
+  .table-cards [data-slot="table-container"] {
+    overflow-x: visible;
+  }
+
+  .table-cards table,
+  .table-cards thead,
+  .table-cards tbody,
+  .table-cards tr,
+  .table-cards th,
+  .table-cards td {
+    display: block;
+    width: 100%;
+  }
+
+  .table-cards thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .table-cards tbody {
+    padding: 0.75rem;
+  }
+
+  .table-cards tbody tr {
+    margin-bottom: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius) + 4px);
+    background: var(--card);
+    padding: 0.25rem 0.75rem;
+    box-shadow: var(--elev-1, 0 1px 2px rgb(0 0 0 / 0.05));
+  }
+
+  .table-cards tbody tr:last-child {
+    margin-bottom: 0;
+  }
+
+  .table-cards tbody td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    min-height: 44px;
+    padding: 0.5rem 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .table-cards tbody td + td {
+    border-top: 1px dashed color-mix(in oklch, var(--border), transparent 30%);
+  }
+
+  .table-cards tbody td::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    max-width: 45%;
+    text-align: left;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    white-space: normal;
+  }
+
+  .table-cards tbody td[data-label=""]::before,
+  .table-cards tbody td:not([data-label])::before {
+    content: none;
+  }
+
+  .table-cards tbody td:empty {
+    display: none;
+  }
+
+  /* Cellules d'état (vide, erreur) ou de détail déplié : elles occupent toute
+     la largeur et ne portent pas de libellé de colonne. */
+  .table-cards tbody td[colspan] {
+    display: block;
+    text-align: left;
+    padding: 0.25rem;
+  }
+}
+
+/* Zone de sécurité iOS pour toute barre fixe en bas. */
+.pb-safe {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}

@@ -1,12 +1,6 @@
 import * as React from "react"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { FrameFooter } from "@/components/ui/frame"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -84,102 +78,93 @@ export function WorkersStep({ progress, onDone, onQuit }: OnboardingWizardProps)
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Travailleurs</CardTitle>
-        <CardDescription>
-          Ajoutez les laveurs et chefs d'équipe de la station. Vous pouvez aussi
-          exercer seul et continuer sans travailleur.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {workers.length === 0 && (
-          <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-            Aucun travailleur ajouté. Cliquez sur « Ajouter un travailleur » ou
-            continuez directement si vous exercez seul.
-          </p>
-        )}
+    <div className="flex flex-col gap-4">
+      {workers.length === 0 && (
+        <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+          Aucun travailleur ajouté. Cliquez sur « Ajouter un travailleur » ou
+          continuez directement si vous exercez seul.
+        </p>
+      )}
 
-        {workers.map((w, i) => (
-          <div key={i} className="flex flex-col gap-3 rounded-lg border p-4">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-medium">Travailleur {i + 1}</p>
-              <div className="flex items-center gap-2">
-                {errors[i] && <span className="text-destructive text-xs">{errors[i]}</span>}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Retirer le travailleur ${i + 1}`}
-                  onClick={() => setWorkers((prev) => prev.filter((_, j) => j !== i))}
-                >
-                  <Trash2 className="size-4" />
-                </Button>
-              </div>
+      {workers.map((w, i) => (
+        <div key={i} className="flex flex-col gap-3 rounded-lg border p-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium">Travailleur {i + 1}</p>
+            <div className="flex items-center gap-2">
+              {errors[i] && <span className="text-destructive text-xs">{errors[i]}</span>}
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={`Retirer le travailleur ${i + 1}`}
+                onClick={() => setWorkers((prev) => prev.filter((_, j) => j !== i))}
+              >
+                <Trash2 className="size-4" />
+              </Button>
             </div>
-            <FieldGroup className="grid gap-3 md:grid-cols-2">
-              <Field>
-                <FieldLabel htmlFor={`w-${i}-first`}>Prénom *</FieldLabel>
-                <Input id={`w-${i}-first`} value={w.first_name} onChange={(e) => set(i, "first_name")(e.target.value)} />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor={`w-${i}-last`}>Nom *</FieldLabel>
-                <Input id={`w-${i}-last`} value={w.last_name} onChange={(e) => set(i, "last_name")(e.target.value)} />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor={`w-${i}-phone`}>Téléphone</FieldLabel>
-                <Input id={`w-${i}-phone`} value={w.phone ?? ""} onChange={(e) => set(i, "phone")(e.target.value)} placeholder="+225 …" />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor={`w-${i}-district`}>Quartier d'habitation</FieldLabel>
-                <Input id={`w-${i}-district`} value={w.district ?? ""} onChange={(e) => set(i, "district")(e.target.value)} />
-              </Field>
-              <Field>
-                <FieldLabel>Fonction</FieldLabel>
-                <Select value={w.role} onValueChange={(v) => set(i, "role")(String(v ?? "car_washer"))}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Choisir une fonction" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ROLE_OPTIONS.map((r) => (
-                      <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-              {w.role === "custom" && (
-                <Field>
-                  <FieldLabel htmlFor={`w-${i}-custom`}>Fonction personnalisée *</FieldLabel>
-                  <Input id={`w-${i}-custom`} value={w.custom_role ?? ""} onChange={(e) => set(i, "custom_role")(e.target.value)} />
-                </Field>
-              )}
-              <Field>
-                <FieldLabel htmlFor={`w-${i}-joined`}>Date d'entrée (facultatif)</FieldLabel>
-                <Input id={`w-${i}-joined`} type="date" value={w.joined_at ?? ""} onChange={(e) => set(i, "joined_at")(e.target.value)} />
-              </Field>
-            </FieldGroup>
           </div>
-        ))}
-
-        <Button
-          type="button"
-          variant="outline"
-          className="self-start"
-          onClick={() => setWorkers((prev) => [...prev, { ...EMPTY }])}
-        >
-          <Plus className="mr-2" /> Ajouter un travailleur
-        </Button>
-
-        {serverError && <p className="text-destructive text-sm">{serverError}</p>}
-
-        <div className="flex items-center justify-between gap-2">
-          <Button variant="ghost" onClick={() => save(true)} disabled={saving}>
-            Enregistrer et quitter
-          </Button>
-          <Button onClick={() => save(false)} disabled={saving}>
-            {saving ? "Enregistrement…" : "Continuer"}
-          </Button>
+          <FieldGroup className="grid gap-3 md:grid-cols-2">
+            <Field>
+              <FieldLabel htmlFor={`w-${i}-first`}>Prénom *</FieldLabel>
+              <Input id={`w-${i}-first`} value={w.first_name} onChange={(e) => set(i, "first_name")(e.target.value)} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`w-${i}-last`}>Nom *</FieldLabel>
+              <Input id={`w-${i}-last`} value={w.last_name} onChange={(e) => set(i, "last_name")(e.target.value)} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`w-${i}-phone`}>Téléphone</FieldLabel>
+              <Input id={`w-${i}-phone`} value={w.phone ?? ""} onChange={(e) => set(i, "phone")(e.target.value)} placeholder="+225 …" />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`w-${i}-district`}>Quartier d'habitation</FieldLabel>
+              <Input id={`w-${i}-district`} value={w.district ?? ""} onChange={(e) => set(i, "district")(e.target.value)} />
+            </Field>
+            <Field>
+              <FieldLabel>Fonction</FieldLabel>
+              <Select value={w.role} onValueChange={(v) => set(i, "role")(String(v ?? "car_washer"))}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Choisir une fonction" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ROLE_OPTIONS.map((r) => (
+                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            {w.role === "custom" && (
+              <Field>
+                <FieldLabel htmlFor={`w-${i}-custom`}>Fonction personnalisée *</FieldLabel>
+                <Input id={`w-${i}-custom`} value={w.custom_role ?? ""} onChange={(e) => set(i, "custom_role")(e.target.value)} />
+              </Field>
+            )}
+            <Field>
+              <FieldLabel htmlFor={`w-${i}-joined`}>Date d'entrée (facultatif)</FieldLabel>
+              <Input id={`w-${i}-joined`} type="date" value={w.joined_at ?? ""} onChange={(e) => set(i, "joined_at")(e.target.value)} />
+            </Field>
+          </FieldGroup>
         </div>
-      </CardContent>
-    </Card>
+      ))}
+
+      <Button
+        type="button"
+        variant="outline"
+        className="self-start"
+        onClick={() => setWorkers((prev) => [...prev, { ...EMPTY }])}
+      >
+        <Plus className="mr-2" /> Ajouter un travailleur
+      </Button>
+
+      {serverError && <p className="text-destructive text-sm">{serverError}</p>}
+
+      <FrameFooter>
+        <Button variant="ghost" onClick={() => save(true)} disabled={saving}>
+          Enregistrer et quitter
+        </Button>
+        <Button onClick={() => save(false)} disabled={saving}>
+          {saving ? "Enregistrement…" : "Continuer"}
+        </Button>
+      </FrameFooter>
+    </div>
   )
 }

@@ -9,7 +9,9 @@
     "build": "tsc -b && vite build",
     "test": "tsx --test tests/*.test.ts",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "console:password": "tsx scripts/console-password.ts",
+    "db:purge-stations": "tsx scripts/purge-station-data.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

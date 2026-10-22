@@ -96,25 +96,6 @@ export default function SignInPage() {
       }
     >
       <form onSubmit={handleSubmit} className="space-y-5" noValidate>
-        <div className="rounded-xl border border-blue-200/80 bg-blue-50/70 p-3.5 text-xs text-blue-950">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <p className="font-semibold text-blue-900">Compte démo préconfiguré</p>
-              <p className="text-[11px] text-blue-700">demo@washpilot.ci · WashPilot2026!</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setEmail("demo@washpilot.ci")
-                setPassword("WashPilot2026!")
-              }}
-              className="shrink-0 rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-semibold text-white shadow hover:bg-blue-700 transition"
-            >
-              Préremplir
-            </button>
-          </div>
-        </div>
-
         <AuthField
           id="sign-in-email"
           label="Adresse e-mail"

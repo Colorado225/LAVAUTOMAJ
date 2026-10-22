@@ -37,6 +37,17 @@ npm run dev
 | `npm start` | Serveur (en production : servir `dist/`, build préalable requis) |
 | `npm test` | Tests unitaires (validateurs, idempotence, rapports) |
 | `npm run lint` | ESLint |
+| `npm run console:password -- <email>` | Définit le mot de passe d'un opérateur de console |
+| `npm run db:purge-stations` | Simulation : liste les comptes de station qui seraient effacés |
+| `npm run db:purge-stations -- --yes` | Efface les comptes de station (console et forfaits conservés) |
+
+`db:purge-stations` sert à repartir d'une base vierge avant une mise en
+production : elle supprime les organisations, leurs utilisateurs et toutes
+leurs données, ainsi que les opérateurs de console désactivés. Les opérateurs
+actifs, les forfaits et le catalogue de prestations sont conservés. Arrêter le
+serveur avant de la lancer si la base est la base embarquée (PGlite), et
+renseigner `SEED_DEMO_DATA=false` pour que la station de démonstration ne
+réapparaisse pas au démarrage suivant.
 
 ## Configuration
 
@@ -154,6 +165,10 @@ propre table, `platform_operators`, sans aucun lien avec les comptes de
 station : ni le même mot de passe, ni la même session, ni la même durée (2
 jours contre 30). Retirer une adresse de la liste désactive l'opérateur et
 coupe ses sessions au redémarrage suivant.
+
+Le mot de passe posé par `PLATFORM_ADMIN_PASSWORD` ne sert qu'à l'amorçage. Pour
+le changer ensuite : `npm run console:password -- vous@exemple.ci` (serveur
+arrêté si la base est la base embarquée), voir `BACK-OFFICE.md` §2.
 
 **Aucune passerelle depuis le produit** : rien dans l'application station ne
 mentionne la console — pas d'entrée de menu, pas de lien, pas de redirection —

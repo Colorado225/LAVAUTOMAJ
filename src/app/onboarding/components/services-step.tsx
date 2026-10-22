@@ -1,13 +1,7 @@
 import * as React from "react"
 import { useApi } from "@/lib/api"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { FrameFooter } from "@/components/ui/frame"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
@@ -90,110 +84,101 @@ export function ServicesStep({ progress, onDone, onQuit }: OnboardingWizardProps
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Catalogue de services</CardTitle>
-        <CardDescription>
-          Sélectionnez les prestations que votre station propose. Vous pourrez
-          les modifier à tout moment.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-6">
-        {loading && (
-          <div className="grid gap-3 md:grid-cols-2">
-            {[...Array(6)].map((_, i) => (
-              <Skeleton key={i} className="h-12 w-full" />
+    <div className="flex flex-col gap-6">
+      {loading && (
+        <div className="grid gap-3 md:grid-cols-2">
+          {[...Array(6)].map((_, i) => (
+            <Skeleton key={i} className="h-12 w-full" />
+          ))}
+        </div>
+      )}
+      {error && <p className="text-destructive text-sm">{error}</p>}
+
+      <div className="grid gap-2 md:grid-cols-2">
+        {items.map((t) => {
+          const checked = selected.some((s) => s.template_id === t.id)
+          return (
+            <label
+              key={t.id}
+              className="flex items-center gap-3 rounded-lg border p-3 cursor-pointer hover:bg-muted/50 has-[[data-state=checked]]:border-primary"
+            >
+              <Checkbox
+                checked={checked}
+                onCheckedChange={() => toggle(t)}
+              />
+              <span className="flex-1 text-sm">{t.name}</span>
+              <span className="text-xs text-muted-foreground">
+                {formatXOF(t.price_cents)}
+              </span>
+            </label>
+          )
+        })}
+      </div>
+
+      {/* « Autre service » : prestation personnalisée, exclusivement rattachée à la station (§5) */}
+      <div className="flex flex-col gap-2 rounded-lg border border-dashed p-4">
+        <p className="text-sm font-medium">Autre service</p>
+        <p className="text-xs text-muted-foreground">
+          Ajoutez une prestation propre à votre station (elle ne modifiera pas
+          le catalogue général).
+        </p>
+        <FieldGroup className="grid gap-2 md:grid-cols-[1fr_140px_auto]">
+          <Field>
+            <FieldLabel htmlFor="custom-name" className="sr-only">Nom du service</FieldLabel>
+            <Input
+              id="custom-name"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Nom du service personnalisé"
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="custom-price" className="sr-only">Prix indicatif</FieldLabel>
+            <Input
+              id="custom-price"
+              inputMode="numeric"
+              value={newPrice}
+              onChange={(e) => setNewPrice(e.target.value)}
+              placeholder="Prix (F CFA)"
+            />
+          </Field>
+          <Button type="button" variant="outline" onClick={addCustom}>
+            Ajouter
+          </Button>
+        </FieldGroup>
+        {custom.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {custom.map((c, i) => (
+              <Badge key={i} variant="secondary" className="gap-1">
+                {c.name}
+                {c.price_cents != null && ` — ${formatXOF(c.price_cents)}`}
+                <button
+                  type="button"
+                  aria-label={`Retirer ${c.name}`}
+                  className="ml-1 text-muted-foreground hover:text-foreground"
+                  onClick={() => setCustom((prev) => prev.filter((_, j) => j !== i))}
+                >
+                  ×
+                </button>
+              </Badge>
             ))}
           </div>
         )}
-        {error && <p className="text-destructive text-sm">{error}</p>}
+      </div>
 
-        <div className="grid gap-2 md:grid-cols-2">
-          {items.map((t) => {
-            const checked = selected.some((s) => s.template_id === t.id)
-            return (
-              <label
-                key={t.id}
-                className="flex items-center gap-3 rounded-lg border p-3 cursor-pointer hover:bg-muted/50 has-[[data-state=checked]]:border-primary"
-              >
-                <Checkbox
-                  checked={checked}
-                  onCheckedChange={() => toggle(t)}
-                />
-                <span className="flex-1 text-sm">{t.name}</span>
-                <span className="text-xs text-muted-foreground">
-                  {formatXOF(t.price_cents)}
-                </span>
-              </label>
-            )
-          })}
-        </div>
+      {serverError && <p className="text-destructive text-sm">{serverError}</p>}
 
-        {/* « Autre service » : prestation personnalisée, exclusivement rattachée à la station (§5) */}
-        <div className="flex flex-col gap-2 rounded-lg border border-dashed p-4">
-          <p className="text-sm font-medium">Autre service</p>
-          <p className="text-xs text-muted-foreground">
-            Ajoutez une prestation propre à votre station (elle ne modifiera pas
-            le catalogue général).
-          </p>
-          <FieldGroup className="grid gap-2 md:grid-cols-[1fr_140px_auto]">
-            <Field>
-              <FieldLabel htmlFor="custom-name" className="sr-only">Nom du service</FieldLabel>
-              <Input
-                id="custom-name"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="Nom du service personnalisé"
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="custom-price" className="sr-only">Prix indicatif</FieldLabel>
-              <Input
-                id="custom-price"
-                inputMode="numeric"
-                value={newPrice}
-                onChange={(e) => setNewPrice(e.target.value)}
-                placeholder="Prix (F CFA)"
-              />
-            </Field>
-            <Button type="button" variant="outline" onClick={addCustom}>
-              Ajouter
-            </Button>
-          </FieldGroup>
-          {custom.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {custom.map((c, i) => (
-                <Badge key={i} variant="secondary" className="gap-1">
-                  {c.name}
-                  {c.price_cents != null && ` — ${formatXOF(c.price_cents)}`}
-                  <button
-                    type="button"
-                    aria-label={`Retirer ${c.name}`}
-                    className="ml-1 text-muted-foreground hover:text-foreground"
-                    onClick={() => setCustom((prev) => prev.filter((_, j) => j !== i))}
-                  >
-                    ×
-                  </button>
-                </Badge>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {serverError && <p className="text-destructive text-sm">{serverError}</p>}
-
-        <div className="flex items-center justify-between gap-2">
-          <Button variant="ghost" onClick={() => save(true)} disabled={saving}>
-            Enregistrer et quitter
-          </Button>
-          <Button
-            onClick={() => save(false)}
-            disabled={saving || (selected.length === 0 && custom.length === 0)}
-          >
-            {saving ? "Enregistrement…" : "Continuer"}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+      <FrameFooter>
+        <Button variant="ghost" onClick={() => save(true)} disabled={saving}>
+          Enregistrer et quitter
+        </Button>
+        <Button
+          onClick={() => save(false)}
+          disabled={saving || (selected.length === 0 && custom.length === 0)}
+        >
+          {saving ? "Enregistrement…" : "Continuer"}
+        </Button>
+      </FrameFooter>
+    </div>
   )
 }

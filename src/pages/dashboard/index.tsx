@@ -46,6 +46,10 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { AnimatedNumber } from '@/components/ui/animated-number'
 import { Sparkline } from '@/components/ui/sparkline'
 import { Button } from '@/components/ui/button'
+import { NewWashButton } from '@/components/actions/new-wash-button'
+import { MetricLabel } from '@/components/ui/info-tooltip'
+import { ActivityFeed } from '@/components/activity/activity-feed'
+import { formatXof, formatDate } from '@/lib/format'
 import type { Plan } from '@/lib/onboarding-api'
 
 type Period = 'today' | '7days' | '30days'
@@ -110,14 +114,12 @@ function periodRange(period: Period) {
   return { from: toApiDate(start), to: toApiDate(today) }
 }
 
-/** Les montants API sont en centimes : conversion + mise en forme FCFA. */
+/**
+ * Les montants API sont en centimes. La mise en forme vient de `lib/format` :
+ * une seule unité (« F CFA »), une seule locale, dans toute l'application.
+ */
 function formatFCFA(cents: number | null | undefined) {
-  if (cents == null || !Number.isFinite(cents)) return '—'
-  return (
-    new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 }).format(
-      Math.round(cents / 100)
-    ) + ' FCFA'
-  )
+  return formatXof(cents)
 }
 
 function formatCount(value: number | null | undefined) {
@@ -140,6 +142,7 @@ function SummaryCard({
   loading = false,
   index = 0,
   trend,
+  explanation,
 }: {
   title: string
   /** Valeur brute (centimes ou compteur) animée à l'affichage. */
@@ -152,6 +155,8 @@ function SummaryCard({
   index?: number
   /** Série pour la mini-courbe révélée au survol. */
   trend?: number[]
+  /** Définition de la métrique : ce qui est compté, et ce qui ne l'est pas. */
+  explanation?: React.ReactNode
 }) {
   return (
     <ElevatedCard
@@ -162,7 +167,15 @@ function SummaryCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-muted-foreground">{title}</p>
+          {explanation ? (
+            <MetricLabel
+              label={title}
+              explanation={explanation}
+              className="text-sm font-medium text-muted-foreground"
+            />
+          ) : (
+            <p className="text-sm font-medium text-muted-foreground">{title}</p>
+          )}
           {loading ? (
             <Skeleton className="mt-3 h-8 w-36" />
           ) : (
@@ -327,7 +340,7 @@ export default function DashboardPage() {
       title="Tableau de bord"
       description="Pilotez votre station de lavage en un coup d'œil."
     >
-        <main className="flex min-w-0 flex-1 flex-col gap-10 p-4 md:p-6 xl:p-8">
+        <div className="flex min-w-0 flex-1 flex-col gap-10 p-4 md:p-6 xl:p-8">
         {/* Header */}
         <section className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
           <div className="min-w-0 space-y-2">
@@ -345,9 +358,11 @@ export default function DashboardPage() {
               </>
             ) : (
               <>
-                <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
+                {/* Le titre de page est rendu par `BaseLayout` : ce salut
+                    reste un sous-titre pour ne pas produire deux <h1>. */}
+                <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">
                   Bonjour, bienvenue chez {stationName}
-                </h1>
+                </h2>
                 <p className="text-sm text-muted-foreground">
                   {stationAddress ||
                     "Complétez les informations de votre station pour personnaliser votre espace."}
@@ -375,15 +390,9 @@ export default function DashboardPage() {
               Actualiser
             </Button>
 
-            {/* Pointe vers l'élément « Nouveau lavage » du sidebar (/washes) */}
-            <Link
-              to="/washes"
-              viewTransition
-              className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-all hover:bg-muted hover:text-primary"
-            >
-              <Plus className="size-4" />
-              Nouveau lavage
-            </Link>
+            {/* Même action que l'en-tête et le raccourci N : `?new=1` ouvre
+                directement le formulaire de lavage. */}
+            <NewWashButton size="lg" className="h-9" />
           </div>
         </section>
 
@@ -396,7 +405,7 @@ export default function DashboardPage() {
             <div>
               <p className="text-sm font-semibold">Période d'analyse</p>
               <p className="text-xs text-muted-foreground">
-                Du {formatDayLabel(range.from)} au {formatDayLabel(range.to)}
+                Du {formatDate(range.from, 'day')} au {formatDate(range.to, 'day')}
               </p>
             </div>
           </div>
@@ -544,6 +553,7 @@ export default function DashboardPage() {
               loading={reportLoading}
               index={0}
               trend={revenueSeries.map((day) => day.revenue)}
+              explanation="Somme des paiements confirmés sur la période, opérations annulées exclues. Un paiement mobile money en attente n'est pas compté avant confirmation."
             />
             <SummaryCard
               title="Lavages réalisés"
@@ -558,6 +568,7 @@ export default function DashboardPage() {
               loading={reportLoading}
               index={1}
               trend={revenueSeries.map((day) => day.washes)}
+              explanation="Lavages au statut « terminé » sur la période. Les lavages en cours et annulés ne sont pas inclus."
             />
             <SummaryCard
               title="Dépenses enregistrées"
@@ -568,6 +579,7 @@ export default function DashboardPage() {
               loading={reportLoading}
               index={2}
               trend={revenueSeries.map((day) => day.expenses)}
+              explanation="Dépenses saisies dans le module Dépenses sur la période, quel que soit leur mode de règlement."
             />
             <SummaryCard
               title="Solde opérationnel estimé"
@@ -578,6 +590,7 @@ export default function DashboardPage() {
               loading={reportLoading}
               index={3}
               trend={revenueSeries.map((day) => day.revenue - day.expenses)}
+              explanation="Recettes encaissées moins dépenses enregistrées. Ce n'est pas un bénéfice comptable : salaires, impôts et amortissements n'y figurent pas."
             />
           </div>
         </section>
@@ -777,6 +790,32 @@ export default function DashboardPage() {
           </Stagger>
         </section>
 
+        {/* Journal d'activité : la même source que la page Historique, pour
+            que le tableau de bord ne « résume » jamais une activité qu'il
+            n'a pas réellement lue. */}
+        <section className="space-y-4" aria-labelledby="journal-activite">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 id="journal-activite" className="text-lg font-semibold tracking-tight">
+                Journal d’activité récent
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                Les dernières opérations enregistrées par l’équipe, du plus récent au plus ancien.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              render={<Link to="/history" viewTransition />}
+              className="gap-1.5"
+            >
+              Ouvrir l’historique
+              <ArrowUpRight className="size-3.5" aria-hidden="true" />
+            </Button>
+          </div>
+          <ActivityFeed limit={6} />
+        </section>
+
         {/* Subscription */}
         {plan && (
           <section className="elev-1 flex flex-col justify-between gap-4 rounded-2xl border bg-muted/20 p-5 sm:flex-row sm:items-center">
@@ -798,7 +837,7 @@ export default function DashboardPage() {
             </Link>
           </section>
         )}
-      </main>
+      </div>
     </BaseLayout>
   )
 }

@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState, type FormEvent } from "react"
-import { Link, useViewTransitionState } from "react-router-dom"
+import { Link, useSearchParams, useViewTransitionState } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
 import { BlockedReason } from "@/components/access/blocked-reason"
@@ -22,15 +22,25 @@ import { plateKey } from "@/lib/plate"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
 import {
+  ResponsiveTable,
+  SortableHead,
+  TableEmptyRow,
+  TableErrorRow,
+  TablePagination,
+  TableToolbar,
+  useDataTable,
+  type ColumnDefinition,
+} from "@/components/ui/data-table"
+import { formatDateTime, formatXof } from "@/lib/format"
+import {
   OperationStatusBadge,
 } from "@/components/washes/operation-status-badge"
 import { ActiveWashTasks } from "@/components/washes/active-wash-tasks"
 import { taskLabel } from "@/lib/wash-tasks"
 import { toast } from "@/components/ui/toast"
-import type { OperationStatus } from "@/lib/wash-operation-status"
+import { OPERATION_STATUS_LABELS, type OperationStatus } from "@/lib/wash-operation-status"
 import { SubmitButton } from "@/components/ui/submit-button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { EmptyState } from "@/components/ui/empty-state"
 import { useSuccessFlash } from "@/hooks/use-success-flash"
 import { WashReceiptButton } from "@/components/receipt/wash-receipt"
 import { ArrowRight, Check, Droplets, Loader2, Lock, Plus } from "lucide-react"
@@ -116,10 +126,6 @@ function parseXofAmount(value: string): number | null {
   return Number.isSafeInteger(cents) ? cents : null
 }
 
-function formatXof(cents: number): string {
-  return `${(cents / 100).toLocaleString("fr-CI", { maximumFractionDigits: 2 })} XOF`
-}
-
 function paymentStatusLabel(status: string): string {
   if (status === "paid") return "Payé"
   if (status === "partial") return "Partiel"
@@ -164,6 +170,11 @@ export default function WashesPage() {
   const { data: washesData, loading: washesLoading, error: washesError } = useApi<Wash[]>(
     `/api/v1/washes?refresh=${refreshKey}`
   )
+  const [searchParams, setSearchParams] = useSearchParams()
+  // `?new=1` ouvre le formulaire : c'est la cible du bouton « Nouveau lavage »
+  // de l'en-tête, de la barre mobile et du raccourci N. L'URL reste partageable
+  // et un rechargement ne referme pas le formulaire sous les doigts.
+  const requestedNew = searchParams.get("new") === "1"
   const [formOpen, setFormOpen] = useState(false)
   // Clic reçu avant que les droits soient connus : on le garde pour l'honorer
   // dès qu'ils arrivent, plutôt que de griser le bouton par précaution.
@@ -245,16 +256,76 @@ export default function WashesPage() {
   // formulaire de lui-même dès que les droits le permettent, et s'efface tout
   // seul si le refus se confirme — le motif est alors déjà sous le bouton.
   const awaitingRights = openRequested && pendingOutcome === "attendre"
-  const showForm = formOpen || (openRequested && pendingOutcome === "ouvrir")
+  const showForm = requestedNew || formOpen || (openRequested && pendingOutcome === "ouvrir")
   const closeForm = () => {
     setFormOpen(false)
     setOpenRequested(false)
+    if (requestedNew) {
+      const next = new URLSearchParams(searchParams)
+      next.delete("new")
+      setSearchParams(next, { replace: true })
+    }
   }
   const activeCategories = (categories ?? []).filter((item) => item.is_active)
   const activeServices = (serviceCatalog ?? []).filter((item) => item.is_active)
   const activeWorkers = (workers ?? []).filter((worker) => worker.status === "active")
 
   const washes = washesData ?? []
+
+  // -------------------------------------------------------------------------
+  // Historique : recherche instantanée, filtres persistants, tri, colonnes.
+  // -------------------------------------------------------------------------
+  const tableColumns: ColumnDefinition[] = [
+    { id: "reference", label: "Référence", required: true },
+    { id: "plate", label: "Plaque" },
+    { id: "site", label: "Station" },
+    { id: "category", label: "Catégorie" },
+    { id: "total", label: "Total" },
+    { id: "status", label: "Statut" },
+    { id: "payment", label: "Paiement" },
+    { id: "date", label: "Date" },
+  ]
+
+  const siteName = (id: string | null) =>
+    allSites.find((site) => site.id === id)?.name ?? "—"
+  const categoryName = (id: string | null) =>
+    (categories ?? []).find((category) => category.id === id)?.name ?? "—"
+
+  const dataTable = useDataTable<Wash>({
+    storageKey: "washpilot:table:lavages",
+    rows: washes,
+    columns: tableColumns,
+    initialSort: { column: "date", direction: "desc" },
+    searchText: (wash) =>
+      [
+        wash.reference,
+        wash.plate ?? "",
+        wash.customer_name ?? "",
+        siteName(wash.site_id),
+        categoryName(wash.vehicle_category_id),
+        paymentStatusLabel(wash.payment_status),
+      ].join(" "),
+    sorters: {
+      reference: (a, b) => a.reference.localeCompare(b.reference),
+      plate: (a, b) => (a.plate ?? "").localeCompare(b.plate ?? ""),
+      site: (a, b) => siteName(a.site_id).localeCompare(siteName(b.site_id)),
+      category: (a, b) =>
+        categoryName(a.vehicle_category_id).localeCompare(categoryName(b.vehicle_category_id)),
+      total: (a, b) => a.total_cents - b.total_cents,
+      payment: (a, b) =>
+        paymentStatusLabel(a.payment_status).localeCompare(paymentStatusLabel(b.payment_status)),
+      date: (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    },
+    initialFilters: { status: "", site: "" },
+    filterPredicates: {
+      status: (wash, value) =>
+        value === "cancelled"
+          ? wash.status === "cancelled"
+          : wash.status !== "cancelled" &&
+            (currentOperationStatus(wash.id) ?? wash.operation_status) === value,
+      site: (wash, value) => wash.site_id === value,
+    },
+  })
 
   /**
    * L'avancement affichee d'un lavage.
@@ -379,13 +450,18 @@ export default function WashesPage() {
 
   async function submitWash(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    // Double soumission : le bouton est déjà désactivé pendant l'envoi, mais
+    // un double appui au clavier ou un second onglet peut appeler cette
+    // fonction. La clé d'idempotence protège le serveur ; ce garde protège
+    // l'utilisateur d'un second message contradictoire.
+    if (saving) return
     setMutationError(null)
     setMutationSuccess(null)
     // Le reçu de la vente précédente ne doit jamais survivre à celle-ci.
     setWashToReceipt(null)
 
     if (!siteId || !vehicleCategoryId || selectedServices.length === 0) {
-      setMutationError("Choisissez un site, une catégorie et au moins une prestation.")
+      setMutationError("Choisissez une station, une catégorie et au moins une prestation.")
       return
     }
     if (selectedWorkerIds.length === 0) {
@@ -447,6 +523,13 @@ export default function WashesPage() {
       )
       flashSaveSuccess()
       setMutationSuccess(replayed ? "Cette opération avait déjà été enregistrée." : "Lavage enregistré avec succès.")
+      toast.add({
+        type: "success",
+        title: replayed ? "Lavage déjà enregistré" : "Lavage enregistré",
+        description: created?.reference
+          ? `Référence ${created.reference}.${created.payment_status === "paid" ? " Payé en totalité." : ""}`
+          : "L’opération est prise en compte.",
+      })
       setQuantities({})
       setSelectedWorkerIds([])
       setPrincipalWorkerId(null)
@@ -475,6 +558,11 @@ export default function WashesPage() {
           setMutationSuccess(
             "Pas de réseau : le lavage est enregistré sur cet appareil et sera envoyé automatiquement.",
           )
+          toast.add({
+            type: "info",
+            title: "Lavage enregistré sur cet appareil",
+            description: "Il partira automatiquement au retour du réseau. Rien n’est perdu.",
+          })
           setQuantities({})
           setSelectedWorkerIds([])
           setPrincipalWorkerId(null)
@@ -490,7 +578,13 @@ export default function WashesPage() {
       }
       // Keep the key while the payload stays unchanged: retrying after a lost
       // response returns the original record instead of creating a duplicate.
-      setMutationError(err instanceof Error ? err.message : "Impossible d’enregistrer le lavage.")
+      const message = err instanceof Error ? err.message : "Impossible d’enregistrer le lavage."
+      setMutationError(message)
+      toast.add({
+        type: "error",
+        title: "Lavage non enregistré",
+        description: `${message} Vérifiez les informations, puis réessayez.`,
+      })
     } finally {
       setSaving(false)
     }
@@ -529,6 +623,11 @@ export default function WashesPage() {
     try {
       await writeOperationStatus(washId, next)
       setRefreshKey((key) => key + 1)
+      toast.add({
+        type: "success",
+        title: "Statut du lavage mis à jour",
+        description: `Le lavage est maintenant « ${OPERATION_STATUS_LABELS[next] ?? next} ».`,
+      })
     } catch (err) {
       setOperationOverrides((overrides) => {
         const suivant = { ...overrides }
@@ -556,6 +655,11 @@ export default function WashesPage() {
     try {
       await writeOperationStatus(washId, "in_progress")
       setRefreshKey((key) => key + 1)
+      toast.add({
+        type: "success",
+        title: "Lavage démarré",
+        description: "Le décompte est lancé pour cette tâche.",
+      })
     } catch (err) {
       setAdvanceError(
         err instanceof Error ? err.message : "Impossible de démarrer cette tâche.",
@@ -608,7 +712,7 @@ export default function WashesPage() {
   }
 
   return (
-    <BaseLayout title="Lavages" description="Enregistrement et historique des lavages.">
+    <BaseLayout title="Lavages" description="Enregistrement et historique des lavages." hideHeading>
       <div className="space-y-6 p-4">
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
           <div className="flex flex-col gap-2">
@@ -619,7 +723,7 @@ export default function WashesPage() {
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
             <label className="flex min-w-56 flex-col gap-1 text-sm font-medium">
-              Site
+              Station
               <select
                 className="h-9 rounded-md border border-input bg-background px-3 text-sm"
                 value={siteId}
@@ -797,9 +901,9 @@ export default function WashesPage() {
                   )}
                 </label>
                 <div className="flex flex-col gap-1.5 text-sm font-medium">
-                  Site sélectionné
+                  Station sélectionnée
                   <div className="flex h-10 items-center rounded-md border bg-muted/40 px-3 text-muted-foreground">
-                    {allSites.find((site) => site.id === siteId)?.name ?? "Aucun site"}
+                    {allSites.find((site) => site.id === siteId)?.name ?? "Aucune station"}
                   </div>
                 </div>
               </div>
@@ -993,7 +1097,7 @@ export default function WashesPage() {
                   )}
                   {cashNeedsSession && !cashSessionLoading && !cashSession && (
                     <p className="text-destructive">
-                      Aucune session de caisse ouverte pour ce site. <Link to="/cash-drawer" className="underline">Ouvrir la caisse</Link> ou saisir zéro pour enregistrer le lavage sans paiement.
+                      Aucune session de caisse ouverte pour cette station. <Link to="/cash-drawer" className="underline">Ouvrir la caisse</Link> ou saisir zéro pour enregistrer le lavage sans paiement.
                     </p>
                   )}
                   {amountReceivedCents != null && amountReceivedCents > totalCents && (
@@ -1038,85 +1142,276 @@ export default function WashesPage() {
           onAutoFinish={(washId) => void moveToOvertime(washId)}
         />
 
-        <section className="rounded-lg border bg-card">
+        <section className="overflow-hidden rounded-lg border bg-card">
           <div className="border-b p-4">
             <h2 className="text-lg font-semibold">Historique des lavages</h2>
-            <p className="text-sm text-muted-foreground">Les 200 opérations les plus récentes de l’organisation.</p>
+            <p className="text-sm text-muted-foreground">
+              Les 200 opérations les plus récentes de l’organisation. La recherche,
+              le tri et les colonnes affichées sont conservés d’une visite à l’autre.
+            </p>
           </div>
-          {washesLoading && <div className="p-4"><TableSkeleton rows={6} cols={6} label="Chargement de l’historique des lavages" /></div>}
-          {washesError && <div className="p-4 text-sm text-destructive">{washesError}</div>}
-          {advanceError && (
-            <div role="alert" className="mx-4 mb-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-              {advanceError}
+
+          {washesLoading && (
+            <div className="p-4">
+              <TableSkeleton rows={6} cols={6} label="Chargement de l’historique des lavages" />
             </div>
           )}
-          {!washesLoading && !washesError && (
-            <div className="overflow-x-auto">
+
+          {advanceError && (
+            <div
+              role="alert"
+              className="mx-4 mt-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+            >
+              {advanceError} Le statut du lavage n’a pas changé. Réessayez ; si le
+              problème persiste, ouvrez la fiche du lavage.
+            </div>
+          )}
+
+          {!washesLoading && (
+            <ResponsiveTable>
+              <TableToolbar
+                search={dataTable.search}
+                onSearchChange={dataTable.setSearch}
+                searchLabel="Rechercher un lavage par référence, plaque, client ou station"
+                placeholder="Référence, plaque, client…"
+                total={dataTable.total}
+                filtered={dataTable.filtered.length}
+                columns={tableColumns}
+                hiddenColumns={dataTable.hiddenColumns}
+                onToggleColumn={dataTable.toggleColumn}
+                onReset={dataTable.reset}
+                activeFilterCount={dataTable.activeFilterCount + dataTable.hiddenColumns.length}
+              >
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span className="sr-only">Filtrer par statut de lavage</span>
+                  <select
+                    value={dataTable.filters.status ?? ""}
+                    onChange={(event) => dataTable.setFilter("status", event.target.value)}
+                    className="h-9 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+                  >
+                    <option value="">Tous les statuts</option>
+                    <option value="pending">En attente</option>
+                    <option value="in_progress">En cours</option>
+                    <option value="overtime">En retard</option>
+                    <option value="done">Terminé</option>
+                    <option value="cancelled">Annulé</option>
+                  </select>
+                </label>
+                {activeSites.length > 1 && (
+                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span className="sr-only">Filtrer par station</span>
+                    <select
+                      value={dataTable.filters.site ?? ""}
+                      onChange={(event) => dataTable.setFilter("site", event.target.value)}
+                      className="h-9 max-w-44 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+                    >
+                      <option value="">Toutes les stations</option>
+                      {activeSites.map((site) => (
+                        <option key={site.id} value={site.id}>
+                          {site.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </TableToolbar>
+
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Référence</TableHead>
-                    <TableHead>Plaque</TableHead>
-                    <TableHead>Site</TableHead>
-                    <TableHead>Catégorie</TableHead>
-                    <TableHead className="text-right">Total</TableHead>
-                    <TableHead>Statut</TableHead>
-                    <TableHead>Paiement</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead><span className="sr-only">Détail</span></TableHead>
+                    {!dataTable.isColumnHidden("reference") && (
+                      <SortableHead
+                        label="Référence"
+                        column="reference"
+                        sort={dataTable.sort}
+                        onSort={dataTable.toggleSort}
+                      />
+                    )}
+                    {!dataTable.isColumnHidden("plate") && (
+                      <SortableHead
+                        label="Plaque"
+                        column="plate"
+                        sort={dataTable.sort}
+                        onSort={dataTable.toggleSort}
+                      />
+                    )}
+                    {!dataTable.isColumnHidden("site") && (
+                      <SortableHead
+                        label="Station"
+                        column="site"
+                        sort={dataTable.sort}
+                        onSort={dataTable.toggleSort}
+                      />
+                    )}
+                    {!dataTable.isColumnHidden("category") && (
+                      <SortableHead
+                        label="Catégorie"
+                        column="category"
+                        sort={dataTable.sort}
+                        onSort={dataTable.toggleSort}
+                      />
+                    )}
+                    {!dataTable.isColumnHidden("total") && (
+                      <SortableHead
+                        label="Total"
+                        column="total"
+                        sort={dataTable.sort}
+                        onSort={dataTable.toggleSort}
+                        align="right"
+                      />
+                    )}
+                    {!dataTable.isColumnHidden("status") && (
+                      <TableHead>Statut</TableHead>
+                    )}
+                    {!dataTable.isColumnHidden("payment") && (
+                      <SortableHead
+                        label="Paiement"
+                        column="payment"
+                        sort={dataTable.sort}
+                        onSort={dataTable.toggleSort}
+                      />
+                    )}
+                    {!dataTable.isColumnHidden("date") && (
+                      <SortableHead
+                        label="Date"
+                        column="date"
+                        sort={dataTable.sort}
+                        onSort={dataTable.toggleSort}
+                      />
+                    )}
+                    <TableHead>
+                      <span className="sr-only">Détail</span>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {washes.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={8} className="p-0">
-                        <EmptyState
-                          icon={Droplets}
-                          title="Aucun lavage enregistré"
-                          description="Enregistrez votre premier lavage : il apparaîtra ici avec sa référence, son montant et son statut de paiement."
-                        />
-                      </TableCell>
-                    </TableRow>
+                  {washesError && (
+                    <TableErrorRow
+                      colSpan={9}
+                      message={washesError}
+                      onRetry={() => setRefreshKey((key) => key + 1)}
+                    />
                   )}
-                  {washes.map((wash, index) => (
-                    <TableRow
-                      key={wash.id}
-                      className={`row-in transition-colors hover:bg-muted/40 ${wash.id === highlightedWashId ? "row-flash" : ""}`}
-                      style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
-                    >
-                      <TableCell className="font-medium">
-                        <WashReference washId={wash.id} reference={wash.reference} />
-                      </TableCell>
-                      <TableCell className="font-mono text-xs uppercase tabular-nums">{wash.plate ?? "—"}</TableCell>
-                      <TableCell>{allSites.find((site) => site.id === wash.site_id)?.name ?? "—"}</TableCell>
-                      <TableCell>{activeCategories.find((category) => category.id === wash.vehicle_category_id)?.name ?? "—"}</TableCell>
-                      <TableCell className="text-right">{formatXof(wash.total_cents)}</TableCell>
-                      <TableCell>
-                        <OperationStatusBadge
-                          status={currentOperationStatus(wash.id)}
-                          cancelled={wash.status === "cancelled"}
-                          canAdvance={advanceStatus.allowed}
-                          busy={advancingWashIds.includes(wash.id)}
-                          onAdvance={(next) => void advanceWashStatus(wash.id, next)}
-                        />
-                      </TableCell>
-                      <TableCell>{paymentStatusLabel(wash.payment_status)}</TableCell>
-                      <TableCell>{new Date(wash.created_at).toLocaleString("fr-CI")}</TableCell>
-                      <TableCell>
-                        <Button
-                          render={<Link to={`/washes/${wash.id}`} viewTransition />}
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`Voir ${wash.reference}`}
-                        >
-                          <ArrowRight className="size-4 transition-transform group-hover/button:translate-x-0.5" />
+
+                  {!washesError && washes.length === 0 && (
+                    <TableEmptyRow
+                      colSpan={9}
+                      icon={Droplets}
+                      title="Aucun lavage enregistré"
+                      description="Enregistrez votre premier lavage : il apparaîtra ici avec sa référence, son montant et son statut de paiement."
+                      action={
+                        <Button size="sm" onClick={() => setFormOpen(true)}>
+                          <Plus className="size-4" aria-hidden="true" />
+                          Enregistrer un lavage
                         </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                      }
+                    />
+                  )}
+
+                  {!washesError && washes.length > 0 && dataTable.filtered.length === 0 && (
+                    <TableEmptyRow
+                      colSpan={9}
+                      icon={Droplets}
+                      title="Aucun lavage ne correspond à ces filtres"
+                      description="Aucune opération ne correspond à la recherche ou aux filtres actifs. Vos données n’ont pas été modifiées."
+                      action={
+                        <Button variant="outline" size="sm" onClick={dataTable.reset}>
+                          Réinitialiser les filtres
+                        </Button>
+                      }
+                    />
+                  )}
+
+                  {dataTable.pageRows.map((wash, index) => {
+                    return (
+                      <TableRow
+                        key={wash.id}
+                        className={`row-in transition-colors hover:bg-muted/40 ${
+                          wash.id === highlightedWashId ? "row-flash" : ""
+                        }`}
+                        style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
+                      >
+                        {!dataTable.isColumnHidden("reference") && (
+                          <TableCell data-label="Référence" className="font-medium">
+                            <WashReference washId={wash.id} reference={wash.reference} />
+                          </TableCell>
+                        )}
+                        {!dataTable.isColumnHidden("plate") && (
+                          <TableCell
+                            data-label="Plaque"
+                            className="font-mono text-xs uppercase tabular-nums"
+                          >
+                            {wash.plate ?? "—"}
+                          </TableCell>
+                        )}
+                        {!dataTable.isColumnHidden("site") && (
+                          <TableCell data-label="Station">{siteName(wash.site_id)}</TableCell>
+                        )}
+                        {!dataTable.isColumnHidden("category") && (
+                          <TableCell data-label="Catégorie">
+                            {categoryName(wash.vehicle_category_id)}
+                          </TableCell>
+                        )}
+                        {!dataTable.isColumnHidden("total") && (
+                          <TableCell data-label="Total" className="text-right font-medium tabular-nums">
+                            {formatXof(wash.total_cents)}
+                          </TableCell>
+                        )}
+                        {!dataTable.isColumnHidden("status") && (
+                          <TableCell data-label="Statut">
+                            <OperationStatusBadge
+                              status={currentOperationStatus(wash.id)}
+                              cancelled={wash.status === "cancelled"}
+                              canAdvance={advanceStatus.allowed}
+                              busy={advancingWashIds.includes(wash.id)}
+                              onAdvance={(next) => void advanceWashStatus(wash.id, next)}
+                            />
+                          </TableCell>
+                        )}
+                        {!dataTable.isColumnHidden("payment") && (
+                          <TableCell data-label="Paiement">
+                            {paymentStatusLabel(wash.payment_status)}
+                          </TableCell>
+                        )}
+                        {!dataTable.isColumnHidden("date") && (
+                          <TableCell data-label="Date" className="text-muted-foreground">
+                            <time dateTime={wash.created_at}>
+                              {formatDateTime(wash.created_at)}
+                            </time>
+                          </TableCell>
+                        )}
+                        <TableCell data-label="">
+                          <Button
+                            render={<Link to={`/washes/${wash.id}`} viewTransition />}
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Voir le détail du lavage ${wash.reference}`}
+                          >
+                            <ArrowRight
+                              className="size-4 transition-transform group-hover/button:translate-x-0.5"
+                              aria-hidden="true"
+                            />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
-            </div>
+
+              {dataTable.filtered.length > 0 && (
+                <TablePagination
+                  page={dataTable.page}
+                  pageCount={dataTable.pageCount}
+                  pageSize={dataTable.pageSize}
+                  pageSizeOptions={dataTable.pageSizeOptions}
+                  total={dataTable.total}
+                  filtered={dataTable.filtered.length}
+                  onPage={dataTable.setPage}
+                  onPageSize={dataTable.setPageSize}
+                />
+              )}
+            </ResponsiveTable>
           )}
         </section>
       </div>

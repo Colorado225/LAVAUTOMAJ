@@ -105,21 +105,9 @@ export interface OnboardingSummary {
   org_name: string;
 }
 
-export const STAGES = [
-  "station",
-  "services",
-  "workers",
-  "plan",
-  "review",
-] as const;
-
-export const STAGE_LABELS: Record<string, string> = {
-  station: "Station",
-  services: "Services",
-  workers: "Travailleurs",
-  plan: "Forfait",
-  review: "Confirmation",
-};
+// Étapes et libellés : `onboarding-stages.ts` (module pur, sans React), ré-exportés
+// ici pour les appelants existants.
+export { STAGES, STAGE_LABELS, type OnboardingStage } from "./onboarding-stages";
 
 export function useOnboardingStatus() {
   return useApi<OnboardingStatus>("/api/v1/onboarding/status");

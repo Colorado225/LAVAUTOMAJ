@@ -112,6 +112,25 @@ de la liste en supprimant ses sessions. Le journal l'indique :
 Rendez-vous ensuite sur **`/console`** et connectez-vous. Variable vide ⇒
 console entièrement fermée, y compris sa page de connexion.
 
+### Changer le mot de passe d'un opérateur
+
+`PLATFORM_ADMIN_PASSWORD` ne sert **qu'à l'amorçage** : il ne réécrit jamais un
+mot de passe existant. Pour en changer, ou pour en donner un à un compte
+d'opérateur créé sans mot de passe :
+
+```bash
+# Arrêter le serveur si la base est la base embarquée (PGlite : un seul
+# processus peut l'ouvrir à la fois), puis :
+npm run console:password -- vous@exemple.ci
+npm run console:password -- vous@exemple.ci "MonNouveauMotDePasse"
+```
+
+Sans second argument, un secret est tiré au hasard et affiché une seule fois.
+La commande crée le compte s'il n'existe pas, le réactive, et **ferme ses
+sessions ouvertes** — un ancien secret ne peut pas continuer à s'en servir.
+Elle applique le schéma et réaligne les opérateurs sur
+`PLATFORM_ADMIN_EMAILS`, exactement comme un démarrage du serveur.
+
 ### Ces comptes n'ont rien à voir avec les comptes de station
 
 C'est le changement de fond de cette version. Auparavant, le droit

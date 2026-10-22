@@ -37,6 +37,8 @@ import type { OnboardingSummary } from "@/lib/onboarding-api"
 import type { CurrentMember, OrganizationAccount, WorkerInput, WorkerRecord, WorkerRole } from "@/lib/team-api"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
+import { ResponsiveTable } from "@/components/ui/data-table"
+import { formatDate } from "@/lib/format"
 import { Search, UserPlus, Users, RefreshCw, Pencil, UserRoundX, UserRoundCheck } from "lucide-react"
 
 const roleLabels: Record<WorkerRole, string> = {
@@ -307,7 +309,7 @@ export default function TeamPage() {
             {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
             {loading && <TableSkeleton rows={5} cols={6} label="Chargement de l’équipe" />}
             {!loading && !error && (
-              <div className="overflow-x-auto rounded-lg border">
+              <ResponsiveTable className="rounded-lg border">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -332,6 +334,14 @@ export default function TeamPage() {
                                 ? "Ajoutez l’équipe de votre station pour pouvoir attribuer les lavages et suivre les performances."
                                 : "Aucun travailleur ne correspond à ces filtres. Modifiez la recherche ou le statut."
                             }
+                            action={
+                              workers.length === 0 && canManage ? (
+                                <Button size="sm" onClick={openCreateDialog} disabled={teamForm.disabled} title={teamForm.reason ?? undefined}>
+                                  <UserPlus className="size-4" aria-hidden="true" />
+                                  Ajouter un travailleur
+                                </Button>
+                              ) : undefined
+                            }
                           />
                         </TableCell>
                       </TableRow>
@@ -346,16 +356,16 @@ export default function TeamPage() {
                         }`}
                         style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
                       >
-                        <TableCell>
+                        <TableCell data-label="Travailleur">
                           <div className="font-medium">{worker.first_name} {worker.last_name}</div>
                         </TableCell>
-                        <TableCell>{roleLabel(worker)}</TableCell>
-                        <TableCell>{worker.phone || "—"}</TableCell>
-                        <TableCell>{worker.district || "—"}</TableCell>
-                        <TableCell>{worker.joined_at ? new Date(`${worker.joined_at}T00:00:00Z`).toLocaleDateString("fr-CI", { timeZone: "Africa/Abidjan" }) : "—"}</TableCell>
-                        <TableCell><Badge variant={worker.status === "active" ? "secondary" : "outline"}>{worker.status === "active" ? "Actif" : "Inactif"}</Badge></TableCell>
+                        <TableCell data-label="Fonction">{roleLabel(worker)}</TableCell>
+                        <TableCell data-label="Téléphone">{worker.phone || "—"}</TableCell>
+                        <TableCell data-label="Quartier">{worker.district || "—"}</TableCell>
+                        <TableCell data-label="Entrée">{worker.joined_at ? formatDate(`${worker.joined_at}T00:00:00Z`) : "—"}</TableCell>
+                        <TableCell data-label="Statut"><Badge variant={worker.status === "active" ? "secondary" : "outline"}>{worker.status === "active" ? "Actif" : "Inactif"}</Badge></TableCell>
                         {canManage && (
-                          <TableCell>
+                          <TableCell data-label="Actions">
                             <div className="flex justify-end gap-1">
                               <Button variant="ghost" size="icon" disabled={teamEdit.disabled} title={teamEdit.reason ?? undefined} aria-label={`Modifier ${worker.first_name} ${worker.last_name}`} onClick={() => openEditDialog(worker)}>
                                 <Pencil className="size-4" />
@@ -370,7 +380,7 @@ export default function TeamPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+              </ResponsiveTable>
             )}
           </CardContent>
         </Card>
