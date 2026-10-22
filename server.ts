@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express"
 import type { Request, Response } from "express"
 import cors from "cors"
+import http from "node:http"
 import path from "node:path"
 import fs from "node:fs"
 import { fileURLToPath } from "node:url"
@@ -99,10 +100,21 @@ async function startServer() {
     console.warn("[demo] Static mock data endpoints have been removed. ENABLE_LEGACY_DEMO_API is ignored.")
   }
 
+  const server = http.createServer(app)
+
   if (!isProd) {
     const { createServer: createViteServer } = await import("vite")
     const vite = await createViteServer({
-      server: { middlewareMode: true, host: "0.0.0.0", port, allowedHosts: true },
+      server: {
+        middlewareMode: true,
+        host: "0.0.0.0",
+        port,
+        allowedHosts: true,
+        // Attach HMR to the same HTTP server as Express. Without this,
+        // Vite creates a separate WebSocket endpoint that the preview proxy
+        // cannot keep open, producing "WebSocket closed without opened".
+        hmr: { server },
+      },
       appType: "spa",
     })
     app.use(vite.middlewares)
@@ -116,7 +128,7 @@ async function startServer() {
     })
   }
 
-  const server = app.listen(port, "0.0.0.0", () => {
+  server.listen(port, "0.0.0.0", () => {
     console.info(`WashPilot CI server listening on 0.0.0.0:${port}`)
   })
 
