@@ -42,3 +42,6 @@ backups/
 
 # Outil de génération des visuels de marque (Python)
 __pycache__/
+
+# Artefact des fonctions serverless (généré par npm run build:api)
+server/vercel-bundle.js

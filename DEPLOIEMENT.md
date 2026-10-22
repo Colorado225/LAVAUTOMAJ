@@ -29,7 +29,7 @@ quoi faire. Un service qui ne démarre pas se remarque ; une base vide, non.
 | | |
 | --- | --- |
 | Un PostgreSQL | version 14 ou plus, accessible et sauvegardé |
-| Un endroit où faire tourner un conteneur | une machine, ou un hébergeur qui accepte une image |
+| Un endroit où faire tourner l'application | une machine, un hébergeur de conteneurs, ou Vercel (voir §4 bis) |
 | Un nom de domaine en HTTPS | les cookies de session l'exigent en production |
 
 L'application ne stocke aucun fichier : tout vit dans la base. Il n'y a donc
@@ -137,6 +137,103 @@ l'ancienne version s'arrêter avant de lancer la nouvelle.
 
 ---
 
+## 4 bis. Déploiement sur Vercel (interface et API sur le même domaine)
+
+Vercel ne fait pas tourner de serveur : il sert des fichiers statiques et
+exécute des fonctions à la demande. Déployée telle quelle, l'application ne
+servait donc **que** l'interface (`dist/`), et chaque appel `/api/v1/...`
+retombait sur la page d'accueil : d'où les 404 observés en production.
+
+Le dépôt contient maintenant de quoi servir l'API au même domaine :
+
+| Fichier | Rôle |
+| --- | --- |
+| `api/[...slug].ts` | reçoit `/api/...` et le confie à Express |
+| `api/index.ts` | couvre `/api` et `/api/healthz` |
+| `server/vercel-app.ts` | la pile Express, identique à celle du serveur classique |
+| `server/vercel-url.ts` | reconstitue le chemin, que Vercel ne transmet pas tel quel |
+| `scripts/build-api.mjs` | empaquette l'API en un fichier (`npm run build:api`) |
+| `vercel.json` | construction, réécriture SPA, en-têtes, cron des relances |
+
+Deux points méritent d'être connus, parce qu'ils expliquent la conception :
+
+- **Le chemin est reconstitué.** Une fonction de `api/` ne reçoit pas l'URL
+  demandée : Vercel lui donne `/api` et place les segments dans `req.query.slug`.
+  Express, lui, route sur l'URL. Sans reconstitution, toutes les routes
+  répondent 404 — c'est précisément la panne constatée. `server/vercel-url.ts`
+  s'en charge, et c'est testé (`tests/vercel-url.test.ts`).
+- **L'API est empaquetée.** Le code serveur importe ses voisins en `.ts`
+  explicite (`./db.ts`), ce que `tsx` comprend mais que le runtime de Vercel ne
+  résout pas fichier par fichier. `npm run build:api` produit un bundle unique,
+  que les fonctions de `api/` importent. La construction complète est donc
+  `npm run build:vercel`.
+
+### Les variables à renseigner chez Vercel
+
+Dans *Settings → Environment Variables* (cocher **Production** et
+**Preview**) :
+
+| Variable | Valeur |
+| --- | --- |
+| `DATABASE_URL` | la chaîne `postgres://…` fournie par Neon (ajouter `?sslmode=require`) |
+| `APP_URL` | `https://<projet>.vercel.app` |
+| `CORS_ORIGINS` | la même adresse |
+| `PLATFORM_ADMIN_EMAILS` | adresses des opérateurs de la console |
+| `PLATFORM_ADMIN_PASSWORD` | mot de passe initial du premier opérateur |
+| `CRON_SECRET` | une chaîne aléatoire longue (`openssl rand -hex 32`) |
+
+`NODE_ENV=production` est positionnée par la plateforme. Les variables
+d'e-mail (`RESEND_API_KEY`, `MAIL_FROM`) restent facultatives.
+
+**Sans `DATABASE_URL`, l'API ne démarre pas** : c'est la même protection que
+pour le conteneur, et elle est visible immédiatement — la sonde `/api/healthz`
+répond `200` avec `"database":"unavailable"`, toute autre route répond `503`
+avec un message qui nomme la variable manquante. Rien n'est servi sur une base
+embarquée : celle-ci n'existe pas sur Vercel, où le disque est en lecture
+seule et éphémère.
+
+### Après le premier déploiement
+
+```bash
+curl https://<projet>.vercel.app/api/healthz
+# {"status":"ok","database":"ready"}
+
+curl -i https://<projet>.vercel.app/api/v1/public/pricing
+# 200, Cache-Control: private, no-store
+```
+
+Si `/api/healthz` renvoie la page HTML de l'application, la fonction n'a pas
+été détectée : vérifiez que le dossier `api/` est bien déployé et que
+`vercel.json` est à la racine.
+
+### Les relances d'échéance
+
+Un processus serverless s'endort entre deux requêtes : il ne peut pas porter
+de minuteur. `vercel.json` déclare donc un cron quotidien (8 h UTC) sur
+`/api/v1/cron/reminders`, que la plateforme appelle avec
+`Authorization: Bearer $CRON_SECRET`. Sans `CRON_SECRET`, la route répond
+`503` et n'envoie rien — un déclencheur ouvert permettrait d'inonder les
+clients d'e-mails.
+
+> Sur l'offre gratuite, le cron ne peut passer qu'une fois par jour. Les
+> relances J-3 / J-1 / expiration restent correctes ; elles partent simplement
+> une fois par jour au lieu de toutes les heures.
+
+### Vérifier avant de déployer
+
+```bash
+npm run smoke:serverless
+```
+
+Ce test démarre un serveur qui imite le runtime de Vercel (chemin dans
+`req.query.slug`, corps JSON déjà analysé, aucun fichier statique), charge
+l'artefact réellement déployé, et rejoue tout le parcours d'encaissement :
+inscription, catalogue, caisse, lavage, paiement, reçu, console. C'est le seul
+contrôle capable d'attraper une régression de routage avant la production —
+`npm run dev` ne le peut pas, puisqu'Express y reçoit l'URL d'origine.
+
+---
+
 ## 5. Mise en route de la première station
 
 1. Ouvrir l'adresse publique, créer le compte — l'essai de 14 jours démarre.
@@ -156,6 +253,11 @@ Honnêtement, et parce que cela se découvre mal en production :
 | --- | --- |
 | Limitation des tentatives de connexion | comptée dans la mémoire de chaque serveur : la protection est divisée par le nombre d'instances |
 | Relances d'échéance d'abonnement | chaque instance a son propre minuteur : le client reçoit l'e-mail en double |
+
+Sur Vercel (§4 bis), le minuteur est remplacé par un cron : une seule
+invocation planifiée, donc pas de doublon. La limitation des tentatives de
+connexion, elle, reste comptée par instance — sur une plateforme serverless,
+cela revient à une protection plus faible qu'annoncé.
 
 **Une seule instance ne pose aucun problème**, et c'est amplement suffisant
 pour les volumes visés. Avant de passer à plusieurs, il faudra déplacer ces

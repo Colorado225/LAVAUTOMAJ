@@ -83,6 +83,16 @@ const schema = z.object({
    * recréerait, avec leur mot de passe public.
    */
   SEED_DEMO_DATA: z.string().trim().optional().default(""),
+
+  /**
+   * Secret du déclencheur de relances (`POST /api/v1/cron/reminders`).
+   *
+   * Sur un hébergement serverless, aucun processus ne vit assez longtemps pour
+   * porter une horloge : les relances d'échéance sont déclenchées par le cron
+   * de la plateforme. Sans ce secret, la route n'existe pas — un déclencheur
+   * ouvert permettrait d'envoyer des e-mails aux clients à volonté.
+   */
+  CRON_SECRET: z.string().trim().optional().default(""),
 })
 
 const parsed = schema.safeParse(process.env)
