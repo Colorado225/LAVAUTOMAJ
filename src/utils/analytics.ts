@@ -19,14 +19,15 @@ const IS_PRODUCTION = import.meta.env.PROD
  */
 export const initGTM = (): void => {
   if (!GTM_ID) {
-    console.log(
+    // Information et non erreur : en dev, on n'a simplement pas de GTM.
+    console.debug(
       "GTM not initialized - VITE_GTM_ID environment variable not set"
     )
     return
   }
 
   if (!IS_PRODUCTION) {
-    console.log("GTM not initialized - running in development mode")
+    console.debug("GTM not initialized - running in development mode")
     return
   }
 

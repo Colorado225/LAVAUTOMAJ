@@ -44,11 +44,20 @@ function Button({
   className,
   variant = "default",
   size = "default",
+  nativeButton,
   ...props
 }: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+  // Quand on rend autre chose qu'un <button> (ex. `render={<Link …/>}`),
+  // la sémantique native du bouton disparaît : on prévient Base UI pour
+  // qu'il réapplique role="button" et la gestion clavier — sinon un
+  // avertissement d'accessibilité est émis à chaque montage. Un appelant
+  // peut toujours forcer la valeur via `nativeButton`.
+  const isRenderProp = props.render !== undefined
+
   return (
     <ButtonPrimitive
       data-slot="button"
+      nativeButton={nativeButton ?? (isRenderProp ? false : undefined)}
       /* `data-size` sert aux règles tactiles (44 px sur pointeur grossier) :
          sans lui, un bouton icône reste une cible de 28 px au doigt. */
       data-size={size}
