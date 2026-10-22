@@ -14,6 +14,9 @@ import {
   Clock3,
   Download,
   ArrowUpRight,
+  AlertTriangle,
+  ClipboardList,
+  Package,
 } from 'lucide-react'
 import {
   Area,
@@ -324,7 +327,7 @@ export default function DashboardPage() {
       title="Tableau de bord"
       description="Pilotez votre station de lavage en un coup d'œil."
     >
-      <main className="flex min-w-0 flex-1 flex-col gap-6 p-4 md:p-6 xl:p-8">
+        <main className="flex min-w-0 flex-1 flex-col gap-10 p-4 md:p-6 xl:p-8">
         {/* Header */}
         <section className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
           <div className="min-w-0 space-y-2">
@@ -413,13 +416,93 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {/* Primary metrics */}
-        <section className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
+        {/* Action-first workspace: les décisions du jour avant les statistiques. */}
+        <section aria-labelledby="priorites-du-jour" className="space-y-5">
+          <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold tracking-tight">
-                Indicateurs clés
-              </h2>
+              <div className="flex items-center gap-2">
+                <span className="rounded-lg bg-primary/10 p-2 text-primary">
+                  <ClipboardList className="size-4" aria-hidden="true" />
+                </span>
+                <h2 id="priorites-du-jour" className="text-lg font-semibold tracking-tight">
+                  Priorités du jour
+                </h2>
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Les actions opérationnelles à traiter en premier.
+              </p>
+            </div>
+            <Badge variant="secondary">Vue action</Badge>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Link
+              to="/washes"
+              viewTransition
+              className="surface-3d group rounded-2xl bg-card p-4 transition-all duration-200 hover:-translate-y-1 hover:bg-accent"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <span className="rounded-xl bg-primary/15 p-2.5 text-primary transition-transform duration-200 group-hover:scale-110">
+                  <CarFront className="size-5" aria-hidden="true" />
+                </span>
+                <ArrowUpRight className="size-4 text-muted-foreground transition-transform duration-200 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" aria-hidden="true" />
+              </div>
+              <p className="mt-4 font-semibold">Lavages en cours</p>
+              <p className="mt-1 text-sm text-muted-foreground">Ouvrir la file et faire avancer les tâches.</p>
+            </Link>
+
+            <Link
+              to="/cash-drawer"
+              viewTransition
+              className="surface-3d group rounded-2xl bg-card p-4 transition-all duration-200 hover:-translate-y-1 hover:bg-accent"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <span className={`rounded-xl p-2.5 ${cashSession ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'}`}>
+                  <Banknote className="size-5" aria-hidden="true" />
+                </span>
+                <Badge variant={cashSession ? 'secondary' : 'outline'}>{cashSession ? 'Ouverte' : 'À ouvrir'}</Badge>
+              </div>
+              <p className="mt-4 font-semibold">Caisse</p>
+              <p className="mt-1 text-sm text-muted-foreground">{cashSession ? `Solde ${formatFCFA(cashSession.theoretical_balance_cents)}.` : 'Ouvrez la caisse avant les encaissements.'}</p>
+            </Link>
+
+            <Link
+              to="/stock"
+              viewTransition
+              className="surface-3d group rounded-2xl bg-card p-4 transition-all duration-200 hover:-translate-y-1 hover:bg-accent"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <span className="rounded-xl bg-muted p-2.5 text-warning transition-transform duration-200 group-hover:scale-110">
+                  <Package className="size-5" aria-hidden="true" />
+                </span>
+                <AlertTriangle className="size-4 text-orange-500" aria-hidden="true" />
+              </div>
+              <p className="mt-4 font-semibold">Alerte stock</p>
+              <p className="mt-1 text-sm text-muted-foreground">Vérifier les consommables et les seuils bas.</p>
+            </Link>
+
+            <Link
+              to="/washes"
+              viewTransition
+              className="surface-3d group rounded-2xl bg-card p-4 transition-all duration-200 hover:-translate-y-1 hover:bg-accent"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <span className="rounded-xl bg-muted p-2.5 text-warning transition-transform duration-200 group-hover:scale-110">
+                  <Clock3 className="size-5" aria-hidden="true" />
+                </span>
+                <Badge variant="outline">À traiter</Badge>
+              </div>
+              <p className="mt-4 font-semibold">Tâches urgentes</p>
+              <p className="mt-1 text-sm text-muted-foreground">Traiter les lavages en attente ou en dépassement.</p>
+            </Link>
+          </div>
+        </section>
+
+        {/* Secondary metrics: conservées plus bas pour ne pas masquer les actions. */}
+        <section className="space-y-5">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold tracking-tight">Indicateurs clés</h2>
               <p className="text-sm text-muted-foreground">
                 {PERIOD_LABELS[period]} · Synthèse de votre station
               </p>
@@ -427,12 +510,12 @@ export default function DashboardPage() {
             <Badge variant="outline">Données opérationnelles</Badge>
           </div>
 
-          {/* key force le re-chargement des métriques lors de l'actualisation */}
+          {/* key force le re-chargement des métriques lors de l’actualisation */}
           <DashboardMetrics key={refreshKey} />
         </section>
 
         {/* Finance and operations overview */}
-        <section className="space-y-3">
+        <section className="space-y-5">
           <div>
             <h2 className="text-lg font-semibold tracking-tight">
               Finances et activité

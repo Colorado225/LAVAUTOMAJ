@@ -19,7 +19,7 @@ function Card({
         "group/card flex flex-col gap-(--card-spacing) rounded-xl bg-card py-(--card-spacing) text-sm text-card-foreground [--card-spacing:--spacing(4)] has-[>[data-slot=card-footer]]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-[>[data-slot=card-footer]]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
         // `overflow-hidden` rognerait l'ombre portée du pseudo-élément
         // `::after` : on ne le garde que sur les cartes statiques.
-        interactive ? "surface-3d" : "elev-1 overflow-hidden",
+        interactive ? "surface-3d interactive-scale" : "elev-1 overflow-hidden transition-[border-color,box-shadow] duration-200 hover:border-primary/25",
         className
       )}
       {...props}

@@ -42,7 +42,7 @@ const data = {
   },
   navGroups: [
     {
-      label: "Principal",
+      label: "Opérations",
       items: [
         {
           title: "Tableau de bord",
@@ -205,6 +205,23 @@ function filterNav(items: NavEntry[], can: (permission: Permission) => boolean):
     .filter((item) => !item.items || item.items.length > 0 || item.url !== "#")
 }
 
+const sectionByTitle: Record<string, string> = {
+  "Tableau de bord": "Opérations",
+  "Nouveau lavage": "Opérations",
+  "Stock": "Opérations",
+  "Achats": "Opérations",
+  "Rapports": "Opérations",
+  "Historique": "Opérations",
+  "Encaissements": "Finance",
+  "Caisse": "Finance",
+  "Dépenses": "Finance",
+  "Équipe du jour": "Équipe",
+  "Horaires": "Équipe",
+  "Rendement": "Équipe",
+  "Équipe": "Équipe",
+  "Catalogue": "Configuration",
+}
+
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { data: status } = useOnboardingStatus()
   const { can, loading: permissionsLoading } = usePermissions()
@@ -229,15 +246,25 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        {data.navGroups.map((group) => {
-          // Tant que les permissions ne sont pas chargées, on n'affiche rien
-          // plutôt qu'un menu complet qui se réduirait sous les yeux.
-          const items = permissionsLoading
+        {(() => {
+          const sourceItems = permissionsLoading
             ? []
-            : (filterNav(group.items as NavEntry[], can) as NavItems)
-          if (items.length === 0) return null
-          return <NavMain key={group.label} label={group.label} items={items} />
-        })}
+            : (filterNav(data.navGroups[0].items as NavEntry[], can) as NavItems)
+          const grouped = sourceItems.reduce<Record<string, NavItems>>((groups, item) => {
+            const label = sectionByTitle[item.title] ?? "Configuration"
+            ;(groups[label] ??= []).push(item)
+            return groups
+          }, {})
+          const configItems = permissionsLoading
+            ? []
+            : (filterNav(data.navGroups[1].items as NavEntry[], can) as NavItems)
+          grouped.Configuration = [...(grouped.Configuration ?? []), ...configItems]
+          return ["Opérations", "Équipe", "Finance", "Configuration"].map((label) => {
+            const items = grouped[label] ?? []
+            if (items.length === 0) return null
+            return <NavMain key={label} label={label} items={items} />
+          })
+        })()}
       </SidebarContent>
       <SidebarFooter>
         <TrialCountdown />
