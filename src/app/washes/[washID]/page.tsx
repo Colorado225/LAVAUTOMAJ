@@ -286,7 +286,7 @@ export default function WashDetailPage() {
   const vehicleCategoryName = categories?.find((category) => category.id === wash?.vehicle_category_id)?.name ?? "—"
 
   return (
-    <BaseLayout title="Détail du lavage" description="Détail et historique d’un lavage.">
+    <BaseLayout title="Détail du lavage" description="Détail et historique d’un lavage." hideHeading>
       <div className="space-y-6 p-4">
         <div>
           <Button render={<Link to="/washes" viewTransition />} variant="ghost" className="group -ml-2 mb-3">
@@ -329,7 +329,7 @@ export default function WashDetailPage() {
                 <p className="font-semibold">{wash?.reference}</p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Site</p>
+                <p className="text-xs text-muted-foreground">Station</p>
                 <p className="font-semibold">{siteName}</p>
               </div>
               <div>

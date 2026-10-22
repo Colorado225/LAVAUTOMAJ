@@ -32,6 +32,8 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
+import { ResponsiveTable, TablePagination } from "@/components/ui/data-table"
+import { formatDateTime } from "@/lib/format"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useApi } from "@/lib/api"
 import {
@@ -45,8 +47,6 @@ import {
 } from "@/lib/audit-api"
 import {
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Download,
   History,
   RotateCcw,
@@ -72,16 +72,9 @@ function shiftDate(date: string, days: number) {
   return next.toISOString().slice(0, 10)
 }
 
-/** « 18 oct. 2026, 14:32 » — la minute suffit à reconstituer une séquence. */
+/** « 18 oct. 2026, 14:32 » — mise en forme partagée par toute l'application. */
 function formatMoment(iso: string) {
-  return new Intl.DateTimeFormat("fr-CI", {
-    timeZone: "Africa/Abidjan",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(iso))
+  return formatDateTime(iso)
 }
 
 function csvCell(value: string | number) {
@@ -355,9 +348,18 @@ export default function HistoryPage() {
                       ? "Aucune opération ne correspond à ces filtres. Élargissez la période ou réinitialisez."
                       : "Les encaissements, remboursements, clôtures de caisse et changements de droits apparaîtront ici au fil de l’activité."
                   }
+                  action={
+                    filtered ? (
+                      <Button variant="outline" size="sm" onClick={resetFilters}>
+                        <RotateCcw className="mr-1.5 size-3.5" aria-hidden="true" />
+                        Réinitialiser les filtres
+                      </Button>
+                    ) : undefined
+                  }
                 />
               </div>
             ) : (
+              <ResponsiveTable>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -375,10 +377,10 @@ export default function HistoryPage() {
                     return (
                       <Fragment key={entry.id}>
                         <TableRow>
-                          <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
-                            {formatMoment(entry.created_at)}
+                          <TableCell data-label="Date" className="whitespace-nowrap text-sm text-muted-foreground">
+                            <time dateTime={entry.created_at}>{formatMoment(entry.created_at)}</time>
                           </TableCell>
-                          <TableCell>
+                          <TableCell data-label="Opération">
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="font-medium">{entry.action_label}</span>
                               {entry.severity !== "info" && (
@@ -391,9 +393,9 @@ export default function HistoryPage() {
                               )}
                             </div>
                           </TableCell>
-                          <TableCell className="text-sm">{entry.entity_label}</TableCell>
-                          <TableCell className="text-sm">{entry.actor_name}</TableCell>
-                          <TableCell>
+                          <TableCell data-label="Objet" className="text-sm">{entry.entity_label}</TableCell>
+                          <TableCell data-label="Auteur" className="text-sm">{entry.actor_name}</TableCell>
+                          <TableCell data-label="">
                             {details.length > 0 && (
                               <Button
                                 variant="ghost"
@@ -411,7 +413,7 @@ export default function HistoryPage() {
                         </TableRow>
                         {isOpen && details.length > 0 && (
                           <TableRow className="bg-muted/30 hover:bg-muted/30">
-                            <TableCell colSpan={5} className="text-sm">
+                            <TableCell data-label="" colSpan={5} className="text-sm">
                               <dl className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
                                 {details.map(([key, value]) => (
                                   <div key={key} className="flex gap-2">
@@ -434,34 +436,22 @@ export default function HistoryPage() {
                   })}
                 </TableBody>
               </Table>
+              </ResponsiveTable>
             )}
           </CardContent>
         </Card>
 
-        {total > PAGE_SIZE && (
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm text-muted-foreground">
-              Page {page + 1} sur {lastPage + 1}
-            </p>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page === 0 || loading}
-                onClick={() => setPage((current) => Math.max(0, current - 1))}
-              >
-                <ChevronLeft className="mr-1 size-4" /> Précédent
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page >= lastPage || loading}
-                onClick={() => setPage((current) => Math.min(lastPage, current + 1))}
-              >
-                Suivant <ChevronRight className="ml-1 size-4" />
-              </Button>
-            </div>
-          </div>
+        {total > 0 && (
+          <TablePagination
+            page={page}
+            pageCount={lastPage + 1}
+            pageSize={PAGE_SIZE}
+            pageSizeOptions={[PAGE_SIZE]}
+            total={total}
+            filtered={total}
+            onPage={setPage}
+            onPageSize={() => {}}
+          />
         )}
       </div>
     </BaseLayout>

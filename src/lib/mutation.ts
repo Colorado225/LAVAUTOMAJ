@@ -80,8 +80,12 @@ export const DEFAULT_FAILURE = "L'opération a échoué. Réessayez."
 
 export interface MutationDeps {
   fetch: (url: string, options: RequestInit) => Promise<Response>
-  /** Demande de confirmation. Rendre `true` quand il n'y a rien à demander. */
-  confirm: (question: string) => boolean
+  /**
+   * Demande de confirmation. Rendre `true` quand il n'y a rien à demander.
+   * Peut être asynchrone : le dialogue de confirmation de l'application rend
+   * une promesse, et une écriture ne part qu'une fois la réponse connue.
+   */
+  confirm: (question: string) => boolean | Promise<boolean>
   /**
    * Met l'opération de côté pour un envoi différé. Rend `true` si elle a bien
    * été conservée. Absente en test ou quand le stockage est indisponible.
@@ -132,7 +136,7 @@ export async function performMutation<T = unknown>(
 ): Promise<MutationOutcome<T>> {
   const failure = request.failure ?? DEFAULT_FAILURE
 
-  if (request.confirm && !deps.confirm(request.confirm)) {
+  if (request.confirm && !(await deps.confirm(request.confirm))) {
     return { ok: false, data: null, error: null, success: null, cancelled: true }
   }
 

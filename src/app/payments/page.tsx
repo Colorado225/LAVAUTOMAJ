@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { Link } from "react-router-dom"
-import { ArrowRight, BadgeCheck, Clock, Wallet } from "lucide-react"
+import { ArrowRight, BadgeCheck, Clock, Loader2, Wallet } from "lucide-react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -26,12 +26,19 @@ import {
   PAYMENT_METHODS,
   PAYMENT_STATUS_LABELS,
   paymentMethodLabel,
+  type PaymentRow,
   type PaymentsResponse,
 } from "@/lib/payments-api"
-
-function formatXof(cents: number) {
-  return `${(cents / 100).toLocaleString("fr-CI", { maximumFractionDigits: 2 })} F CFA`
-}
+import {
+  ResponsiveTable,
+  SortableHead,
+  TableEmptyRow,
+  TablePagination,
+  TableToolbar,
+  useDataTable,
+  type ColumnDefinition,
+} from "@/components/ui/data-table"
+import { formatDateTime, formatXof } from "@/lib/format"
 
 const STATUS_FILTERS = [
   { value: "all", label: "Tous" },
@@ -52,8 +59,36 @@ export default function PaymentsPage() {
     reason: managePayments.reason,
     writesImmediately: true,
   })
-  const [status, setStatus] = React.useState<(typeof STATUS_FILTERS)[number]["value"]>("all")
-  const [method, setMethod] = React.useState<string>("all")
+  // Les filtres survivent au rechargement : un caissier qui ne travaille que
+  // sur un canal (Wave, par exemple) n'a pas à le choisir à chaque visite.
+  // Seules les valeurs réellement proposées sont restaurées.
+  const FILTERS_KEY = "washpilot:payments-filters"
+  const savedFilters = React.useMemo(() => {
+    try {
+      const raw = window.localStorage.getItem(FILTERS_KEY)
+      return raw ? (JSON.parse(raw) as { status?: string; method?: string }) : {}
+    } catch {
+      return {}
+    }
+  }, [])
+  const [status, setStatus] = React.useState<(typeof STATUS_FILTERS)[number]["value"]>(
+    STATUS_FILTERS.some((filter) => filter.value === savedFilters.status)
+      ? (savedFilters.status as (typeof STATUS_FILTERS)[number]["value"])
+      : "all",
+  )
+  const [method, setMethod] = React.useState<string>(
+    savedFilters.method && savedFilters.method !== "all"
+      ? savedFilters.method
+      : "all",
+  )
+
+  React.useEffect(() => {
+    try {
+      window.localStorage.setItem(FILTERS_KEY, JSON.stringify({ status, method }))
+    } catch {
+      // Sans stockage, les filtres valent pour la session.
+    }
+  }, [status, method])
   const [refreshKey, setRefreshKey] = React.useState(0)
   // Une seule écriture à la fois sur cette page : le contrôleur porte la
   // ligne occupée et le message d'échec.
@@ -83,6 +118,42 @@ export default function PaymentsPage() {
   }
 
   const totals = data?.totals_by_method ?? []
+
+  const tableColumns: ColumnDefinition[] = [
+    { id: "wash", label: "Lavage", required: true },
+    { id: "method", label: "Canal" },
+    { id: "amount", label: "Montant" },
+    { id: "status", label: "Statut" },
+    { id: "date", label: "Date" },
+    { id: "action", label: "Action" },
+  ]
+
+  const table = useDataTable<PaymentRow>({
+    storageKey: "washpilot:table:encaissements",
+    rows: data?.payments ?? [],
+    columns: tableColumns,
+    initialSort: { column: "date", direction: "desc" },
+    searchText: (payment) =>
+      [
+        payment.wash_reference,
+        paymentMethodLabel(payment.method),
+        PAYMENT_STATUS_LABELS[payment.status] ?? payment.status,
+        payment.reference ?? "",
+      ].join(" "),
+    sorters: {
+      wash: (a, b) => a.wash_reference.localeCompare(b.wash_reference),
+      method: (a, b) => paymentMethodLabel(a.method).localeCompare(paymentMethodLabel(b.method)),
+      amount: (a, b) => a.amount_cents - b.amount_cents,
+      date: (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      status: (a, b) =>
+        (PAYMENT_STATUS_LABELS[a.status] ?? a.status).localeCompare(
+          PAYMENT_STATUS_LABELS[b.status] ?? b.status,
+        ),
+    },
+  })
+
+  // Le toast est émis par `useMutation` : une seule source de feedback, donc
+  // pas de doublon quand une page affiche aussi le message en ligne.
   const pendingTotal = totals.reduce((sum, row) => sum + row.pending_cents, 0)
   const verifiedTotal = totals.reduce((sum, row) => sum + row.verified_cents, 0)
 
@@ -267,89 +338,200 @@ export default function PaymentsPage() {
             {loading && !data ? (
               <TableSkeleton rows={6} cols={6} label="Chargement des encaissements" />
             ) : (
-              <div className="overflow-x-auto">
+              <ResponsiveTable>
+                <TableToolbar
+                  search={table.search}
+                  onSearchChange={table.setSearch}
+                  searchLabel="Rechercher un encaissement par lavage, canal ou référence"
+                  placeholder="Référence de lavage, canal…"
+                  total={table.total}
+                  filtered={table.filtered.length}
+                  columns={tableColumns}
+                  hiddenColumns={table.hiddenColumns}
+                  onToggleColumn={table.toggleColumn}
+                  onReset={table.reset}
+                  activeFilterCount={table.activeFilterCount + table.hiddenColumns.length}
+                />
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Lavage</TableHead>
-                      <TableHead>Canal</TableHead>
-                      <TableHead className="text-right">Montant</TableHead>
-                      <TableHead>Statut</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead className="text-right">Action</TableHead>
+                      {!table.isColumnHidden("wash") && (
+                        <SortableHead
+                          label="Lavage"
+                          column="wash"
+                          sort={table.sort}
+                          onSort={table.toggleSort}
+                        />
+                      )}
+                      {!table.isColumnHidden("method") && (
+                        <SortableHead
+                          label="Canal"
+                          column="method"
+                          sort={table.sort}
+                          onSort={table.toggleSort}
+                        />
+                      )}
+                      {!table.isColumnHidden("amount") && (
+                        <SortableHead
+                          label="Montant"
+                          column="amount"
+                          sort={table.sort}
+                          onSort={table.toggleSort}
+                          align="right"
+                        />
+                      )}
+                      {!table.isColumnHidden("status") && (
+                        <SortableHead
+                          label="Statut"
+                          column="status"
+                          sort={table.sort}
+                          onSort={table.toggleSort}
+                        />
+                      )}
+                      {!table.isColumnHidden("date") && (
+                        <SortableHead
+                          label="Date"
+                          column="date"
+                          sort={table.sort}
+                          onSort={table.toggleSort}
+                        />
+                      )}
+                      {!table.isColumnHidden("action") && (
+                        <TableHead className="text-right">Action</TableHead>
+                      )}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {(data?.payments ?? []).length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={6} className="p-0">
-                          <EmptyState
-                            icon={Wallet}
-                            title="Aucun encaissement sur ce filtre"
-                            description="Changez de statut ou de canal pour afficher d’autres encaissements."
-                          />
-                        </TableCell>
-                      </TableRow>
+                    {table.filtered.length === 0 ? (
+                      <TableEmptyRow
+                        colSpan={6}
+                        icon={Wallet}
+                        title={
+                          (data?.payments ?? []).length === 0
+                            ? "Aucun encaissement sur ce filtre"
+                            : "Aucun encaissement ne correspond à cette recherche"
+                        }
+                        description={
+                          (data?.payments ?? []).length === 0
+                            ? "Changez de statut ou de canal : les encaissements apparaissent dès qu’un lavage est réglé."
+                            : "Vos données sont intactes. Réinitialisez la recherche pour retrouver tous les encaissements de ce filtre."
+                        }
+                        action={
+                          (data?.payments ?? []).length === 0 ? (
+                            <Button variant="outline" size="sm" render={<Link to="/washes" viewTransition />}>
+                              Voir les lavages
+                            </Button>
+                          ) : (
+                            <Button variant="outline" size="sm" onClick={table.reset}>
+                              Réinitialiser la recherche
+                            </Button>
+                          )
+                        }
+                      />
                     ) : (
-                      (data?.payments ?? []).map((payment, index) => (
+                      table.pageRows.map((payment, index) => (
                         <TableRow
                           key={payment.id}
                           className={`row-in transition-colors ${confirmedId === payment.id ? "row-flash" : ""}`}
                           style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
                         >
-                          <TableCell className="font-medium">
-                            <Link
-                              to={`/washes/${payment.wash_id}`}
-                              viewTransition
-                              className="inline-flex items-center gap-1 hover:underline"
-                            >
-                              {payment.wash_reference}
-                              <ArrowRight className="size-3.5 opacity-60" aria-hidden="true" />
-                            </Link>
-                          </TableCell>
-                          <TableCell>{paymentMethodLabel(payment.method)}</TableCell>
-                          <TableCell className="text-right">{formatXof(payment.amount_cents)}</TableCell>
-                          <TableCell>
-                            <Badge
-                              variant={payment.status === "verified" ? "secondary" : "outline"}
-                              className={payment.status === "pending" ? "border-amber-500/60 text-amber-700 dark:text-amber-300" : ""}
-                            >
-                              {PAYMENT_STATUS_LABELS[payment.status] ?? payment.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>{new Date(payment.created_at).toLocaleString("fr-CI")}</TableCell>
-                          <TableCell className="text-right">
-                            {payment.status === "pending" ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={busyId === payment.id || confirmGate.disabled}
-                                aria-busy={confirmGate.busy}
-                                title={confirmGate.reason ?? undefined}
-                                onClick={() => void confirmPayment(payment.id)}
+                          {!table.isColumnHidden("wash") && (
+                            <TableCell data-label="Lavage" className="font-medium">
+                              <Link
+                                to={`/washes/${payment.wash_id}`}
+                                viewTransition
+                                className="inline-flex items-center gap-1 hover:underline"
                               >
-                                {busyId === payment.id ? "…" : "Confirmer"}
-                              </Button>
-                            ) : payment.status === "verified" && refundPayments.allowed ? (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="text-destructive hover:text-destructive"
-                                disabled={busyId === payment.id}
-                                onClick={() => void refundPayment(payment.id)}
+                                {payment.wash_reference}
+                                <ArrowRight className="size-3.5 opacity-60" aria-hidden="true" />
+                              </Link>
+                            </TableCell>
+                          )}
+                          {!table.isColumnHidden("method") && (
+                            <TableCell data-label="Canal">
+                              {paymentMethodLabel(payment.method)}
+                            </TableCell>
+                          )}
+                          {!table.isColumnHidden("amount") && (
+                            <TableCell data-label="Montant" className="text-right font-medium tabular-nums">
+                              {formatXof(payment.amount_cents)}
+                            </TableCell>
+                          )}
+                          {!table.isColumnHidden("status") && (
+                            <TableCell data-label="Statut">
+                              <Badge
+                                variant={payment.status === "verified" ? "secondary" : "outline"}
+                                className={
+                                  payment.status === "pending"
+                                    ? "border-amber-500/60 text-amber-700 dark:text-amber-300"
+                                    : ""
+                                }
                               >
-                                {busyId === payment.id ? "…" : "Rembourser"}
-                              </Button>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">—</span>
-                            )}
-                          </TableCell>
+                                {PAYMENT_STATUS_LABELS[payment.status] ?? payment.status}
+                              </Badge>
+                            </TableCell>
+                          )}
+                          {!table.isColumnHidden("date") && (
+                            <TableCell data-label="Date" className="text-muted-foreground">
+                              <time dateTime={payment.created_at}>
+                                {formatDateTime(payment.created_at)}
+                              </time>
+                            </TableCell>
+                          )}
+                          {!table.isColumnHidden("action") && (
+                            <TableCell data-label="Action" className="text-right">
+                              {payment.status === "pending" ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={busyId === payment.id || confirmGate.disabled}
+                                  aria-busy={busyId === payment.id}
+                                  title={confirmGate.reason ?? undefined}
+                                  onClick={() => void confirmPayment(payment.id)}
+                                >
+                                  {busyId === payment.id ? (
+                                    <>
+                                      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                                      Confirmation…
+                                    </>
+                                  ) : (
+                                    "Confirmer"
+                                  )}
+                                </Button>
+                              ) : payment.status === "verified" && refundPayments.allowed ? (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="text-destructive hover:text-destructive"
+                                  disabled={busyId === payment.id}
+                                  aria-busy={busyId === payment.id}
+                                  onClick={() => void refundPayment(payment.id)}
+                                >
+                                  {busyId === payment.id ? "…" : "Rembourser"}
+                                </Button>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </TableCell>
+                          )}
                         </TableRow>
                       ))
                     )}
                   </TableBody>
                 </Table>
-              </div>
+                {table.filtered.length > 0 && (
+                  <TablePagination
+                    page={table.page}
+                    pageCount={table.pageCount}
+                    pageSize={table.pageSize}
+                    pageSizeOptions={table.pageSizeOptions}
+                    total={table.total}
+                    filtered={table.filtered.length}
+                    onPage={table.setPage}
+                    onPageSize={table.setPageSize}
+                  />
+                )}
+              </ResponsiveTable>
             )}
           </CardContent>
         </Card>

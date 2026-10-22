@@ -2,6 +2,7 @@ import * as React from "react"
 import { CloudOff, RefreshCw, Trash2, TriangleAlert } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { confirmAction } from "@/lib/confirm"
 import type { QueuedMutation } from "@/lib/offline-queue"
 import { discardQueued, retryQueued, subscribeToQueue, syncNow } from "@/lib/offline-sync"
 
@@ -107,8 +108,16 @@ export function OfflineIndicator() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => {
-                      if (window.confirm(`Abandonner définitivement « ${entry.label} » ?`)) {
+                    onClick={async () => {
+                      if (
+                        await confirmAction({
+                          title: "Abandonner cette opération ?",
+                          description: `« ${entry.label} » sera retirée définitivement de cet appareil.`,
+                          details:
+                            "Le serveur ne l'a jamais reçue : elle ne pourra pas être retrouvée.",
+                          confirmLabel: "Abandonner",
+                        })
+                      ) {
                         void discardQueued(entry.id)
                       }
                     }}

@@ -49,6 +49,9 @@ function Button({
   return (
     <ButtonPrimitive
       data-slot="button"
+      /* `data-size` sert aux règles tactiles (44 px sur pointeur grossier) :
+         sans lui, un bouton icône reste une cible de 28 px au doigt. */
+      data-size={size}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
     />

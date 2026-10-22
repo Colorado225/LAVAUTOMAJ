@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState } from "react"
 import { apiFetch } from "@/lib/api"
+import { confirmAction } from "@/lib/confirm"
 import { enqueueMutation } from "@/lib/offline-sync"
+import { toastError, toastSuccess } from "@/lib/toast"
 import {
   performMutation,
   type MutationOutcome,
@@ -67,7 +69,16 @@ export function useMutation(): MutationController {
 
       const outcome = await performMutation<T>(request, {
         fetch: apiFetch,
-        confirm: (question) => window.confirm(question),
+        // Le dialogue de confirmation de l'application, et non `window.confirm` :
+        // il est accessible, il nomme l'action, et il ne s'ouvre que pour les
+        // gestes que l'appelant a marqués comme irréversibles.
+        confirm: (question) =>
+          confirmAction({
+            description: question,
+            destructive: true,
+            confirmLabel: "Continuer",
+            cancelLabel: "Annuler",
+          }),
         // Seules les écritures qui l'ont demandé explicitement atterrissent
         // dans la file ; voir le champ `offline` de MutationRequest.
         enqueue: enqueueMutation,
@@ -79,8 +90,17 @@ export function useMutation(): MutationController {
       // Une confirmation refusée n'est ni un succès ni une erreur : l'écran
       // doit rester exactement comme avant le clic.
       if (!outcome.cancelled) {
-        if (outcome.error) setError(outcome.error)
-        if (outcome.success) setSuccess(outcome.success)
+        if (outcome.error) {
+          setError(outcome.error)
+          // Le message reste aussi à l'écran, près de l'action ; le toast sert
+          // à le voir même si la ligne a défilé ou si l'utilisateur a changé
+          // d'onglet entre-temps.
+          toastError("L’opération n’a pas abouti", outcome.error)
+        }
+        if (outcome.success) {
+          setSuccess(outcome.success)
+          toastSuccess(outcome.success)
+        }
       }
       return outcome
     },

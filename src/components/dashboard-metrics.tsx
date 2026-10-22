@@ -3,6 +3,8 @@
 import { useEffect, useState, useMemo } from 'react'
 import { apiFetch, apiErrorMessage } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { MetricLabel } from '@/components/ui/info-tooltip'
+import { formatXof } from '@/lib/format'
 import {
   Table,
   TableBody,
@@ -53,12 +55,8 @@ interface DashboardMetricsData {
     return '0'
   }
 
-const formatXOF = (cents: number) =>
-  `${((cents || 0) / 100).toLocaleString('fr-CI', {
-    style: 'currency',
-    currency: 'XOF',
-    maximumFractionDigits: 0,
-  })}`
+// Mise en forme partagée : une seule unité (« F CFA ») et une seule locale.
+const formatXOF = (cents: number) => formatXof(cents)
 
 const formatDate = (dateStr: string) => {
   return new Date(dateStr).toLocaleDateString('fr-CI', {
@@ -241,7 +239,12 @@ export function DashboardMetrics() {
           <Card interactive
             className="group relative rounded-xl border bg-card">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Recettes totales</CardTitle>
+              <CardTitle className="text-sm font-medium">
+                <MetricLabel
+                  label="Recettes totales"
+                  explanation="Somme des paiements confirmés sur la période. Les paiements mobile money en attente ne sont pas comptés avant vérification."
+                />
+              </CardTitle>
               <DollarSign className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-blue-500" />
             </CardHeader>
             <CardContent>
@@ -257,7 +260,12 @@ export function DashboardMetrics() {
           <Card interactive
             className="group relative rounded-xl border bg-card">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Lavages totaux</CardTitle>
+              <CardTitle className="text-sm font-medium">
+                <MetricLabel
+                  label="Lavages totaux"
+                  explanation="Tous les lavages enregistrés sur la période, annulés compris. Voir « Taux de complétion » pour la part menée à terme."
+                />
+              </CardTitle>
               <CarFront className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-emerald-500" />
             </CardHeader>
             <CardContent>
@@ -273,7 +281,12 @@ export function DashboardMetrics() {
           <Card interactive
             className="group relative rounded-xl border bg-card">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">À confirmer</CardTitle>
+              <CardTitle className="text-sm font-medium">
+                <MetricLabel
+                  label="À confirmer"
+                  explanation="Encaissements mobile money reçus mais pas encore vérifiés. Tant qu’un paiement reste ici, il n’est pas compté dans les recettes confirmées."
+                />
+              </CardTitle>
               <Clock className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-amber-500" />
             </CardHeader>
             <CardContent>
@@ -293,7 +306,12 @@ export function DashboardMetrics() {
           <Card interactive
             className="group relative rounded-xl border bg-card">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Taux de complétion</CardTitle>
+              <CardTitle className="text-sm font-medium">
+                <MetricLabel
+                  label="Taux de complétion"
+                  explanation="Lavages terminés ÷ lavages totaux de la période. Un lavage annulé fait baisser le taux : c’est voulu."
+                />
+              </CardTitle>
               <TrendingUp className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-violet-500" />
             </CardHeader>
             <CardContent>

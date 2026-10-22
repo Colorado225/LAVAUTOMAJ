@@ -203,3 +203,41 @@ test("sans en-tête fourni, aucun en-tête n'est imposé", async () => {
   }))
   assert.equal("headers" in (options ?? {}), false)
 })
+
+test("une confirmation asynchrone (dialogue) bloque l'envoi jusqu'à la réponse", async () => {
+  // `ConfirmProvider` rend une promesse : l'écriture ne doit partir qu'une
+  // fois l'utilisateur avoir répondu, et ne jamais partir s'il refuse.
+  let appels = 0
+  const refuse = await performMutation(
+    { url: "/api/v1/x", confirm: "Annuler ce lavage ?" },
+    deps({
+      confirm: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        return false
+      },
+      fetch: async () => {
+        appels += 1
+        return reponse(200, "{}")
+      },
+    }),
+  )
+
+  assert.equal(appels, 0)
+  assert.equal(refuse.cancelled, true)
+  assert.equal(refuse.error, null)
+
+  const accepte = await performMutation(
+    { url: "/api/v1/x", confirm: "Annuler ce lavage ?", success: "Lavage annulé." },
+    deps({
+      confirm: async () => true,
+      fetch: async () => {
+        appels += 1
+        return reponse(200, "{}")
+      },
+    }),
+  )
+
+  assert.equal(appels, 1)
+  assert.equal(accepte.ok, true)
+  assert.equal(accepte.success, "Lavage annulé.")
+})
