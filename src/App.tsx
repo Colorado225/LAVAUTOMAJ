@@ -10,6 +10,7 @@ import { initGTM } from "@/utils/analytics"
 import { AuthProvider } from "@/lib/auth"
 import { SubscriptionProvider } from "@/lib/subscription"
 import { PermissionProvider } from "@/lib/permissions"
+import { Analytics } from "@vercel/analytics/react"
 
 // Get basename from environment (for deployment) or use empty string for development
 const basename = import.meta.env.VITE_BASENAME || ""
@@ -70,6 +71,7 @@ function App() {
               <PermissionProvider>
                 <Toaster>
                   <RouterProvider router={router} />
+                  <Analytics />
                 </Toaster>
               </PermissionProvider>
             </SubscriptionProvider>
