@@ -55,10 +55,12 @@ jobs:
 
       - name: Vérifier le runtime des fonctions serverless
         # Le déploiement Vercel ne reçoit pas l'URL demandée dans `req.url` :
-        # le chemin arrive dans `req.query.slug`. Un défaut ici rend l'API
-        # entièrement muette en production, et `npm run dev` ne le voit pas.
-        # Cette étape empaquette l'API puis rejoue tout le parcours contre un
-        # serveur qui imite le runtime de Vercel.
+        # la réécriture de `vercel.json` la remplace et le chemin arrive dans
+        # `__washpilot_api_path`. Un défaut ici rend l'API entièrement muette
+        # en production, et `npm run dev` ne le voit pas. Cette étape
+        # empaquette l'API puis rejoue tout le parcours contre un serveur qui
+        # imite le runtime de Vercel — et qui refuse de démarrer si la
+        # réécriture disparaît de `vercel.json`.
         run: npm run smoke:serverless
 
   image:

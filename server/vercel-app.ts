@@ -27,7 +27,7 @@ import { apiErrorHandler, mountApi } from "./app.ts"
 import { initDatabaseSchema, getPool, isDatabaseReady } from "./db.ts"
 import { runSubscriptionReminders } from "./reminders.ts"
 import { env } from "./env.ts"
-import { restoreApiPath } from "./vercel-url.ts"
+import { API_PATH_PARAM, restoreApiPath } from "./vercel-url.ts"
 
 /**
  * Requête telle que la fournit le runtime Node de Vercel : `IncomingMessage`
@@ -190,19 +190,24 @@ export async function awaitDatabase(): Promise<DatabaseState> {
 }
 
 /**
- * Point d'entrée commun aux deux fonctions de `api/`.
+ * Point d'entrée de la fonction de `api/`.
  *
- * Le chemin est reconstitué depuis les segments dynamiques, la base est
- * attendue, puis la requête est confiée à Express. Une base indisponible donne
- * un `503` explicite : c'est le symptôme le plus fréquent d'un premier
- * déploiement (variable `DATABASE_URL` oubliée chez l'hébergeur).
+ * Le chemin est reconstitué à partir de la réécriture (`__washpilot_api_path`),
+ * des segments dynamiques historiques ou de l'URL reçue, la base est attendue,
+ * puis la requête est confiée à Express. Une base indisponible donne un `503`
+ * explicite : c'est le symptôme le plus fréquent d'un premier déploiement
+ * (variable `DATABASE_URL` oubliée chez l'hébergeur).
  */
 export async function handleServerlessRequest(
   req: ServerlessRequest,
   res: Response,
   slug?: string | string[],
 ): Promise<void> {
-  const restored = restoreApiPath({ slug, url: req.url })
+  const restored = restoreApiPath({
+    slug: slug ?? req.query?.slug,
+    pathOverride: req.query?.[API_PATH_PARAM],
+    url: req.url,
+  })
   if (!restored.url) {
     res.status(404).json({
       error: {

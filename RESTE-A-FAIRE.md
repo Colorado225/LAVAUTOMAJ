@@ -507,11 +507,19 @@ de l'application monopage renvoyait donc `index.html` pour chaque appel d'API,
 et `auth/me`, `auth/login`, `subscription`, `public/pricing` échouaient tour à
 tour — d'où les écrans qui ne chargent plus rien.
 
+Une première correction avait servi l'API depuis `api/[...slug].ts`. Elle
+laissait la moitié du problème : sur Vercel, un nom entre crochets dans `api/`
+ne couvre **qu'un** segment. `/api/healthz` et `/api/v1` répondaient, tout ce
+qui est plus profond (`/api/v1/auth/me`, `/api/v1/public/pricing`,
+`/api/v1/auth/register`) renvoyait le 404 de la plateforme sans atteindre la
+fonction. D'où une fonction unique `api/index.ts` et une réécriture explicite
+de `/api/:path*` vers elle, le chemin voyageant dans `__washpilot_api_path`.
+
 ### Ce qui a été ajouté
 
 | Fichier | Rôle |
 | --- | --- |
-| `api/[...slug].ts`, `api/index.ts` | points d'entrée des fonctions Vercel |
+| `api/index.ts` | fonction unique de l'API (`/api` et tout `/api/...`) |
 | `server/vercel-app.ts` | pile Express du serveur, sans son démarrage |
 | `server/vercel-url.ts` | reconstitution du chemin, **la pièce qui manquait** |
 | `server/vercel-handler.ts` | entrée du bundle |

@@ -78,6 +78,24 @@ export interface UseApiResult<T> {
 
 export async function apiErrorMessage(response: Response): Promise<string> {
   const body = await response.text()
+  const contentType = response.headers.get("content-type") || ""
+
+  // Une page HTML là où l'on attend du JSON n'est pas une erreur métier : c'est
+  // le signe que la requête n'a jamais atteint l'API (réécriture absente du
+  // déploiement, passerelle en panne). Afficher les premières lignes de la page
+  // d'erreur de la plateforme — « <!doctype html>… » — n'apprend rien à un
+  // gérant de station ; le code HTTP, lui, dit quoi vérifier à l'exploitant.
+  const looksLikeHtml = contentType.includes("text/html") || /^\s*</.test(body)
+  if (looksLikeHtml) {
+    if (response.status === 502 || response.status === 503 || response.status === 504) {
+      return "Le serveur n'a pas répondu à temps. Réessayez dans un instant ; si cela dure, prévenez votre éditeur."
+    }
+    if (response.status === 401 || response.status === 403) {
+      return "Votre session n'est plus reconnue. Reconnectez-vous."
+    }
+    return `L'API n'a pas répondu (${response.status}). Le service est peut-être en cours de déploiement : réessayez dans un instant.`
+  }
+
   if (!body) return `API ${response.status}`
   try {
     const parsed = JSON.parse(body) as { error?: { message?: string }; message?: string }

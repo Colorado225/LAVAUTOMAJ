@@ -148,24 +148,42 @@ Le dépôt contient maintenant de quoi servir l'API au même domaine :
 
 | Fichier | Rôle |
 | --- | --- |
-| `api/[...slug].ts` | reçoit `/api/...` et le confie à Express |
-| `api/index.ts` | couvre `/api` et `/api/healthz` |
+| `api/index.ts` | la fonction unique : reçoit `/api` **et tout** `/api/...` |
 | `server/vercel-app.ts` | la pile Express, identique à celle du serveur classique |
 | `server/vercel-url.ts` | reconstitue le chemin, que Vercel ne transmet pas tel quel |
 | `scripts/build-api.mjs` | empaquette l'API en un fichier (`npm run build:api`) |
-| `vercel.json` | construction, réécriture SPA, en-têtes, cron des relances |
+| `vercel.json` | construction, réécriture `/api/*` et SPA, en-têtes, cron des relances |
 
-Deux points méritent d'être connus, parce qu'ils expliquent la conception :
+Trois points méritent d'être connus, parce qu'ils expliquent la conception :
+
+- **Une seule fonction, au nom littéral.** Sur Vercel, un fichier attrape-tout
+  `api/[...slug].ts` n'est **pas** un joker multi-segments : la plateforme ne
+  génère qu'une route d'un segment. Les chemins courts (`/api/healthz`,
+  `/api/v1`) atteignaient bien la fonction ; tout ce qui est plus profond
+  (`/api/v1/auth/me`, `/api/v1/public/pricing`, `/api/v1/auth/register`)
+  tombait sur le 404 générique de Vercel, **sans même appeler la fonction**.
+  C'est la panne constatée en production, et elle est invisible en
+  développement puisque `tsx` y reçoit l'URL d'origine. D'où la fonction unique
+  `api/index.ts`, et la réécriture explicite de `vercel.json` :
+
+  ```json
+  { "source": "/api/:path*", "destination": "/api?__washpilot_api_path=:path*" }
+  ```
 
 - **Le chemin est reconstitué.** Une fonction de `api/` ne reçoit pas l'URL
-  demandée : Vercel lui donne `/api` et place les segments dans `req.query.slug`.
-  Express, lui, route sur l'URL. Sans reconstitution, toutes les routes
-  répondent 404 — c'est précisément la panne constatée. `server/vercel-url.ts`
-  s'en charge, et c'est testé (`tests/vercel-url.test.ts`).
+  demandée : la réécriture la remplace par celle de la destination et place la
+  suite du chemin dans le paramètre `__washpilot_api_path`. Express, lui, route
+  sur l'URL. `server/vercel-url.ts` reconstitue donc le chemin, en acceptant
+  aussi `?path=` (paramètre que la plateforme ajoute d'elle-même) et l'URL
+  d'origine si elle est transmise intacte. C'est testé
+  (`tests/vercel-url.test.ts`) et rejoué de bout en bout par
+  `npm run smoke:serverless`, qui simule le cas défavorable — l'URL réécrite —
+  et refuse de démarrer si la réécriture disparaît de `vercel.json`.
+
 - **L'API est empaquetée.** Le code serveur importe ses voisins en `.ts`
   explicite (`./db.ts`), ce que `tsx` comprend mais que le runtime de Vercel ne
   résout pas fichier par fichier. `npm run build:api` produit un bundle unique,
-  que les fonctions de `api/` importent. La construction complète est donc
+  que la fonction de `api/` importe. La construction complète est donc
   `npm run build:vercel`.
 
 ### Les variables à renseigner chez Vercel
