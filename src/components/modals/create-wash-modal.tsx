@@ -52,7 +52,7 @@ const washSchema = z.object({
     )
     .min(1, "Sélectionnez au moins une prestation."),
   cash_session_id: z.string().uuid().optional(),
-  worker_ids: z.array(z.string().uuid()).optional(),
+  worker_ids: z.array(z.string().uuid()).min(1, "Sélectionnez au moins un laveur."),
 })
 
 type WashFormData = z.infer<typeof washSchema>
@@ -439,7 +439,7 @@ export function CreateWashModal({
 
           {activeWorkers.length > 0 && (
             <div className="space-y-2">
-              <Label>Travailleurs assignés</Label>
+              <Label>Travailleurs assignés *</Label>
               <div className="grid gap-2 sm:grid-cols-2">
                 {activeWorkers.map((worker) => (
                   <label
@@ -463,6 +463,10 @@ export function CreateWashModal({
                 ))}
               </div>
             </div>
+          )}
+
+          {errors.worker_ids && typeof errors.worker_ids.message === "string" && (
+            <span className="text-xs text-destructive mb-2">{errors.worker_ids.message}</span>
           )}
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -583,7 +587,8 @@ export function CreateWashModal({
               disabled={
                 isSubmitting ||
                 !siteId ||
-                cashSessionMissing
+                cashSessionMissing ||
+                selectedWorkerIds.length === 0
               }
             >
               {isSubmitting ? (

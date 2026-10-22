@@ -60,6 +60,11 @@ const PERIODES = [
   { jours: 90, label: "90 jours" },
 ]
 
+/** Millièmes de parts/heure → « 0,38 ». */
+function partsHeure(milli: number | null): string {
+  return milli === null ? "—" : (milli / 1000).toLocaleString("fr-CI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
 /** Millièmes de lavage → « 4,33 ». Jamais un entier trompeur. */
 function parts(milli: number): string {
   return (milli / 1000).toLocaleString("fr-CI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -67,6 +72,30 @@ function parts(milli: number): string {
 
 function dureeHeures(minutes: number): string {
   return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")}`
+}
+
+function ProductiviteLigne({ l }: { l: LigneRendement }) {
+  return (
+    <TableRow className={l.status !== "active" ? "opacity-60" : undefined}>
+      <TableCell className="font-medium">
+        {l.first_name} {l.last_name}
+        <span className="block text-xs text-muted-foreground">{l.role}</span>
+      </TableCell>
+      <TableCell className="text-right tabular-nums">{l.participations}</TableCell>
+      <TableCell className="text-right font-medium tabular-nums">{parts(l.share_milli)}</TableCell>
+      <TableCell className="text-right tabular-nums">
+        {partsHeure(l.per_worked_hour_milli)}
+        {l.incomplete_records > 0 && (
+          <span
+            className="block text-xs text-amber-700 dark:text-amber-400"
+            title="Un départ n’a pas été pointé : le total est incomplet, le rendement est suspendu."
+          >
+            rendement suspendu
+          </span>
+        )}
+      </TableCell>
+    </TableRow>
+  )
 }
 
 function ilYa(jours: number): string {
@@ -87,6 +116,21 @@ export default function TeamPerformancePage() {
     [data],
   )
   const actifs = useMemo(() => lignes.filter((l) => l.participations > 0), [lignes])
+
+  // Les laveurs d’abord ; les autres rôles (caissier…) participent à la station
+  // mais ne se jugent pas sur des lavages. Le rôle est un libellé libre.
+  const estLaveur = (r: string) => r.toLowerCase().includes("lav")
+  const laveurs = useMemo(() => lignes.filter((l) => estLaveur(l.role)), [lignes])
+  const autres = useMemo(() => lignes.filter((l) => !estLaveur(l.role)), [lignes])
+
+  const totalParticipations = useMemo(() => lignes.reduce((s, l) => s + l.participations, 0), [lignes])
+  const totalParts = useMemo(() => lignes.reduce((s, l) => s + l.share_milli, 0), [lignes])
+  const totalRetards = useMemo(() => lignes.reduce((s, l) => s + l.late_days, 0), [lignes])
+  const totalMinutes = useMemo(() => lignes.reduce((s, l) => s + l.worked_minutes, 0), [lignes])
+  const quelquePointageIncomplet = useMemo(
+    () => lignes.some((l) => l.incomplete_records > 0),
+    [lignes],
+  )
 
   const repartition = useMemo(
     () =>
@@ -206,6 +250,55 @@ export default function TeamPerformancePage() {
           </Card>
         </div>
 
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Participations aux lavages</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">{totalParticipations}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">Présences comptées, même à plusieurs sur un véhicule.</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Parts de travail cumulées</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">{parts(totalParts)}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">Réparties selon la règle de la station.</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Retards enregistrés</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">
+                {data?.station.no_schedule ? "—" : totalRetards}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                {data?.station.no_schedule ? "Aucun horaire configuré." : "Sur la période."}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Temps pointé par employé</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">
+                {totalMinutes > 0 ? dureeHeures(totalMinutes) : "—"}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                {quelquePointageIncomplet
+                  ? "Un pointage est incomplet : total amputé, pas faux."
+                  : "Somme des pointages complets de la période."}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+
         <div className="grid gap-6 lg:grid-cols-2">
           <Card>
             <CardHeader>
@@ -283,71 +376,43 @@ export default function TeamPerformancePage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Détail par laveur</CardTitle>
+            <CardTitle>Productivité de l’équipe</CardTitle>
             <CardDescription>
-              « Participations » dit à combien de lavages la personne a pris part ; « parts » dit quelle fraction du
-              travail lui revient. Un tiret signifie que la donnée manque, jamais qu’elle vaut zéro.
+              Quatre questions simples : combien de lavages, quelle contribution, combien de temps travaillé et quel
+              rendement. Un tiret signifie que la donnée manque, jamais qu’elle vaut zéro.
             </CardDescription>
           </CardHeader>
           <CardContent>
             {loading ? (
-              <TableSkeleton rows={5} cols={8} label="Chargement du rendement" />
+              <TableSkeleton rows={5} cols={4} label="Chargement du rendement" />
             ) : error ? (
               <BlockedReason reason="Le rendement n’a pas pu être chargé." />
             ) : lignes.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">Aucun laveur enregistré.</p>
+              <p className="py-8 text-center text-sm text-muted-foreground">Aucun employé enregistré.</p>
             ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Laveur</TableHead>
-                      <TableHead className="text-right">Participations</TableHead>
-                      <TableHead className="text-right">Dont responsable</TableHead>
-                      <TableHead className="text-right">Parts</TableHead>
-                      <TableHead className="text-right">Jours présents</TableHead>
-                      <TableHead className="text-right">Retards</TableHead>
-                      <TableHead className="text-right">Temps pointé</TableHead>
-                      <TableHead className="text-right">Parts / jour</TableHead>
-                      <TableHead className="text-right">Parts / heure</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {lignes.map((l) => (
-                      <TableRow key={l.worker_id} className={l.status !== "active" ? "opacity-60" : undefined}>
-                        <TableCell className="font-medium">
-                          {l.first_name} {l.last_name}
-                          <span className="block text-xs text-muted-foreground">{l.role}</span>
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">{l.participations}</TableCell>
-                        <TableCell className="text-right tabular-nums">{l.as_principal}</TableCell>
-                        <TableCell className="text-right font-medium tabular-nums">{parts(l.share_milli)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{l.present_days}</TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {data?.station.no_schedule ? "—" : l.late_days}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {l.worked_minutes > 0 ? dureeHeures(l.worked_minutes) : "—"}
-                          {l.incomplete_records > 0 && (
-                            <span
-                              className="block text-xs text-amber-700 dark:text-amber-400"
-                              title="Un départ n’a pas été pointé : le total est incomplet."
-                            >
-                              {l.incomplete_records} pointage{l.incomplete_records > 1 ? "s" : ""} incomplet
-                              {l.incomplete_records > 1 ? "s" : ""}
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {l.per_present_day_milli === null ? "—" : parts(l.per_present_day_milli)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {l.per_worked_hour_milli === null ? "—" : parts(l.per_worked_hour_milli)}
-                        </TableCell>
+              <div className="space-y-6">
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Employé</TableHead>
+                        <TableHead className="text-right">Lavages</TableHead>
+                        <TableHead className="text-right">Parts</TableHead>
+                        <TableHead className="text-right">Parts / h</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {[...laveurs, ...autres].map((l) => (
+                        <ProductiviteLigne key={l.worker_id} l={l} noSchedule={data?.station.no_schedule ?? false} />
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Parts/h = parts de travail ÷ heures pointées. « Lavages » compte les participations : un lavage fait
+                  à trois revient à chacun, pas trois lavages entiers. Les autres rôles (caissier…) participent au
+                  fonctionnement de la station sans être jugés sur des lavages effectués.
+                </p>
               </div>
             )}
           </CardContent>

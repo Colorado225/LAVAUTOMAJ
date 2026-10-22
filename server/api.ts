@@ -64,11 +64,24 @@ export const washValidators = {
       // Plaque du vehicule, facultative. Aucun format n'est impose : une
       // saisie refusee bloquerait un encaissement.
       plate: z.string().trim().max(32).nullable().optional(),
+      // Nom du client, facultatif. Une etiquette de comptoir, pas une fiche :
+      // ni telephone, ni historique, ni rien qui fasse un dossier client.
+      customer_name: z.string().trim().max(80).nullable().optional(),
     })
     .strip(),
   cancel: z
     .object({
       reason: z.string().trim().min(3, "Indiquez le motif de l’annulation.").max(500),
+    })
+    .strip(),
+  // Avancement operationnel du lavage. Valeurs volontairement fermees : ce
+  // sont les trois etats que l'interface propose, et rien d'autre ne doit
+  // pouvoir etre ecrit dans la colonne. Le message d'erreur est produit par
+  // server/validation-messages.ts : « Le statut ne fait pas partie des
+  // choix possibles. »
+  status: z
+    .object({
+      status: z.enum(["pending", "in_progress", "completed", "overtime"]),
     })
     .strip(),
 }
@@ -79,9 +92,58 @@ function db(): Pool {
   return pool
 }
 
+/**
+ * Les laveurs affectes a chaque lavage, nommes.
+ *
+ * Une seule requete pour tous les lavages demandes : la liste des taches en
+ * cours affiche jusqu'a cinq cartes, et cinq requetes pour five noms
+ * seraient cinq fois plus de voyages pour rien.
+ *
+ * Le responsable d'abord, les autres ensuite, par ordre de nom : la carte
+ * affiche ce que l'utilisateur voit d'abord, et un ordre stable evite que
+ * la liste change d'ordre a chaque rafraichissement.
+ */
+async function loadWashWorkers(
+  pool: Pool,
+  organizationId: string,
+  washIds: string[],
+): Promise<Map<string, Array<{ id: string; name: string; role: string }>>> {
+  const parLavage = new Map<string, Array<{ id: string; name: string; role: string }>>()
+  if (washIds.length === 0) return parLavage
+
+  const q = await pool.query(
+    `SELECT a.wash_id, w.id, w.first_name, w.last_name, a.assignment_role
+       FROM wash_assignments a
+       JOIN workers w ON w.id = a.worker_id
+      WHERE w.organization_id=$1::uuid AND a.wash_id = ANY($2::uuid[])
+      ORDER BY (a.assignment_role = 'principal') DESC, w.first_name, w.last_name`,
+    [organizationId, washIds],
+  )
+  for (const row of q.rows) {
+    const nom = [row.first_name, row.last_name].filter(Boolean).join(" ").trim()
+    const liste = parLavage.get(row.wash_id) ?? []
+    liste.push({ id: row.id, name: nom, role: row.assignment_role })
+    parLavage.set(row.wash_id, liste)
+  }
+  return parLavage
+}
+
 const WASH_FIELDS = `id, reference, site_id, vehicle_category_id, customer_id, plate, status, payment_status,
+  operation_status, operation_started_at, estimated_minutes, customer_name,
   total_cents, payment_method, created_by AS author_id, cancelled_by AS cancelled_by_id,
-  cancelled_at, cancellation_reason, created_at`
+  cancelled_at, cancellation_reason, created_at, completed_at`
+
+/**
+ * Duree de repli quand aucune prestation ne dit combien de temps elle prend.
+ *
+ * Une tache sans horizon ne se compte pas : la barre n'avancerait jamais et
+ * l'utilisateurcroirait la station bloquee. Trente minutes est la duree la
+ * plus courante d'un lavage, et c'est une estimation de terrain, pas une
+ * donnee comptable.
+ */
+const MAX_ACTIVE_WASH_TASKS = 5
+
+const DEFAULT_ESTIMATED_MINUTES = 30
 
 export function createApiRouter() {
   const r = Router()
@@ -465,7 +527,15 @@ export function createApiRouter() {
          ORDER BY created_at DESC LIMIT 200`,
         [t.organizationId, plate],
       )
-      res.json(q.rows)
+      // Les laveurs affectes : l'ecran des taches en cours doit dire QUI
+      // s'en occupe. Le responsable vient en premier : c'est lui qu'on
+      // regarde en premier.
+      const washers = await loadWashWorkers(
+        db(),
+        t.organizationId,
+        q.rows.map((row) => row.id as string),
+      )
+      res.json(q.rows.map((row) => ({ ...row, washers: washers.get(row.id as string) ?? [] })))
     }),
   )
 
@@ -603,7 +673,7 @@ export function createApiRouter() {
 
           const serviceIds = input.items.map((item) => item.service_id)
           const servicesQ = await client.query(
-            "SELECT id, name, price_cents, price_by_vehicle_type FROM services WHERE organization_id=$1::uuid AND id = ANY($2::uuid[]) AND is_active",
+            "SELECT id, name, price_cents, price_by_vehicle_type, duration_minutes FROM services WHERE organization_id=$1::uuid AND id = ANY($2::uuid[]) AND is_active",
             [t.organizationId, serviceIds],
           )
           if (servicesQ.rowCount !== new Set(serviceIds).size) {
@@ -636,6 +706,18 @@ export function createApiRouter() {
             throw new HttpError(400, "amount_exceeds_total", "Le montant reçu dépasse le total du lavage.")
           }
 
+          // Duree estimee du lavage : la somme des durees des prestations.
+          // Elle est figee ici, a l'ecriture, et c'est elle que la barre de
+          // progression suivra. Une prestation sans duree connue ne compte
+          // pas plutot que de compter faux ; si rien n'est connu, on prend
+          // une duree de repli, car une tache sans horizon ne se compte pas.
+          const estimatedMinutes =
+            input.items.reduce((total, item) => {
+              const service = serviceById.get(item.service_id)!
+              const minutes = Number(service.duration_minutes ?? 0)
+              return total + (Number.isFinite(minutes) && minutes > 0 ? minutes * item.quantity : 0)
+            }, 0) || DEFAULT_ESTIMATED_MINUTES
+
           const isCash = input.payment_method === "cash" && input.amount_received_cents > 0
           let cashSessionId: string | null = null
           if (isCash) {
@@ -655,22 +737,44 @@ export function createApiRouter() {
           const paymentStatus = resolvePaymentStatus(totalCents, input.amount_received_cents)
 
           await assertSiteWritable(client, t.organizationId, input.site_id)
+          
+          const activeCountQ = await client.query(
+            `SELECT COUNT(*)::int as cnt FROM washes 
+             WHERE organization_id=$1::uuid AND site_id=$2::uuid 
+             AND status != 'cancelled' 
+             AND operation_status IN ('pending','in_progress','overtime')`,
+            [t.organizationId, input.site_id],
+          )
+          const activeCount = activeCountQ.rows[0]?.cnt || 0
+          let queuePos: number | null = null
+          if (activeCount >= MAX_ACTIVE_WASH_TASKS) {
+            const maxQueueQ = await client.query(
+              `SELECT COALESCE(MAX(queue_position), 0) as maxq FROM washes 
+               WHERE organization_id=$1::uuid AND site_id=$2::uuid`,
+              [t.organizationId, input.site_id],
+            )
+            queuePos = (maxQueueQ.rows[0]?.maxq || 0) + 1
+          }
+          
           const washQ = await client.query(
-            `INSERT INTO washes(organization_id, site_id, vehicle_category_id, status, payment_status, total_cents, payment_method, created_by, plate, plate_key, reference)
-             VALUES($1,$2,$3,'completed',$4,$5,$6,$7,$8,$9,
-               'LAV-' || to_char(now(),'YYYYMMDD') || '-' || upper(substr(md5(random()::text),1,6)))
+            `INSERT INTO washes(organization_id, site_id, vehicle_category_id, status, payment_status, operation_status, estimated_minutes, customer_name, total_cents, payment_method, created_by, plate, plate_key, reference, queue_position)
+             VALUES($1,$2,$3,'completed',$4,'pending',$5,$6,$7,$8,$9,$10,$11,
+               'LAV-' || to_char(now(),'YYYYMMDD') || '-' || upper(substr(md5(random()::text),1,6)), $12)
              RETURNING ${WASH_FIELDS}`,
-            [
-              t.organizationId,
-              input.site_id,
-              input.vehicle_category_id,
-              paymentStatus,
-              totalCents,
-              input.payment_method,
-              t.userId,
-              plateDisplay(input.plate ?? null),
-              plateKey(input.plate ?? null),
-            ],
+             [
+               t.organizationId,
+               input.site_id,
+               input.vehicle_category_id,
+               paymentStatus,
+               estimatedMinutes,
+               input.customer_name ?? null,
+               totalCents,
+               input.payment_method,
+               t.userId,
+               plateDisplay(input.plate ?? null),
+               plateKey(input.plate ?? null),
+               queuePos,
+             ],
           )
           const wash = washQ.rows[0]
 
@@ -738,6 +842,92 @@ export function createApiRouter() {
           client.release()
         }
       })
+    }),
+  )
+
+  // PATCH /api/v1/washes/:id/status — fait avancer l'avancement operationnel.
+  //
+  // Ce que la route touche est strictement distinct de la comptabilite. Un
+  // lavage enregistre est deja `status = 'completed'` : il est entre, il est
+  // paye, il est dans la caisse. Cette route ne bouge que
+  // `operation_status`, qui dit ou en est la voiture — en attente, en cours,
+  // terminee. Aucun montant, aucun mouvement de caisse, aucune ecriture de
+  // stock n'est concerne : c'est un tableau de bord de terrain, pas une
+  // ecriture comptable.
+  //
+  // Un lavage annule ne se fait pas avancer : il est annule, c'est tout.
+  r.patch(
+    "/washes/:id/status",
+    requirePermission("wash:status"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const input = body(washValidators.status, req.body)
+      const pool = db()
+      const client = await pool.connect()
+      try {
+        await client.query("BEGIN")
+        const washQ = await client.query(
+          "SELECT id, reference, status, operation_status, site_id FROM washes WHERE id=$1::uuid AND organization_id=$2::uuid FOR UPDATE",
+          [id, t.organizationId],
+        )
+        if (!washQ.rowCount) throw new HttpError(404, "wash_not_found", "Lavage introuvable.")
+        if (washQ.rows[0].status === "cancelled") {
+          throw new HttpError(409, "wash_cancelled", "Ce lavage est annulé : son avancement ne se change plus.")
+        }
+        if (washQ.rows[0].operation_status === input.status) {
+          await client.query("COMMIT")
+          res.json(washQ.rows[0])
+          return
+        }
+
+        const q = await client.query(
+          `UPDATE washes
+              SET operation_status=$3,
+                  operation_started_at = CASE
+                    WHEN $3 = 'pending' THEN NULL
+                    WHEN $3 = 'in_progress' THEN COALESCE(operation_started_at, now())
+                    ELSE operation_started_at
+                  END,
+                  completed_at = CASE WHEN $3 = 'completed' THEN COALESCE(completed_at, now()) ELSE completed_at END
+            WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING ${WASH_FIELDS}`,
+          [id, t.organizationId, input.status],
+        )
+        await client.query(
+          "INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, metadata) VALUES($1,$2,'wash.status_changed','wash',$3,$4)",
+          [
+            t.organizationId,
+            t.userId,
+            id,
+            JSON.stringify({ from: washQ.rows[0].operation_status, to: input.status }),
+          ],
+        )
+        // If completing, create notification
+        if (input.status === "completed") {
+          try {
+            await client.query(
+              `INSERT INTO notifications(organization_id, site_id, type, title, message, entity_type, entity_id)
+               VALUES($1,$2,'WASH_COMPLETED',$3,$4,'wash',$5)`,
+              [
+                t.organizationId,
+                washQ.rows[0].site_id,
+                "Lavage terminé",
+                `Le lavage ${washQ.rows[0].reference} est terminé.`,
+                id,
+              ],
+            )
+          } catch (e) {
+            // ignore
+          }
+        }
+        await client.query("COMMIT")
+        res.json(q.rows[0])
+      } catch (error) {
+        await client.query("ROLLBACK")
+        throw error
+      } finally {
+        client.release()
+      }
     }),
   )
 

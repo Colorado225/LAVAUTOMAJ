@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Lock, ShieldCheck, UserCheck, UserX } from "lucide-react"
+import { Lock, ShieldCheck, UserCheck, UserPlus, UserX } from "lucide-react"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
-import { usePermission, ROLE_LABELS, type Permission, type Role } from "@/lib/permissions"
+import { usePermission, usePermissions, ROLE_LABELS, type Permission, type Role } from "@/lib/permissions"
 import { actionGate } from "@/lib/action-blocking"
 import { BlockedReason } from "@/components/access/blocked-reason"
 import { cn } from "cn"
@@ -45,6 +45,17 @@ const STATUS_LABELS: Record<string, string> = {
 
 export default function AccessSettingsPage() {
   const manage = usePermission("user:manage")
+  const permissions = usePermissions()
+  // Seul le propriétaire délègue gérant ou caissier : un gérant ne crée que
+  // des agents de lavage (la règle est aussi appliquée par le serveur).
+  const isOwner = permissions.state?.role === "owner"
+  const assignableRoles = isOwner
+    ? ([
+        { value: "manager", label: "Gérant" },
+        { value: "cashier", label: "Caissier" },
+        { value: "washer", label: "Agent de lavage" },
+      ] as const)
+    : ([{ value: "washer", label: "Agent de lavage" }] as const)
   // Changer un rôle ou un droit part aussitôt en requête : on attend de
   // connaître les droits plutôt que d'envoyer un PATCH voué au refus.
   const manageAccess = actionGate({
@@ -126,6 +137,94 @@ export default function AccessSettingsPage() {
             ))}
           </CardContent>
         </Card>
+
+        {/* Création d'un accès : le compte est actif immédiatement, le mot de
+            passe initial est communiqué en personne. Les rôles proposés
+            excluent « propriétaire » : une station ne se délègue pas d'ici. */}
+        {manage.allowed && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <UserPlus className="size-5" aria-hidden="true" /> Ajouter un membre
+              </CardTitle>
+              <CardDescription>
+                Créez le compte d'un gérant, d'un caissier ou d'un agent de lavage. Il pourra se
+                connecter aussitôt avec le mot de passe que vous lui communiquez.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form
+                className="grid gap-3 sm:grid-cols-2"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  const form = new FormData(event.currentTarget)
+                  void send(
+                    "/api/v1/access/members",
+                    "POST",
+                    {
+                      email: String(form.get("email") ?? "").trim(),
+                      first_name: String(form.get("first_name") ?? "").trim(),
+                      last_name: String(form.get("last_name") ?? "").trim(),
+                      phone: String(form.get("phone") ?? "").trim() || null,
+                      role: String(form.get("role") ?? "cashier"),
+                      password: String(form.get("password") ?? ""),
+                    },
+                    "Compte créé. Communiquez le mot de passe initial à votre collaborateur.",
+                  )
+                  // Le formulaire se vide uniquement en cas de succès : en
+                  // cas d'erreur, l'utilisateur garde sa saisie.
+                  event.currentTarget.reset()
+                }}
+              >
+                <label className="flex flex-col gap-1 text-sm font-medium">
+                  Prénom
+                  <input name="first_name" required maxLength={100} className="h-10 rounded-md border border-input bg-background px-3 text-sm" />
+                </label>
+                <label className="flex flex-col gap-1 text-sm font-medium">
+                  Nom
+                  <input name="last_name" required maxLength={100} className="h-10 rounded-md border border-input bg-background px-3 text-sm" />
+                </label>
+                <label className="flex flex-col gap-1 text-sm font-medium sm:col-span-2">
+                  Adresse e-mail
+                  <input name="email" type="email" required maxLength={254} className="h-10 rounded-md border border-input bg-background px-3 text-sm" />
+                </label>
+                <label className="flex flex-col gap-1 text-sm font-medium">
+                  Téléphone (facultatif)
+                  <input name="phone" maxLength={30} className="h-10 rounded-md border border-input bg-background px-3 text-sm" />
+                </label>
+                <label className="flex flex-col gap-1 text-sm font-medium">
+                  Rôle
+                  <select name="role" defaultValue={assignableRoles[0].value} className="h-10 rounded-md border border-input bg-background px-3 text-sm">
+                    {assignableRoles.map((role) => (
+                      <option key={role.value} value={role.value}>{role.label}</option>
+                    ))}
+                  </select>
+                  {!isOwner && (
+                    <span className="text-xs font-normal text-muted-foreground">
+                      Seul le propriétaire peut créer un compte gérant ou caissier.
+                    </span>
+                  )}
+                </label>
+                <label className="flex flex-col gap-1 text-sm font-medium sm:col-span-2">
+                  Mot de passe initial (5 caractères minimum)
+                  <input
+                    name="password"
+                    type="text"
+                    required
+                    minLength={5}
+                    autoComplete="off"
+                    className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                  />
+                </label>
+                <div className="sm:col-span-2">
+                  <Button type="submit" disabled={busy !== null}>
+                    {busy === "/api/v1/access/members" ? "Création…" : "Créer le compte"}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>

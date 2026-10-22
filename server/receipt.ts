@@ -253,7 +253,7 @@ export async function issueReceipt(
               s.name AS site_name, s.city, s.address, s.phone,
               o.name AS organization_name,
               vc.name AS vehicle_name,
-              c.full_name AS customer_name,
+              coalesce(c.full_name, w.customer_name) AS customer_name,
               nullif(trim(coalesce(u.first_name,'') || ' ' || coalesce(u.last_name,'')), '') AS cashier
          FROM washes w
          JOIN sites s ON s.id = w.site_id

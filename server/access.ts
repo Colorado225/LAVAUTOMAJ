@@ -2,7 +2,9 @@ import { Router } from "express"
 import { z } from "zod"
 import type { Pool, PoolClient } from "pg"
 import { getPool } from "./db.ts"
-import { asyncRoute, body, tenant, parseId, requirePermission, HttpError } from "./http.ts"
+import { asyncRoute, body, tenant, parseId, requirePermission, assertPermission, HttpError } from "./http.ts"
+import { hashPassword } from "./auth.ts"
+import { assertOrganizationUserCapacity } from "./tenant.ts"
 import {
   PERMISSIONS,
   PERMISSION_LABELS,
@@ -347,6 +349,137 @@ export function createAccessRouter() {
         overrides: overridesQ.rows,
         permissions: [...effectivePermissions(memberQ.rows[0].role, overridesQ.rows)].sort(),
       })
+    }),
+  )
+
+  // POST /api/v1/access/members — créer le compte d'un collaborateur et le
+  // rattacher à la station avec un rôle.
+  //
+  // Pourquoi pas un lien d'invitation cliquable : la station n'a pas
+  // d'adresse e-mail fiable pour chaque collaborateur (beaucoup n'ont pas
+  // d'adresse personnelle). Le propriétaire choisit le mot de passe initial,
+  // le communique en personne, et le compte reste utilisable immédiatement.
+  // Un flux par e-mail cliquable demanderait de repasser sur ce choix de
+  // produit, pas d'ajouter un champ.
+  r.post(
+    "/access/members",
+    // Deux niveaux d'autorisation, dans la route elle-même :
+    //   • créer un agent de lavage exige `worker:create` (gérant inclus) ;
+    //   • créer un gérant ou un caissier exige `user:manage`, permission
+    //     réservée au propriétaire (OWNER_ONLY_PERMISSIONS) : c'est lui seul
+    //     qui délègue l'accès aux encaissements et au contrôle des comptes.
+    // La vérification fine est faite plus bas, une fois le corps lu.
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const input = body(
+        z
+          .object({
+            email: z
+              .string()
+              .trim()
+              .toLowerCase()
+              .email("Adresse e-mail invalide.")
+              .max(254),
+            first_name: z.string().trim().min(1, "Le prénom est requis.").max(100),
+            last_name: z.string().trim().min(1, "Le nom est requis.").max(100),
+            phone: z.string().trim().max(30).optional().nullable(),
+            role: z.enum(["manager", "cashier", "washer"]),
+            // Mot de passe initial posé par le propriétaire. La longueur suit
+            // la politique du produit (MIN_PASSWORD_LENGTH) : passer par la
+            // constante éviterait que les deux règles divergent.
+            password: z
+              .string()
+              .min(5, "Le mot de passe doit contenir au moins 5 caractères.")
+              .max(200),
+          })
+          .strip(),
+        req.body,
+      )
+      const pool = db()
+
+      // Autorisation fine, dépendante du rôle demandé (voir le commentaire de
+      // la route) : gérant/caissier réservés au propriétaire, agent de lavage
+      // ouvert à tout détenteur de `worker:create`.
+      if (input.role === "washer") {
+        assertPermission(req, "worker:create")
+      } else {
+        assertPermission(req, "user:manage")
+      }
+
+      // Hiérarchie des rôles : un gérant ne crée que des agents de lavage.
+      // Créer un caissier ou un autre gérant, c'est déléguer l'accès aux
+      // encaissements ou au contrôle des comptes — la prérogative du
+      // propriétaire. Le serveur fait autorité : l'interface adapte ses
+      // options, mais une requête forgée est rejetée ici.
+      const assignableRoles =
+        t.role === "owner" ? (["manager", "cashier", "washer"] as const) : (["washer"] as const)
+      if (!(assignableRoles as readonly string[]).includes(input.role)) {
+        await audit(pool, t.organizationId, t.userId, "access.denied", input.email, {
+          attempted: { role: input.role },
+          reason: "role_not_assignable",
+        })
+        throw new HttpError(
+          403,
+          "role_not_assignable",
+          "Seul le propriétaire peut créer un compte gérant ou caissier. Vous pouvez créer des comptes agent de lavage.",
+        )
+      }
+
+      const client = await pool.connect()
+      let userId: string
+      try {
+        await client.query("BEGIN")
+
+        const existing = await client.query(
+          "SELECT id FROM users WHERE lower(email) = $1 LIMIT 1",
+          [input.email],
+        )
+        if (existing.rowCount) {
+          await audit(client, t.organizationId, t.userId, "access.denied", input.email, {
+            attempted: { role: input.role },
+            reason: "email_exists",
+          })
+          throw new HttpError(
+            409,
+            "email_exists",
+            "Un compte existe déjà avec cette adresse e-mail.",
+          )
+        }
+
+        // Garde-fou forfait : le nombre d'utilisateurs actifs est plafonné.
+        // Appelé avant l'insertion, il jette au-delà du quota.
+        const passwordHash = await hashPassword(input.password)
+        const userQ = await client.query(
+          `INSERT INTO users (email, first_name, last_name, phone, password_hash, status, organization_id)
+           VALUES ($1, $2, $3, $4, $5, 'active', $6) RETURNING id`,
+          [input.email, input.first_name, input.last_name, input.phone ?? null, passwordHash, t.organizationId],
+        )
+        userId = userQ.rows[0].id as string
+
+        await assertOrganizationUserCapacity(client, t.organizationId, userId)
+
+        await client.query(
+          "INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, $3)",
+          [t.organizationId, userId, input.role],
+        )
+
+        await audit(client, t.organizationId, t.userId, "member.created", userId, {
+          email: input.email,
+          role: input.role,
+        })
+
+        await client.query("COMMIT")
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {})
+        throw error
+      } finally {
+        client.release()
+      }
+
+      // Mot de passe initial connu du propriétaire : le collaborateur peut
+      // aussi en réclamer un nouveau via « mot de passe oublié » à tout
+      // moment. On n'envoie donc pas d'e-mail automatique ici.
+      res.status(201).json({ user_id: userId, role: input.role, email: input.email })
     }),
   )
 

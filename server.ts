@@ -56,6 +56,18 @@ app.get("/readyz", (_req, res) => {
 
 app.use(express.json({ limit: "1mb" }))
 
+// Tout chemin /api/* qui n'est pas /api/v1 n'existe pas : y répondre tout de
+// suite évite qu'il tombe dans les middlewares Vite ci-dessous, qui se
+// rendent service à eux-mêmes (un 404 Vite réinjecté dans Vite) et finissent
+// en 502 après vingt secondes de boucle. Des centaines de réponses par
+// minute, c'est tout le budget de connexion du processus qui partait dans
+// cette boucle — et l'application qui rame pour rien.
+app.use("/api", (req, res, next) => {
+  // `req.path` ici ne contient plus le préfixe "/api" : /api/health → "/health".
+  if (req.path.startsWith("/v1")) return next()
+  res.status(404).json({ error: { code: "not_found", message: "Cette route API n'existe pas." } })
+})
+
 // Tenant-scoped application responses can contain personal or financial data.
 app.use("/api/v1", (_req, res, next) => {
   res.setHeader("Cache-Control", "private, no-store")

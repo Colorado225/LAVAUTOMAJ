@@ -22,6 +22,7 @@ export type Permission =
   | "wash:create"
   | "wash:read"
   | "wash:update"
+  | "wash:status"
   | "wash:cancel"
   | "payment:create"
   | "payment:read"

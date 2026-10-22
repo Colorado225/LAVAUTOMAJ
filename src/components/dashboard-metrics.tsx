@@ -11,10 +11,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { DollarSign, CarFront, TrendingUp, Clock, CheckCircle, XCircle, Activity, BarChart3 } from 'lucide-react'
+import { DollarSign, CarFront, TrendingUp, Clock, CheckCircle, XCircle, Activity, BarChart3, Users, Gauge } from 'lucide-react'
 import { AnimatedNumber } from '@/components/ui/animated-number'
 import { motion, type Variants } from 'framer-motion'
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import {
+  PieChart, Pie, Cell,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  AreaChart, Area, Line,
+  Legend, LabelList
+} from 'recharts'
 
 interface DashboardMetricsData {
   total_washes: number
@@ -32,6 +37,14 @@ interface DashboardMetricsData {
     status: string
     created_at: string
   }>
+  // New: wash status trends over time
+  status_trends?: { date: string; pending: number; in_progress: number; overtime: number; completed: number }[]
+  // New: service category distribution
+  service_distribution?: { category: string; count: number; revenue: number; color: string }[]
+  // New: daily wash counts for the last 30 days
+  daily_activity?: { date: string; washes: number; revenue: number }[]
+  // New: active washers performance
+  washer_performance?: { name: string; washes: number; avg_duration: number }[]
 }
 
 const formatXOF = (cents: number) =>
@@ -88,7 +101,21 @@ const pieVariants: Variants = {
   }
 }
 
-const COLORS = ['#10b981', '#3b82f6', '#ef4444']
+const CHART_COLORS = {
+  pending: '#ef4444',      // red
+  in_progress: '#3b82f6',  // blue
+  overtime: '#f59e0b',     // amber/orange
+  completed: '#10b981',    // emerald/green
+  revenue: '#8b5cf6',      // violet
+  washes: '#06b6d4',       // cyan
+}
+
+const STATUS_LABELS = {
+  pending: 'En attente',
+  in_progress: 'En cours',
+  overtime: 'Temps dépassé',
+  completed: 'Terminé',
+}
 
 export function DashboardMetrics() {
   const [data, setData] = useState<DashboardMetricsData | null>(null)
@@ -112,7 +139,11 @@ export function DashboardMetrics() {
           pending_payments_cents: result.pending_payments_cents || 0,
           pending_payments_count: result.pending_payments_count || 0,
           monthly_revenue: result.monthly_revenue || [],
-          recent_washes: result.recent_washes || []
+          recent_washes: result.recent_washes || [],
+          status_trends: result.status_trends || [],
+          service_distribution: result.service_distribution || [],
+          daily_activity: result.daily_activity || [],
+          washer_performance: result.washer_performance || []
         })
       } catch (err) {
         setError(err instanceof Error ? err.message : 'An unknown error occurred')
@@ -127,11 +158,35 @@ export function DashboardMetrics() {
   const pieData = useMemo(() => {
     if (!data) return []
     return [
-      { name: 'Terminés', value: data.completed_washes || 0, color: COLORS[0] },
-      { name: 'Annulés', value: data.cancelled_washes || 0, color: COLORS[2] },
+      { name: 'Terminés', value: data.completed_washes || 0, color: CHART_COLORS.completed, key: 'completed' },
+      { name: 'En cours', value: (data.total_washes || 0) - (data.completed_washes || 0) - (data.cancelled_washes || 0), color: CHART_COLORS.in_progress, key: 'in_progress' },
+      { name: 'Annulés', value: data.cancelled_washes || 0, color: '#ef4444', key: 'cancelled' },
     ].filter(item => item.value > 0)
   }, [data])
 
+  // Status trends for area chart - last 30 days
+  const statusTrendsData = useMemo(() => {
+    return (data?.status_trends || []).slice(-30).map(item => ({
+      date: item.date.slice(5), // MM-DD
+      fullDate: item.date,
+      pending: item.pending,
+      in_progress: item.in_progress,
+      overtime: item.overtime,
+      completed: item.completed,
+    }))
+  }, [data])
+
+  // Service distribution for donut/radial chart
+  const serviceDistData = useMemo(() => {
+    return (data?.service_distribution || []).slice(0, 6)
+  }, [data])
+
+  // Daily activity for bar chart with line overlay
+  const dailyActivityData = useMemo(() => {
+    return (data?.daily_activity || []).slice(-14) // last 14 days
+  }, [data])
+
+  // Monthly revenue data for area chart
   const barData = useMemo(() => {
     return (data?.monthly_revenue || []).map(item => ({
       ...item,
@@ -248,39 +303,56 @@ export function DashboardMetrics() {
         </motion.div>
       </motion.div>
 
-      {(pieData.length > 0 || barData.length > 0) && (
-        <motion.div className="grid gap-6 lg:grid-cols-2" variants={itemVariants}>
+      {(pieData.length > 0 || statusTrendsData.length > 0 || serviceDistData.length > 0 || dailyActivityData.length > 0) && (
+        <motion.div className="grid gap-6 lg:grid-cols-2 xl:grid-cols-4" variants={itemVariants}>
+          {/* 1. Wash Status Distribution - Donut Chart with animations */}
           {pieData.length > 0 && (
-            <motion.div variants={pieVariants}>
-              <Card interactive
-                className="relative rounded-xl border bg-card">
+            <motion.div variants={pieVariants} className="lg:col-span-2">
+              <Card interactive className="relative rounded-xl border bg-card">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <Activity className="h-5 w-5" />
-                    Répartition des lavages
+                    <Users className="h-5 w-5" />
+                    État des lavages
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="h-[300px] w-full">
+                  <div className="h-[280px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
                           data={pieData}
                           cx="50%"
                           cy="50%"
-                          labelLine={false}
-                          label={({ name, percent }) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`}
+                          innerRadius={60}
                           outerRadius={100}
-                          fill="#8884d8"
+                          paddingAngle={2}
                           dataKey="value"
-                          animationDuration={600}
+                          label={({ name, percent }) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
+                          labelLine={false}
+                          animationDuration={800}
                           animationEasing="ease-out"
                         >
                           {pieData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
+                            <Cell key={`cell-${entry.key || index}`} fill={entry.color} stroke="white" strokeWidth={2} />
                           ))}
                         </Pie>
-                        <Tooltip />
+                        <Tooltip
+                          formatter={(value: any, name: any) => [value?.toLocaleString() ?? '0', name ?? '']}
+                          contentStyle={{
+                            backgroundColor: 'rgba(17, 24, 39, 0.95)',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            borderRadius: '8px',
+                            boxShadow: '0 10px 40px rgba(0,0,0,0.3)'
+                          }}
+                        />
+                        <Legend
+                          layout="vertical"
+                          align="right"
+                          verticalAlign="middle"
+                          iconType="circle"
+                          iconSize={10}
+                          wrapperStyle={{ paddingTop: 20 }}
+                        />
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
@@ -289,32 +361,333 @@ export function DashboardMetrics() {
             </motion.div>
           )}
 
-          {barData.length > 0 && (
-            <motion.div variants={itemVariants}>
-              <Card interactive
-                className="relative rounded-xl border bg-card">
+          {/* 2. Status Trends Over Time - Multi-line Area Chart */}
+          {statusTrendsData.length > 0 && (
+            <motion.div variants={itemVariants} className="lg:col-span-2 xl:col-span-2">
+              <Card interactive className="relative rounded-xl border bg-card">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <BarChart3 className="h-5 w-5" />
-                    Revenus mensuels (FCFA)
+                    <Activity className="h-5 w-5" />
+                    Évolution des statuts (30 jours)
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="h-[300px] w-full">
+                  <div className="h-[280px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={barData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="month" />
-                        <YAxis />
-                        <Tooltip formatter={(value) => [`${(value || 0).toLocaleString()} FCFA`, 'Revenu']} />
+                      <AreaChart data={statusTrendsData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="colorPending" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor={CHART_COLORS.pending} stopOpacity={0.3} />
+                            <stop offset="95%" stopColor={CHART_COLORS.pending} stopOpacity={0} />
+                          </linearGradient>
+                          <linearGradient id="colorInProgress" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor={CHART_COLORS.in_progress} stopOpacity={0.3} />
+                            <stop offset="95%" stopColor={CHART_COLORS.in_progress} stopOpacity={0} />
+                          </linearGradient>
+                          <linearGradient id="colorOvertime" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor={CHART_COLORS.overtime} stopOpacity={0.3} />
+                            <stop offset="95%" stopColor={CHART_COLORS.overtime} stopOpacity={0} />
+                          </linearGradient>
+                          <linearGradient id="colorCompleted" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor={CHART_COLORS.completed} stopOpacity={0.3} />
+                            <stop offset="95%" stopColor={CHART_COLORS.completed} stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                        <XAxis
+                          dataKey="date"
+                          tick={{ fill: '#6b7280', fontSize: 11 }}
+                          axisLine={{ stroke: '#e5e7eb' }}
+                          tickLine={false}
+                        />
+                        <YAxis
+                          tick={{ fill: '#6b7280', fontSize: 11 }}
+                          axisLine={false}
+                          tickLine={false}
+                          tickFormatter={val => val >= 1000 ? `${(val/1000).toFixed(1)}k` : val}
+                        />
+                        <Tooltip
+                          formatter={(value: any, name: any) => [value ?? 0, (STATUS_LABELS[name as keyof typeof STATUS_LABELS] ?? name ?? '')]}
+                          labelFormatter={(date) => date}
+                          contentStyle={{
+                            backgroundColor: 'rgba(17, 24, 39, 0.95)',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            borderRadius: '8px',
+                            boxShadow: '0 10px 40px rgba(0,0,0,0.3)'
+                          }}
+                        />
+                        <Legend
+                          layout="horizontal"
+                          align="center"
+                          verticalAlign="top"
+                          iconType="circle"
+                          iconSize={8}
+                          wrapperStyle={{ paddingBottom: 10 }}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="pending"
+                          stroke={CHART_COLORS.pending}
+                          strokeWidth={2}
+                          fillOpacity={1}
+                          fill="url(#colorPending)"
+                          animationDuration={800}
+                          animationEasing="ease-out"
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="in_progress"
+                          stroke={CHART_COLORS.in_progress}
+                          strokeWidth={2}
+                          fillOpacity={1}
+                          fill="url(#colorInProgress)"
+                          animationDuration={800}
+                          animationEasing="ease-out"
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="overtime"
+                          stroke={CHART_COLORS.overtime}
+                          strokeWidth={2}
+                          fillOpacity={1}
+                          fill="url(#colorOvertime)"
+                          animationDuration={800}
+                          animationEasing="ease-out"
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="completed"
+                          stroke={CHART_COLORS.completed}
+                          strokeWidth={2}
+                          fillOpacity={1}
+                          fill="url(#colorCompleted)"
+                          animationDuration={800}
+                          animationEasing="ease-out"
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
+
+          {/* 3. Service Distribution - Horizontal Bar Chart */}
+          {serviceDistData.length > 0 && (
+            <motion.div variants={itemVariants} className="lg:col-span-2 xl:col-span-2">
+              <Card interactive className="relative rounded-xl border bg-card">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <BarChart3 className="h-5 w-5" />
+                    Top prestations
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="h-[280px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={serviceDistData.sort((a, b) => b.count - a.count)}
+                        layout="vertical"
+                        margin={{ top: 10, right: 30, left: 10, bottom: 0 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false} />
+                        <XAxis
+                          type="number"
+                          tick={{ fill: '#6b7280', fontSize: 11 }}
+                          axisLine={false}
+                          tickLine={false}
+                        />
+                        <YAxis
+                          dataKey="category"
+                          type="category"
+                          width={100}
+                          tick={{ fill: '#6b7280', fontSize: 11 }}
+                          axisLine={false}
+                          tickLine={false}
+                        />
+                        <Tooltip
+                          formatter={(value: any, name: any) => [value?.toLocaleString() ?? '0', name ?? '']}
+                          contentStyle={{
+                            backgroundColor: 'rgba(17, 24, 39, 0.95)',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            borderRadius: '8px',
+                            boxShadow: '0 10px 40px rgba(0,0,0,0.3)'
+                          }}
+                        />
+                        <Legend
+                          layout="horizontal"
+                          align="center"
+                          verticalAlign="top"
+                          wrapperStyle={{ paddingBottom: 10 }}
+                        />
                         <Bar
-                          dataKey="revenue"
-                          fill="#3b82f6"
+                          dataKey="count"
+                          fill="#8884d8"
+                          radius={[0, 6, 6, 0]}
+                          animationDuration={800}
+                          animationEasing="ease-out"
+                        >
+                          {serviceDistData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.color || CHART_COLORS.revenue} />
+                          ))}
+                        </Bar>
+                        <LabelList dataKey="count" position="insideRight" offset={5} fill="white" fontSize={11} fontWeight={600} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
+
+          {/* 4. Daily Activity - Bar + Line Combo Chart */}
+          {dailyActivityData.length > 0 && (
+            <motion.div variants={itemVariants} className="lg:col-span-2 xl:col-span-2">
+              <Card interactive className="relative rounded-xl border bg-card">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Gauge className="h-5 w-5" />
+                    Activité quotidienne (14 jours)
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="h-[280px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={dailyActivityData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                        <XAxis
+                          dataKey="date"
+                          tick={{ fill: '#6b7280', fontSize: 11 }}
+                          axisLine={{ stroke: '#e5e7eb' }}
+                          tickLine={false}
+                        />
+                        <YAxis
+                          yAxisId="left"
+                          tick={{ fill: '#6b7280', fontSize: 11 }}
+                          axisLine={false}
+                          tickLine={false}
+                          tickFormatter={val => val >= 1000 ? `${(val/1000).toFixed(1)}k` : val}
+                        />
+                        <YAxis
+                          yAxisId="right"
+                          orientation="right"
+                          tick={{ fill: '#6b7280', fontSize: 11 }}
+                          axisLine={false}
+                          tickLine={false}
+                          tickFormatter={val => `${(val/1000).toFixed(0)}k`}
+                        />
+                        <Tooltip
+                          formatter={(value: any, name: any) => [
+                            name === 'washes' ? (value ?? 0) : ((value ?? 0)/100).toLocaleString('fr-CI') + ' FCFA',
+                            name === 'washes' ? 'Lavages' : 'Revenus'
+                          ]}
+                          labelFormatter={(date) => date}
+                          contentStyle={{
+                            backgroundColor: 'rgba(17, 24, 39, 0.95)',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            borderRadius: '8px',
+                            boxShadow: '0 10px 40px rgba(0,0,0,0.3)'
+                          }}
+                        />
+                        <Legend
+                          layout="horizontal"
+                          align="center"
+                          verticalAlign="top"
+                          iconType="circle"
+                          iconSize={8}
+                          wrapperStyle={{ paddingBottom: 10 }}
+                        />
+                        <Bar
+                          yAxisId="left"
+                          dataKey="washes"
+                          name="Lavages"
+                          fill={CHART_COLORS.washes}
                           radius={[4, 4, 0, 0]}
-                          animationDuration={600}
+                          animationDuration={800}
+                          animationEasing="ease-out"
+                        />
+                        <Line
+                          yAxisId="right"
+                          type="monotone"
+                          dataKey="revenue"
+                          name="Revenus (FCFA)"
+                          stroke={CHART_COLORS.revenue}
+                          strokeWidth={2.5}
+                          dot={{ fill: CHART_COLORS.revenue, strokeWidth: 2, r: 4, stroke: 'white' }}
+                          activeDot={{ r: 6, fill: CHART_COLORS.revenue }}
+                          animationDuration={800}
                           animationEasing="ease-out"
                         />
                       </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
+
+          {/* 5. Monthly Revenue Trend - Smooth Area Chart */}
+          {(data?.monthly_revenue?.length ?? 0) > 0 && (
+            <motion.div variants={itemVariants} className="lg:col-span-2 xl:col-span-2">
+              <Card interactive className="relative rounded-xl border bg-card">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <TrendingUp className="h-5 w-5" />
+                    Tendance revenus mensuels
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="h-[280px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={barData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor={CHART_COLORS.revenue} stopOpacity={0.4} />
+                            <stop offset="95%" stopColor={CHART_COLORS.revenue} stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                        <XAxis
+                          dataKey="month"
+                          tick={{ fill: '#6b7280', fontSize: 11 }}
+                          axisLine={{ stroke: '#e5e7eb' }}
+                          tickLine={false}
+                        />
+                        <YAxis
+                          tick={{ fill: '#6b7280', fontSize: 11 }}
+                          axisLine={false}
+                          tickLine={false}
+                          tickFormatter={val => `${(val/1000).toFixed(0)}k`}
+                        />
+                        <Tooltip
+                          formatter={(value: any) => [value?.toLocaleString('fr-CI') ?? '0' + ' FCFA', 'Revenu']}
+                          labelFormatter={(month) => month}
+                          contentStyle={{
+                            backgroundColor: 'rgba(17, 24, 39, 0.95)',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            borderRadius: '8px',
+                            boxShadow: '0 10px 40px rgba(0,0,0,0.3)'
+                          }}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="revenue"
+                          stroke={CHART_COLORS.revenue}
+                          strokeWidth={3}
+                          fillOpacity={1}
+                          fill="url(#colorRevenue)"
+                          animationDuration={1000}
+                          animationEasing="ease-out"
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="revenue"
+                          stroke={CHART_COLORS.revenue}
+                          strokeWidth={0}
+                          dot={false}
+                          activeDot={{ r: 6, fill: CHART_COLORS.revenue, stroke: 'white', strokeWidth: 2 }}
+                        />
+                      </AreaChart>
                     </ResponsiveContainer>
                   </div>
                 </CardContent>

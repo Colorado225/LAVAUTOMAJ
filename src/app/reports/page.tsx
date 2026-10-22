@@ -708,7 +708,7 @@ function BreakdownTable({
         {loading ? <TableSkeleton rows={4} cols={columns.length} label={`Chargement : ${title}`} /> : (
           <div className="overflow-x-auto rounded-lg border">
             <Table>
-              <TableHeader><TableRow>{columns.map((column) => <TableHead key={column}>{column}</TableHead>)}</TableRow></TableHeader>
+              <TableHeader><TableRow>{columns.map((column) => <TableHead key={column} className="text-center">{column}</TableHead>)}</TableRow></TableHeader>
               <TableBody>
                 {rows.length === 0 ? (
                   <TableRow><TableCell colSpan={columns.length} className="h-20 text-center text-muted-foreground">{empty}</TableCell></TableRow>
@@ -718,7 +718,7 @@ function BreakdownTable({
                     className="row-in"
                     style={{ "--row": Math.min(index, 10) } as React.CSSProperties}
                   >
-                    {row.map((value, cellIndex) => <TableCell key={cellIndex} className={cellIndex > 0 ? "text-right" : undefined}>{value}</TableCell>)}
+                    {row.map((value, cellIndex) => <TableCell key={cellIndex} className="text-center">{value}</TableCell>)}
                   </TableRow>
                 ))}
               </TableBody>

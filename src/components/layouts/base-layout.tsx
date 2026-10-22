@@ -4,8 +4,6 @@ import * as React from "react"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
-import { SubscriptionProvider } from "@/lib/subscription"
-import { PermissionProvider } from "@/lib/permissions"
 import { OfflineIndicator } from "@/components/offline-indicator"
 import { TrialBanner } from "@/components/trial/trial-banner"
 import { SupportButton } from "@/components/support/support-button"
@@ -25,9 +23,11 @@ export function BaseLayout({ children, title, description }: BaseLayoutProps) {
   // et évite surtout que chaque écran choisisse sa propre durée.
   const { pathname } = useLocation()
 
+  // `SubscriptionProvider` et `PermissionProvider` sont montés dans `App.tsx`,
+  // au-dessus du routeur : ce layout en est une descendante comme les pages.
+  // Les remonter ici à chaque navigation réinitialisait l'état et relançait
+  // `/me/permissions` et `/subscription` à chaque changement d'écran.
   return (
-    <SubscriptionProvider>
-    <PermissionProvider>
     <SidebarProvider
       style={
         {
@@ -73,7 +73,5 @@ export function BaseLayout({ children, title, description }: BaseLayoutProps) {
         <SupportButton />
       </SidebarInset>
     </SidebarProvider>
-    </PermissionProvider>
-    </SubscriptionProvider>
   )
 }

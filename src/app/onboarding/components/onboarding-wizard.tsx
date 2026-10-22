@@ -1,4 +1,3 @@
-import { useNavigate } from "react-router-dom"
 import { AnimatePresence, motion } from "framer-motion"
 import {
   STAGES,
@@ -25,7 +24,6 @@ export function OnboardingWizard({
   onDone,
   onQuit,
 }: OnboardingWizardProps) {
-  const navigate = useNavigate()
   const stage = progress?.current_stage ?? "station"
   const idx = STEP_INDEX(stage)
   const percent = Math.round(((idx + 1) / (STAGES.length + 1)) * 100)
@@ -95,7 +93,14 @@ export function OnboardingWizard({
               progress={progress}
               onDone={onDone}
               onQuit={onQuit}
-              onCompleted={() => navigate("/dashboard")}
+              // Navigation pleine page, pas `navigate()` : la garde de route
+              // (`OnboardingGate`) persiste entre deux navigations SPA et a
+              // déjà mémorisé « in_progress » pendant l'assistant. La
+              // rediriger en SPA la renverrait aussitôt vers /onboarding —
+              // l'écran de confirmation réapparaissait après les confettis.
+              // Un rechargement forcé la fait reconsulter le serveur, qui
+              // répond maintenant « completed » : le dashboard s'ouvre.
+              onCompleted={() => window.location.assign("/dashboard")}
             />
           )}
         </motion.div>

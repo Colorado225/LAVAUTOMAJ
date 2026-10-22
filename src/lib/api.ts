@@ -9,6 +9,32 @@ const API_BASE_URL = /^(https?:\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(
 
 export { API_BASE_URL }
 
+/**
+ * Délai d'attente par requête.
+ *
+ * Sans lui, une requête qui pend (le répartiteur devant le serveur qui boucle,
+ * le réseau mobile qui coupe sans prévenir) laisse un spinner tourner pour
+ * toujours — et un bouton « Nouveau lavage » qui charge sans jamais rien
+ * ouvrir, parce que les droits ne sont jamais arrivés. Le fetch natif ne sait
+ * pas s'annuler tout seul : on combine un `AbortSignal.timeout` avec le signal
+ * éventuellement fourni par l'appelant (la valeur la plus contraignante gagne).
+ */
+export const API_TIMEOUT_MS = 20_000
+
+async function fetchWithTimeout(path: string, options: RequestInit): Promise<Response> {
+  const external = options.signal
+  if (typeof AbortSignal?.timeout === "function" && !external) {
+    return fetch(path, { ...options, signal: AbortSignal.timeout(API_TIMEOUT_MS) })
+  }
+  if (typeof AbortSignal?.timeout === "function" && external) {
+    return fetch(path, {
+      ...options,
+      signal: AbortSignal.any([external, AbortSignal.timeout(API_TIMEOUT_MS)]),
+    })
+  }
+  return fetch(path, options)
+}
+
 // ---------------------------------------------------------------------------
 // Jeton de session de secours : le cookie httpOnly reste la voie principale,
 // mais certains contextes (aperçu intégré dans une iframe) bloquent les
@@ -79,7 +105,7 @@ export function useApi<T = unknown>(path: string): UseApiResult<T> {
       setData(null)
       setError(null)
       try {
-        const res = await fetch(`${API_BASE_URL}${path}`, {
+        const res = await fetchWithTimeout(`${API_BASE_URL}${path}`, {
           headers: new Headers({ Accept: "application/json", ...authHeaders() }),
           signal: controller.signal,
           credentials: "include",
@@ -124,7 +150,7 @@ export async function apiFetch(path: string, options: RequestInit = {}): Promise
   if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`)
   if (token && !headers.has("X-Session-Token")) headers.set("X-Session-Token", token)
 
-  return fetch(`${API_BASE_URL}${path}`, {
+  return fetchWithTimeout(`${API_BASE_URL}${path}`, {
     ...options,
     headers,
     credentials: options.credentials ?? "include",

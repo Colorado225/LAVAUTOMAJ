@@ -240,6 +240,48 @@ CREATE TABLE IF NOT EXISTS washes (
 ALTER TABLE washes ADD COLUMN IF NOT EXISTS reference text;
 ALTER TABLE washes ADD COLUMN IF NOT EXISTS payment_status text NOT NULL DEFAULT 'pending';
 ALTER TABLE washes ADD COLUMN IF NOT EXISTS cancelled_by uuid REFERENCES users(id);
+-- Avancement operationnel du lavage.
+--
+-- La colonne status reste le statut COMPTABLE : un lavage est enregistre quand
+-- il est rendu, il est donc ne "completed" des sa creation, et les rapports,
+-- le rendement et les encaissements s'appuient sur cette valeur. La changer
+-- viderait les rapports d'une station entiere le jour ou elle commence a
+-- enregistrer des lavages "en attente".
+--
+-- operation_status suit, lui, l'avancement PHYSIQUE de l'operation :
+--   pending     -> en attente : le lavage est enregistre, la voiture attend
+--   in_progress -> en cours   : le laveur a commence
+--   completed   -> termine    : la voiture est prete
+--
+-- Le defaut est "completed" : les lavages deja enregistres sont termines, et
+-- une migration ne doit pas les faire repasser "en attente". Seuls les
+-- nouveaux lavages naissent explicitement en "pending".
+ALTER TABLE washes ADD COLUMN IF NOT EXISTS operation_status text NOT NULL DEFAULT 'completed';
+ALTER TABLE washes DROP CONSTRAINT IF EXISTS washes_operation_status_check;
+ALTER TABLE washes ADD CONSTRAINT washes_operation_status_check
+  CHECK(operation_status IN ('pending','in_progress','completed','overtime'));
+ALTER TABLE washes ADD COLUMN IF NOT EXISTS queue_position integer;
+ALTER TABLE washes ADD COLUMN IF NOT EXISTS completed_at timestamptz;
+-- Depart du decompte.
+--
+-- Le decompte du temps de lavage commence quand quelqu'un clique sur la tache
+-- a l'ecran : la colonne note cet instant, et l'ecran ne fait que le
+-- recomparer a l'heure de l'horloge. Elle est donc remise a zero quand la
+-- tache repasse en attente, et elle n'est jamais devinee.
+ALTER TABLE washes ADD COLUMN IF NOT EXISTS operation_started_at timestamptz;
+-- Duree estimee du lavage, en minutes.
+--
+-- C'est la somme des durees des prestations choisies au moment de
+-- l'enregistrement. Elle est figee a l'ecriture, parce qu'une duree qui change
+-- sous les pieds du compteur fait sauter la barre de progression : le
+-- laveur verrait son temps restant changer sans qu'il ait rien demande.
+ALTER TABLE washes ADD COLUMN IF NOT EXISTS estimated_minutes integer;
+-- Nom du client, saisi au comptoir.
+--
+-- Une etiquette, et rien d'autre : ni telephone, ni historique, ni fiche. Le
+-- produit ne tient pas de fichier client ; il note ce que le client veut
+-- etre appele pendant que sa voiture est dans la station.
+ALTER TABLE washes ADD COLUMN IF NOT EXISTS customer_name text;
 -- Plaque du vehicule lave.
 --
 -- Le produit ne tient pas de fichier client : c'est la plaque, et elle seule,
@@ -272,6 +314,21 @@ CREATE TABLE IF NOT EXISTS receipt_issues (
  UNIQUE(wash_id, copy_number)
 );
 CREATE INDEX IF NOT EXISTS receipt_issues_wash_idx ON receipt_issues(wash_id, copy_number DESC);
+
+-- Notifications persistées
+CREATE TABLE IF NOT EXISTS notifications (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
+ user_id uuid REFERENCES users(id),
+ site_id uuid REFERENCES sites(id),
+ type text NOT NULL,
+ title text NOT NULL,
+ message text NOT NULL,
+ entity_type text,
+ entity_id uuid,
+ read_at timestamptz,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_org_user_created ON notifications(organization_id, user_id, created_at DESC);
 
 -- ------------------------------------------------------------------ stock --
 -- Regle structurelle : il n'existe NULLE PART une colonne « quantite en

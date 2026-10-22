@@ -21,6 +21,7 @@ export const PERMISSIONS = [
   "wash:create",
   "wash:read",
   "wash:update",
+  "wash:status",
   "wash:cancel",
   // Encaissements
   "payment:create",
@@ -103,6 +104,10 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "wash:create",
     "wash:read",
     "wash:update",
+    // Avancement operationnel : le lavage passe de « en attente » a « en
+    // cours », puis a « termine ». C'est la personne qui tient le poste qui
+    // fait avancer la voiture, pas le gerant qui repond des comptes.
+    "wash:status",
     "payment:create",
     "payment:read",
     "payment:verify",
@@ -171,6 +176,11 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "dashboard:read",
     "wash:create",
     "wash:read",
+    // Le caissier enregistre le lavage et suit la voiture : c'est lui qui
+    // fait passer l'operation de « en attente » a « en cours », puis a
+    // « terminate ». Lui refuser ce geste obligerait le gerant a quitter le
+    // comptoir pour une operation de terrain.
+    "wash:status",
     "payment:create",
     "payment:read",
     "cash_session:read",
@@ -207,6 +217,7 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "wash:create": "Enregistrer un lavage",
   "wash:read": "Consulter les lavages",
   "wash:update": "Modifier un lavage",
+  "wash:status": "Faire avancer l'avancement d'un lavage",
   "wash:cancel": "Annuler un lavage",
   "payment:create": "Enregistrer un encaissement",
   "payment:read": "Consulter les encaissements",

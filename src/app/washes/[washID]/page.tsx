@@ -20,6 +20,8 @@ import { TableSkeleton } from "@/components/ui/table-skeleton"
 import { useAccess } from "@/lib/permissions"
 import { actionGate } from "@/lib/action-blocking"
 import { BlockedReason } from "@/components/access/blocked-reason"
+import { OperationStatusBadge } from "@/components/washes/operation-status-badge"
+import type { OperationStatus } from "@/lib/wash-operation-status"
 
 interface Wash {
   id: string
@@ -28,6 +30,7 @@ interface Wash {
   vehicle_category_id: string | null
   total_cents: number
   status: string
+  operation_status: string
   payment_status: string
   author_id: string
   cancelled_at: string | null
@@ -126,9 +129,13 @@ function paymentStatusLabel(status: string): string {
 /** Clés d'occupation : l'annulation et l'encaissement n'occupent pas la même zone. */
 const CANCEL_KEY = "annulation"
 const PAYMENT_KEY = "encaissement"
+const STATUS_KEY = "avancement"
 
 export default function WashDetailPage() {
   const cancelCapability = useAccess("wash:cancel", "washes.cancel")
+  // Faire avancer l'avancement d'un lavage est un geste de terrain : c'est
+  // la personne qui tient le poste — comptoir ou supervision — qui le pose.
+  const statusCapability = useAccess("wash:status")
   const { washID } = useParams<{ washID: string }>()
   const [refreshKey, setRefreshKey] = useState(0)
   const path = washID ? `/api/v1/washes/${encodeURIComponent(washID)}?refresh=${refreshKey}` : ""
@@ -169,6 +176,26 @@ export default function WashDetailPage() {
       ? `/api/v1/cash-sessions/current?site_id=${encodeURIComponent(detail.wash.site_id)}&refresh=${refreshKey}`
       : "",
   )
+
+  /**
+   * Fait avancer l'avancement du lavage d'un cran.
+   *
+   * Meme geste que dans l'historique : la pastille passe a l'etat suivant.
+   * Le serveur est seul juge — la fiche se recharge apres l'ecriture, la
+   * pastille affiche ce qu'il a reellement accepte.
+   */
+  async function advanceStatus(next: OperationStatus) {
+    if (!washID) return
+    const outcome = await mutation.run({
+      url: `/api/v1/washes/${encodeURIComponent(washID)}/status`,
+      method: "PATCH",
+      body: { status: next },
+      failure: "Impossible de changer l’avancement de ce lavage.",
+      busyKey: STATUS_KEY,
+    })
+    if (!outcome.ok) return
+    setRefreshKey((key) => key + 1)
+  }
 
   async function cancelWash() {
     if (!washID || !reason.trim()) {
@@ -314,8 +341,14 @@ export default function WashDetailPage() {
                 <p className="font-semibold">{wash ? new Date(wash.created_at).toLocaleString("fr-CI") : "—"}</p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Statut</p>
-                <p className="font-semibold">{wash?.status === "cancelled" ? "Annulé" : wash?.status === "completed" ? "Terminé" : wash?.status}</p>
+                <p className="text-xs text-muted-foreground">Avancement</p>
+                <OperationStatusBadge
+                  status={wash?.operation_status}
+                  cancelled={wash?.status === "cancelled"}
+                  canAdvance={statusCapability.allowed}
+                  busy={mutation.busyKey === STATUS_KEY}
+                  onAdvance={(next) => void advanceStatus(next)}
+                />
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Statut du paiement</p>

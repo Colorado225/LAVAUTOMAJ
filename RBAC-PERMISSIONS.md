@@ -52,6 +52,7 @@ propriétaire · ❌ refusé, non délégable.
 | Consulter les lavages | `wash:read` | ✅ | ✅ | ✅ | ✅ |
 | Enregistrer un lavage | `wash:create` | ✅ | ✅ | ✅ | ⚙️ |
 | Modifier un lavage | `wash:update` | ✅ | ✅ | ⚙️ | ⚙️ |
+| **Faire avancer l'avancement d'un lavage** | `wash:status` | ✅ | ✅ | ✅ | ⚙️ |
 | Annuler un lavage | `wash:cancel` | ✅ | ⚙️ | ⚙️ | ⚙️ |
 | Consulter les encaissements | `payment:read` | ✅ | ✅ | ✅ | ⚙️ |
 | Enregistrer un encaissement | `payment:create` | ✅ | ✅ | ✅ | ⚙️ |
@@ -480,3 +481,76 @@ module**.
 
 **Verrouillage.** `tests/permissions.test.ts` passe de 21 à 23 permissions
 attendues pour le gérant, et de 31 à 33 pour le propriétaire.
+
+### 21 octobre 2026 — L'avancement opérationnel d'un lavage (`wash:status`)
+
+**Constat.** Un lavage est enregistré quand il est rendu : il naît donc
+`status = 'completed'`, et tout le comptable — rapports, rendement des
+laveurs, encaissements — repose sur cette valeur. Mais la station vit aussi
+d'une autre réalité : la voiture attend, le laveur est en train, la voiture
+est prête. Cette réalité n'avait aucune place dans le produit.
+
+Une seule colonne ne pouvait pas porter les deux : faire naître les lavages en
+`pending` aurait vidé les rapports d'une station entière le jour où elle
+commence à enregistrer — le manager aurait vu « 0 lavage terminé » alors que
+la station en avait encaissé trente.
+
+**Décision.** Une **seconde** colonne, `operation_status`, porte l'avancement
+physique : `pending` (en attente) → `in_progress` (en cours) → `completed`
+(terminé). Le statut comptable ne bouge pas.
+
+La permission qui la fait bouger est `wash:status`, et elle va plus loin que
+`wash:update` :
+
+| Rôle | `wash:status` | Pourquoi |
+|---|---|---|
+| Propriétaire | ✅ | Par définition. |
+| Gérant | ✅ | Il supervise l'activité de la station. |
+| Caissier | ✅ | C'est **son** poste : il enregistre le lavage et suit la voiture. Lui refuser ce geste l'obligerait à quitter le comptoir pour une opération de terrain. |
+| Agent de lavage | ❌ | Il fait le lavage, il ne le *déclare* pas terminé : c'est la station qui sait, pas celui qui a les mains dans la mousse. Le geste reste accessible à ceux qui tiennent le comptoir et la supervision. |
+
+`wash:update` (modifier le contenu d'un lavage) n'a pas bougé : continuer à
+modifier un lavage déjà enregistré reste une décision de gestion, pas de
+terrain.
+
+**Ce que la permission ne permet pas.** Elle ne touche ni un montant, ni un
+mouvement de caisse, ni une ligne de stock, ni le statut comptable. Elle écrit
+une seule colonne et laisse une trace (`wash.status_changed` dans le journal
+d'audit). Un lavage annulé ne se fait plus avancer.
+
+**Verrouillage.** `tests/permissions.test.ts` passe de 25 à 26 permissions
+attendues pour le gérant, de 12 à 13 pour le caissier, et de 36 à 37 pour le
+propriétaire. L'agent de lavage ne reçoit pas la permission : la pastille
+reste un texte, sans lien.
+
+**Verrouillage du comportement.** `tests/wash-operation-status-api.test.ts`
+exerce la route de bout en bout : l'avancement s'écrit, il ne touche ni au
+montant ni au statut comptable ni aux encaissements, il laisse une trace
+d'audit, et il est refusé au laveur (403), gelé sur un lavage annulé (409) et
+invisible depuis une autre organisation (404).
+
+### 22 octobre 2026 — Les tâches à la station
+
+Une permission, mais un écran de plus : la même `wash:status` sert désormais à
+faire tourner le décompte du temps de lavage.
+
+**Le panneau « À la station ».** Chaque lavage en attente ou en cours a une
+carte : le nom du client, la plaque, le laveur, et une barre de progression.
+Un clic sur une carte qui attend lance le décompte ; un clic sur une carte qui
+tourre demande confirmation avant de la terminer. Quand le temps estimé est
+écoulé, la tâche se termine d'elle-même et une notification le dit.
+
+**La permission n'a pas bougé.** Le geste de terrain reste à ceux qui tiennent
+le poste — comptoir et supervision. L'agent de lavage voit les cartes, mais
+elles ne sont pas cliquables : il fait le travail, il ne le déclare pas
+terminé.
+
+**Ce que l'écran ajoute au lavage.** Trois colonnes, sans effet comptable :
+`customer_name` (une étiquette de comptoir, ni téléphone ni fiche),
+`estimated_minutes` (la durée des prestations, figée à l'enregistrement) et
+`operation_started_at` (l'instant du départ du décompte). La carte est une
+vue de terrain ; le tableau historique reste la source.
+
+**Verrouillage.** `tests/wash-countdown.test.ts` et `tests/wash-tasks.test.ts`
+vérifient le calcul du décompte et le tri des cartes ; l'API est vérifiée dans
+`tests/wash-operation-status-api.test.ts`.

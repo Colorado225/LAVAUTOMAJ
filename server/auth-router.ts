@@ -19,7 +19,7 @@ import {
   verifyPassword,
 } from "./auth.ts";
 
-export const MIN_PASSWORD_LENGTH = 8;
+export const MIN_PASSWORD_LENGTH = 5;
 
 // ---------------------------------------------------------------------------
 // Minimal in-memory rate limiting for credential endpoints (per IP).

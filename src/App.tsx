@@ -8,6 +8,8 @@ import { consoleRoutes } from "@/console/routes"
 import { useEffect } from "react"
 import { initGTM } from "@/utils/analytics"
 import { AuthProvider } from "@/lib/auth"
+import { SubscriptionProvider } from "@/lib/subscription"
+import { PermissionProvider } from "@/lib/permissions"
 
 // Get basename from environment (for deployment) or use empty string for development
 const basename = import.meta.env.VITE_BASENAME || ""
@@ -56,9 +58,21 @@ function App() {
       <MotionConfig reducedMotion="user">
         <ThemeProvider defaultTheme="system">
           <AuthProvider>
-            <Toaster>
-              <RouterProvider router={router} />
-            </Toaster>
+            {/* Droits et forfait montés UNE fois, au-dessus du routeur : chaque
+                page qui lit `useAccess` est une descendante de ces
+                fournisseurs. Avant, ils vivaient dans `BaseLayout` — et un
+                écran qui les appelait au-dessus de son propre layout lisait un
+                contexte jamais alimenté : le bouton « Nouveau lavage »
+                chargeait sans fin parce que `/me/permissions` n'était
+                requêté qu'au montage du layout, après le rendu du bouton.
+                Montés ici, ils couvrent les 18 écrans qui lisent les droits. */}
+            <SubscriptionProvider>
+              <PermissionProvider>
+                <Toaster>
+                  <RouterProvider router={router} />
+                </Toaster>
+              </PermissionProvider>
+            </SubscriptionProvider>
           </AuthProvider>
         </ThemeProvider>
       </MotionConfig>
