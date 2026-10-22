@@ -20,6 +20,7 @@
  * Usage :
  *   npm run smoke
  *   npm run smoke -- --base-url http://localhost:3000   # contre un serveur déjà lancé
+ *   npm run smoke -- --serverless                       # runtime des fonctions Vercel
  *   npm run smoke -- --verbose
  */
 import { spawn } from "node:child_process"
@@ -36,6 +37,13 @@ const argValue = (name) => {
 }
 const externalBaseUrl = argValue("--base-url")
 const verbose = args.includes("--verbose")
+/**
+ * Mode serverless : le serveur jetable est `scripts/serve-vercel-local.mjs`,
+ * qui applique les règles de Vercel (chemin dans `req.query.slug`, corps déjà
+ * analysé) au lieu de celles d'Express. C'est le seul moyen de vérifier ici ce
+ * que la production exécutera réellement.
+ */
+const serverless = args.includes("--serverless")
 
 const results = []
 let failures = 0
@@ -64,7 +72,8 @@ async function freePort() {
 
 function startServer(port) {
   const tsxLoader = path.join(root, "node_modules", "tsx", "dist", "loader.mjs")
-  const child = spawn(process.execPath, ["--import", tsxLoader, "server.ts"], {
+  const entry = serverless ? path.join("scripts", "serve-vercel-local.mjs") : "server.ts"
+  const child = spawn(process.execPath, ["--import", tsxLoader, entry], {
     cwd: root,
     env: {
       ...process.env,
@@ -88,9 +97,11 @@ function startServer(port) {
 }
 
 async function waitForReady(baseUrl, attempts = 120) {
+  // Le runtime serverless ne sert que /api : la sonde de vie y est /api/healthz.
+  const probe = serverless ? "/api/healthz" : "/readyz"
   for (let i = 0; i < attempts; i += 1) {
     try {
-      const response = await fetch(`${baseUrl}/readyz`)
+      const response = await fetch(`${baseUrl}${probe}`)
       if (response.ok) return true
     } catch {
       /* le serveur n'écoute pas encore */
@@ -142,57 +153,65 @@ async function run(baseUrl) {
   const base = baseUrl.replace(/\/+$/, "")
   const client = createClient(base)
 
-  // --- 1. Pages publiques et applicatives ---------------------------------
-  const pages = [
-    ["/landing", "Pilotez votre station"],
-    ["/auth/sign-in", "Connexion"],
-    ["/auth/sign-up", "Créer"],
-    ["/console", ""],
-    ["/dashboard", ""],
-  ]
-  for (const [pathname, needle] of pages) {
-    const response = await fetch(base + pathname)
-    const html = await response.text()
-    record(
-      `page ${pathname}`,
-      response.ok && html.includes("<div id=\"root\""),
-      `${response.status}`,
-    )
-    if (needle) {
-      // Le HTML initial est celui de la coquille Vite : le contenu est rendu
-      // côté client. On vérifie donc que le module de page est bien servi.
-      const moduleReachable = await fetch(base + pathname).then((r) => r.ok)
-      record(`  contenu servi pour ${pathname}`, moduleReachable)
+  // --- 1. Pages publiques et modules de pages ---------------------------
+  // En mode serverless, ces fichiers sont servis par la plateforme depuis
+  // `dist/` : la fonction ne les voit jamais. Les tester ici n'aurait donc
+  // aucun sens — c'est le déploiement qui les sert, pas l'API.
+  if (serverless) {
+    console.log("[smoke] Pages et modules de routes ignorés : servis par la plateforme, pas par la fonction.\n")
+  } else {
+    // --- 1. Pages publiques et applicatives ---------------------------------
+    const pages = [
+      ["/landing", "Pilotez votre station"],
+      ["/auth/sign-in", "Connexion"],
+      ["/auth/sign-up", "Créer"],
+      ["/console", ""],
+      ["/dashboard", ""],
+    ]
+    for (const [pathname, needle] of pages) {
+      const response = await fetch(base + pathname)
+      const html = await response.text()
+      record(
+        `page ${pathname}`,
+        response.ok && html.includes("<div id=\"root\""),
+        `${response.status}`,
+      )
+      if (needle) {
+        // Le HTML initial est celui de la coquille Vite : le contenu est rendu
+        // côté client. On vérifie donc que le module de page est bien servi.
+        const moduleReachable = await fetch(base + pathname).then((r) => r.ok)
+        record(`  contenu servi pour ${pathname}`, moduleReachable)
+      }
     }
-  }
 
-  // --- 1 bis. Modules de toutes les pages --------------------------------
-  // Le routeur charge chaque écran à la demande. Une page qui importe un
-  // module disparu, ou dont le JSX ne compile plus, ne se voit qu'au moment
-  // où on l'ouvre — c'est-à-dire en production, chez le client. On demande
-  // donc à Vite de transformer chaque module de route, comme le ferait le
-  // navigateur, et on vérifie qu'il répond sans erreur.
-  const routeFiles = ["src/config/routes.tsx", "src/console/routes.tsx", "src/App.tsx"]
-  const modules = new Set()
-  for (const file of routeFiles) {
-    const source = readFileSync(path.join(root, file), "utf8")
-    for (const match of source.matchAll(/import\("@\/([^"]+)"\)/g)) {
-      modules.add(`/src/${match[1]}.tsx`)
+    // --- 1 bis. Modules de toutes les pages --------------------------------
+    // Le routeur charge chaque écran à la demande. Une page qui importe un
+    // module disparu, ou dont le JSX ne compile plus, ne se voit qu'au moment
+    // où on l'ouvre — c'est-à-dire en production, chez le client. On demande
+    // donc à Vite de transformer chaque module de route, comme le ferait le
+    // navigateur, et on vérifie qu'il répond sans erreur.
+    const routeFiles = ["src/config/routes.tsx", "src/console/routes.tsx", "src/App.tsx"]
+    const modules = new Set()
+    for (const file of routeFiles) {
+      const source = readFileSync(path.join(root, file), "utf8")
+      for (const match of source.matchAll(/import\("@\/([^"]+)"\)/g)) {
+        modules.add(`/src/${match[1]}.tsx`)
+      }
     }
-  }
-  let brokenModules = 0
-  for (const modulePath of [...modules].sort()) {
-    const response = await fetch(base + modulePath)
-    const body = await response.text()
-    // Vite renvoie 200 avec un message d'erreur dans le corps quand la
-    // transformation échoue : le statut seul ne suffit pas.
-    const failed = !response.ok || /^\s*(throw new Error|SyntaxError|Failed to resolve)/.test(body)
-    if (failed) {
-      brokenModules += 1
-      console.log(`ÉCHEC  module ${modulePath} — ${response.status} ${body.slice(0, 160).replace(/\s+/g, " ")}`)
+    let brokenModules = 0
+    for (const modulePath of [...modules].sort()) {
+      const response = await fetch(base + modulePath)
+      const body = await response.text()
+      // Vite renvoie 200 avec un message d'erreur dans le corps quand la
+      // transformation échoue : le statut seul ne suffit pas.
+      const failed = !response.ok || /^\s*(throw new Error|SyntaxError|Failed to resolve)/.test(body)
+      if (failed) {
+        brokenModules += 1
+        console.log(`ÉCHEC  module ${modulePath} — ${response.status} ${body.slice(0, 160).replace(/\s+/g, " ")}`)
+      }
     }
+    record(`modules de pages (${modules.size})`, brokenModules === 0, `${brokenModules} en échec`)
   }
-  record(`modules de pages (${modules.size})`, brokenModules === 0, `${brokenModules} en échec`)
 
   // --- 2. Parcours d'inscription -----------------------------------------
   const email = `smoke-${Date.now()}@example.ci`
@@ -561,11 +580,13 @@ try {
   if (!baseUrl) {
     const port = await freePort()
     baseUrl = `http://127.0.0.1:${port}`
-    console.log(`[smoke] Démarrage d'un serveur jetable sur ${baseUrl}\n`)
+    console.log(
+      `[smoke] Démarrage d'un serveur jetable sur ${baseUrl}${serverless ? " (runtime Vercel simulé)" : ""}\n`,
+    )
     serverHandle = startServer(port)
     const ready = await waitForReady(baseUrl)
     if (!ready) {
-      console.error("[smoke] Le serveur n'a pas répondu à /readyz dans le délai imparti.")
+      console.error(`[smoke] Le serveur n'a pas répondu à ${serverless ? "/api/healthz" : "/readyz"} dans le délai imparti.`)
       console.error(serverHandle.logs.join("").slice(-2000))
       process.exitCode = 1
     } else {

@@ -247,6 +247,12 @@ docker compose up -d
 base réponde. `/healthz` dirait « tout va bien » d'un serveur incapable de
 servir une page.
 
+**Sur Vercel**, l'interface et l'API vivent sur le même domaine : les fonctions
+de `api/` exécutent la même pile Express, la base est un PostgreSQL hébergé
+(Neon), et les relances passent par un cron plutôt que par un minuteur. Tout
+est décrit au §4 bis de `DEPLOIEMENT.md` ; `npm run smoke:serverless` rejoue le
+parcours complet contre un imitateur du runtime Vercel avant chaque envoi.
+
 ### Contrôle automatique
 
 `.github/workflows/ci.yml` vérifie à chaque envoi les types, le style, la

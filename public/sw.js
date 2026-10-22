@@ -35,7 +35,10 @@
  *     station.
  */
 
-const VERSION = "v1"
+// v2 : les fichiers dont le téléchargement échoue obtiennent désormais une
+// réponse explicite au lieu d'une promesse rejetée (voir assetCacheFirst).
+// Changer la version purge les caches de la v1 à l'activation.
+const VERSION = "v2"
 const SHELL_CACHE = `washpilot-shell-${VERSION}`
 const ASSET_CACHE = `washpilot-assets-${VERSION}`
 const API_CACHE = `washpilot-api-${VERSION}`
@@ -148,10 +151,17 @@ async function assetCacheFirst(request) {
       cache.put(request, response.clone())
     }
     return response
-  } catch (error) {
-    // Pas de repli possible pour un fichier jamais vu : on laisse l'erreur
-    // remonter telle quelle plutôt que de renvoyer une réponse trompeuse.
-    throw error
+  } catch {
+    // Pas de repli possible pour un fichier jamais vu : le réseau a échoué et
+    // le cache ne l'a jamais vu. On renvoie une réponse explicite plutôt que
+    // de laisser la promesse se rejeter : un rejet ici apparaît dans la
+    // console comme « TypeError: Failed to fetch » sans le moindre contexte,
+    // et l'écran reste blanc sans que personne ne sache pourquoi.
+    return new Response("Ressource indisponible hors connexion.", {
+      status: 504,
+      statusText: "Gateway Timeout",
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    })
   }
 }
 
@@ -163,9 +173,22 @@ async function apiNetworkFirst(request) {
       cache.put(request, response.clone())
     }
     return response
-  } catch (error) {
+  } catch {
     const cached = await caches.match(request)
     if (cached) return cached
-    throw error
+    // Même raison que pour les fichiers : une réponse lisible vaut mieux
+    // qu'une promesse rejetée. Le client d'API traduit ce code en message.
+    return new Response(
+      JSON.stringify({
+        error: {
+          code: "network_unavailable",
+          message: "Réseau indisponible et aucune copie en cache pour cette lecture.",
+        },
+      }),
+      {
+        status: 504,
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+      },
+    )
   }
 }

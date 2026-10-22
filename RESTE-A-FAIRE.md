@@ -96,7 +96,12 @@ d'activation deviendra le point d'entrée du webhook.
 
 ---
 
-## 2. Bloquant — Rien n'est prêt pour un déploiement
+## 2. ~~Bloquant~~ — RÉSOLU le 22/10/2026 : le déploiement est outillé
+
+> **Traité pour Vercel** (§ « Déploiement Vercel » plus bas) : `vercel.json`,
+> fonctions serverless `api/`, empaquetage `npm run build:api`, relances par
+> cron. Le constat d'origine est conservé ci-dessous pour mémoire.
+
 
 | Manque | Constat |
 |---|---|
@@ -486,3 +491,66 @@ route cassée est vue avant d'être ouverte chez un client.
   client a pu supprimer volontairement.
 - `npm run smoke` ne voit pas les défauts d'affichage (CSS, contraste,
   ergonomie) : il vérifie les parcours, pas la mise en page.
+
+---
+
+## Déploiement Vercel — 22 octobre 2026
+
+Le déploiement en ligne (`lavautomaj.vercel.app`) servait l'interface mais
+aucune API : **toutes** les routes `/api/v1/*` répondaient 404, et le service
+worker affichait `TypeError: Failed to fetch` dans la console.
+
+### La cause
+
+Vercel ne sert que `dist/` : aucun serveur Express n'y tournait. La réécriture
+de l'application monopage renvoyait donc `index.html` pour chaque appel d'API,
+et `auth/me`, `auth/login`, `subscription`, `public/pricing` échouaient tour à
+tour — d'où les écrans qui ne chargent plus rien.
+
+### Ce qui a été ajouté
+
+| Fichier | Rôle |
+| --- | --- |
+| `api/[...slug].ts`, `api/index.ts` | points d'entrée des fonctions Vercel |
+| `server/vercel-app.ts` | pile Express du serveur, sans son démarrage |
+| `server/vercel-url.ts` | reconstitution du chemin, **la pièce qui manquait** |
+| `server/vercel-handler.ts` | entrée du bundle |
+| `scripts/build-api.mjs` | empaquette l'API (esbuild) |
+| `scripts/serve-vercel-local.mjs` | imitateur du runtime Vercel, pour vérifier |
+| `vercel.json` | construction, réécriture SPA, en-têtes, cron |
+| `tests/vercel-url.test.ts` | 8 tests sur la reconstitution du chemin |
+
+**Le piège à retenir** : une fonction de `api/` ne reçoit pas l'URL demandée.
+Vercel lui passe `/api` et place les segments dans `req.query.slug`. Une
+fonction qui transmet `req` telle quelle à Express répond 404 sur absolument
+tout — le symptôme exact observé. `server/vercel-url.ts` reconstruit le chemin,
+et `tests/vercel-url.test.ts` le vérifie sans avoir besoin de Vercel.
+
+**Second piège** : le code serveur importe ses voisins en `.ts` explicite. Le
+runtime de Vercel transpile chaque fichier isolément et laisse l'import en
+`.ts` → « Cannot find module ». D'où `npm run build:api`, qui produit un bundle
+unique importé par les fonctions.
+
+### Le service worker
+
+`assetCacheFirst` laissait remonter l'échec réseau : la console affichait un
+`TypeError` sans contexte et l'écran restait vide. Les deux stratégies
+renvoient désormais une réponse explicite (504, message lisible) au lieu d'une
+promesse rejetée ; le cache passe en `v2`, ce qui purge les entrées de la
+première version à l'activation.
+
+### Ce que cela laisse ouvert
+
+- **`CRON_SECRET` n'est pas encore défini chez Vercel.** Sans lui, la route des
+  relances répond 503 et n'envoie rien : les e-mails J-3 / J-1 ne partent pas.
+  C'est volontaire (un déclencheur ouvert inonderait les clients), mais cela
+  doit être fait avant la mise en service.
+- **La limitation des tentatives de connexion reste en mémoire** : sur une
+  plateforme serverless, elle est comptée par instance, donc plus faible
+  qu'annoncé. À déplacer en base ou dans un cache partagé.
+- **`npm run smoke:serverless` imite le runtime Vercel, il ne le remplace pas.**
+  Il vérifie le routage, les cookies et le parcours complet ; il ne dit rien
+  des limites de la plateforme (taille du bundle, temps de démarrage à froid,
+  région).
+- **Le premier déploiement reste à faire** avec `DATABASE_URL` (Neon) : la
+  sonde `/api/healthz` doit répondre `{"status":"ok","database":"ready"}`.
