@@ -5,6 +5,7 @@ import { getPool } from "./db.ts"
 import { asyncRoute, body, tenant, requirePermission } from "./http.ts"
 import { HttpError } from "./auth.ts"
 import { TRIAL_DAYS, invalidateSubscriptionCache } from "./entitlements.ts"
+import { DEFAULT_VEHICLE_CATEGORIES, needsDefaultVehicleCategories } from "./default-catalog.ts"
 
 /** Wizard stages, in order. "review" is the confirmation screen. */
 export const ONBOARDING_STAGES = ["station", "services", "workers", "plan", "review"] as const
@@ -285,7 +286,6 @@ export function createOnboardingRouter() {
     requirePermission("settings:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
-      console.log("[api] confirm handler:", { organizationId: t.organizationId, userId: t.userId })
       const pool = db()
 
       const orgQ = await pool.query("SELECT onboarding_completed FROM organizations WHERE id=$1::uuid", [t.organizationId])
@@ -330,6 +330,26 @@ export function createOnboardingRouter() {
              VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
             [t.organizationId, s.name, s.city, s.address || null, s.phone || null, s.email || null, s.description || null, s.logo_url || null],
           )
+        }
+
+        // 1 bis. Catégories de véhicules — sans elles, la caisse ne peut
+        // enregistrer aucun lavage : le sélecteur de l'écran « Nouveau lavage »
+        // reste vide, et la station est configurée mais incapable d'encaisser.
+        // On n'initialise que si la liste est vide : une station qui a supprimé
+        // ses catégories ne les voit pas revenir.
+        const categoryQ = await client.query(
+          "SELECT count(*)::int AS n FROM vehicle_categories WHERE organization_id=$1::uuid",
+          [t.organizationId],
+        )
+        if (needsDefaultVehicleCategories(Number(categoryQ.rows[0]?.n ?? 0))) {
+          for (const name of DEFAULT_VEHICLE_CATEGORIES) {
+            await client.query(
+              `INSERT INTO vehicle_categories(organization_id, name)
+               VALUES($1, $2)
+               ON CONFLICT (organization_id, name) DO NOTHING`,
+              [t.organizationId, name],
+            )
+          }
         }
 
         // 2. Services — create missing ones by name (idempotent on retry).

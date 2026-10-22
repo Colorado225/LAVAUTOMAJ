@@ -35,11 +35,38 @@ npm run dev
 | `npm run dev` | Serveur de développement (Express + Vite middleware) |
 | `npm run build` | Typecheck (`tsc -b`) + build frontend (`vite build`) |
 | `npm start` | Serveur (en production : servir `dist/`, build préalable requis) |
-| `npm test` | Tests unitaires (validateurs, idempotence, rapports) |
+| `npm test` | Suite complète, base en mémoire (voir ci-dessous) |
+| `npm run smoke` | Test de fumée de bout en bout sur un serveur jetable |
 | `npm run lint` | ESLint |
 | `npm run console:password -- <email>` | Définit le mot de passe d'un opérateur de console |
 | `npm run db:purge-stations` | Simulation : liste les comptes de station qui seraient effacés |
 | `npm run db:purge-stations -- --yes` | Efface les comptes de station (console et forfaits conservés) |
+
+### Tests
+
+`npm test` lance `scripts/run-tests.mjs`, et non `tsx --test` directement. Ce
+script force `NODE_ENV=test`, ouvre une base **en mémoire** par fichier de tests
+et ignore `DATABASE_URL` : sans cela, la suite écrivait dans la base de
+développement (`.data/pglite`), la polluait et échouait par centaines de
+raisons sans rapport avec le code testé. Il développe aussi la liste des
+fichiers lui-même, ce qui fonctionne sous Windows comme sous Linux :
+
+```bash
+npm test                              # toute la suite
+npm test -- tests/format.test.ts      # un fichier
+npm test -- --test-name-pattern=timeline
+```
+
+`npm run smoke` démarre son propre serveur (port libre, base en mémoire), joue
+le parcours complet — inscription, configuration, catalogue, forfait,
+confirmation — puis un encaissement de bout en bout (caisse, lavage, paiement,
+reçu, remboursement, clôture) et les actions de la console. Rien ne survit au
+processus, donc aucune donnée réelle n'est touchée :
+
+```bash
+npm run smoke
+npm run smoke -- --base-url http://localhost:3000   # contre un serveur déjà lancé
+```
 
 `db:purge-stations` sert à repartir d'une base vierge avant une mise en
 production : elle supprime les organisations, leurs utilisateurs et toutes

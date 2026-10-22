@@ -871,6 +871,18 @@ export default function WashesPage() {
                       <option key={category.id} value={category.id}>{category.name}</option>
                     ))}
                   </select>
+                  {/* Sans catégorie, le sélecteur reste vide et le bouton
+                      d'enregistrement ne s'active jamais : on dit où en créer
+                      plutôt que de laisser un champ mort. */}
+                  {!categoriesLoading && activeCategories.length === 0 && (
+                    <span className="text-xs font-normal text-destructive">
+                      Aucune catégorie de véhicule.{" "}
+                      <Link to="/vehicle-categories" className="underline underline-offset-4">
+                        Créez-en une
+                      </Link>{" "}
+                      pour enregistrer un lavage.
+                    </span>
+                  )}
                 </label>
                 <label className="flex flex-col gap-1.5 text-sm font-medium">
                   Plaque <span className="font-normal text-muted-foreground">(facultatif)</span>
