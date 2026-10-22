@@ -224,6 +224,31 @@ Si `/api/healthz` renvoie la page HTML de l'application, la fonction n'a pas
 été détectée : vérifiez que le dossier `api/` est bien déployé et que
 `vercel.json` est à la racine.
 
+### Lire une erreur de déploiement Vercel
+
+Deux erreurs de plateforme se ressemblent et n'ont pourtant rien à voir avec
+le code. Elles se distinguent au texte de la page :
+
+| Page affichée | Ce que cela veut dire | Quoi faire |
+| --- | --- | --- |
+| `404: NOT_FOUND` sur une URL `/api/...` | la requête n'a atteint aucune fonction | vérifier que la réécriture `/api/:path*` est bien dans le `vercel.json` déployé |
+| `404: DEPLOYMENT_NOT_FOUND` sur **toutes** les URL, page d'accueil comprise | le nom de domaine ne pointe plus vers un déploiement existant (déploiement supprimé, projet supprimé ou renommé) | dans Vercel, rattacher le domaine à un projet vivant, puis promouvoir un déploiement en production |
+
+Le second cas ne se corrige pas dans le code : tant que le domaine ne pointe
+vers aucun déploiement, la plateforme répond elle-même, et l'application n'est
+jamais appelée.
+
+Deux pièges d'exploitation à connaître, tous deux constatés :
+
+- **Un dépôt relié à deux projets Vercel.** Chaque envoi construit alors deux
+  fois, deux déploiements de production coexistent, et l'on ne sait plus lequel
+  sert le domaine. Garder un seul projet relié au dépôt ; supprimer l'autre
+  dans *Settings → Git*.
+- **La protection des déploiements.** Avec *Deployment Protection* activée,
+  chaque URL de préversion (et parfois la production) renvoie la page de
+  connexion Vercel à un visiteur anonyme. Un site destiné aux clients doit
+  l'avoir désactivée pour l'environnement *Production*.
+
 ### Les relances d'échéance
 
 Un processus serverless s'endort entre deux requêtes : il ne peut pas porter
