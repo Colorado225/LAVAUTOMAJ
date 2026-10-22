@@ -1,6 +1,6 @@
 import * as React from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { FrameFooter } from "@/components/ui/frame"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
@@ -54,62 +54,53 @@ export function StationStep({ progress, onDone, onQuit }: OnboardingWizardProps)
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Identité de la station</CardTitle>
-        <CardDescription>
-          Présentez votre station de lavage. Ces informations apparaîtront sur
-          votre tableau de bord.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <FieldGroup className="grid gap-4">
-          <Field data-invalid={!!errors.name}>
-            <FieldLabel htmlFor="station-name">Nom de la station *</FieldLabel>
-            <Input id="station-name" value={values.name} onChange={set("name")} placeholder="Ex. Star Wash Cocody" />
-            {errors.name && <FieldError>{errors.name}</FieldError>}
+    <div className="flex flex-col gap-4">
+      <FieldGroup className="grid gap-4">
+        <Field data-invalid={!!errors.name}>
+          <FieldLabel htmlFor="station-name">Nom de la station *</FieldLabel>
+          <Input id="station-name" value={values.name} onChange={set("name")} placeholder="Ex. Star Wash Cocody" />
+          {errors.name && <FieldError>{errors.name}</FieldError>}
+        </Field>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field data-invalid={!!errors.phone}>
+            <FieldLabel htmlFor="station-phone">Téléphone professionnel</FieldLabel>
+            <Input id="station-phone" value={values.phone ?? ""} onChange={set("phone")} placeholder="+225 07 00 00 00 00" />
+            {errors.phone && <FieldError>{errors.phone}</FieldError>}
           </Field>
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field data-invalid={!!errors.phone}>
-              <FieldLabel htmlFor="station-phone">Téléphone professionnel</FieldLabel>
-              <Input id="station-phone" value={values.phone ?? ""} onChange={set("phone")} placeholder="+225 07 00 00 00 00" />
-              {errors.phone && <FieldError>{errors.phone}</FieldError>}
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="station-email">E-mail professionnel (facultatif)</FieldLabel>
-              <Input id="station-email" type="email" value={values.email ?? ""} onChange={set("email")} placeholder="contact@station.ci" />
-            </Field>
-          </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field>
-              <FieldLabel htmlFor="station-address">Adresse ou quartier</FieldLabel>
-              <Input id="station-address" value={values.address ?? ""} onChange={set("address")} placeholder="Ex. Rue des Jardins, Angré" />
-            </Field>
-            <Field data-invalid={!!errors.city}>
-              <FieldLabel htmlFor="station-city">Ville ou commune *</FieldLabel>
-              <Input id="station-city" value={values.city} onChange={set("city")} placeholder="Ex. Abidjan — Cocody" />
-              {errors.city && <FieldError>{errors.city}</FieldError>}
-            </Field>
-          </div>
           <Field>
-            <FieldLabel htmlFor="station-description">Description (facultatif)</FieldLabel>
-            <Textarea id="station-description" value={values.description ?? ""} onChange={set("description")} placeholder="Décrivez votre station en quelques mots." />
+            <FieldLabel htmlFor="station-email">E-mail professionnel (facultatif)</FieldLabel>
+            <Input id="station-email" type="email" value={values.email ?? ""} onChange={set("email")} placeholder="contact@station.ci" />
           </Field>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor="station-address">Adresse ou quartier</FieldLabel>
+            <Input id="station-address" value={values.address ?? ""} onChange={set("address")} placeholder="Ex. Rue des Jardins, Angré" />
+          </Field>
+          <Field data-invalid={!!errors.city}>
+            <FieldLabel htmlFor="station-city">Ville ou commune *</FieldLabel>
+            <Input id="station-city" value={values.city} onChange={set("city")} placeholder="Ex. Abidjan — Cocody" />
+            {errors.city && <FieldError>{errors.city}</FieldError>}
+          </Field>
+        </div>
+        <Field>
+          <FieldLabel htmlFor="station-description">Description (facultatif)</FieldLabel>
+          <Textarea id="station-description" value={values.description ?? ""} onChange={set("description")} placeholder="Décrivez votre station en quelques mots." />
+        </Field>
 
-          {serverError && (
-            <p className="text-destructive text-sm">{serverError}</p>
-          )}
+        {serverError && (
+          <p className="text-destructive text-sm">{serverError}</p>
+        )}
 
-          <div className="flex items-center justify-between gap-2">
-            <Button variant="ghost" onClick={() => save(true)} disabled={saving}>
-              Enregistrer et quitter
-            </Button>
-            <Button onClick={() => save(false)} disabled={saving}>
-              {saving ? "Enregistrement…" : "Continuer"}
-            </Button>
-          </div>
-        </FieldGroup>
-      </CardContent>
-    </Card>
+      <FrameFooter>
+        <Button variant="ghost" onClick={() => save(true)} disabled={saving}>
+          Enregistrer et quitter
+        </Button>
+        <Button onClick={() => save(false)} disabled={saving}>
+          {saving ? "Enregistrement…" : "Continuer"}
+        </Button>
+      </FrameFooter>
+      </FieldGroup>
+    </div>
   )
 }
