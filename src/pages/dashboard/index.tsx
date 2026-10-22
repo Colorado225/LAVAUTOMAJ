@@ -327,7 +327,7 @@ export default function DashboardPage() {
       title="Tableau de bord"
       description="Pilotez votre station de lavage en un coup d'œil."
     >
-      <main className="flex min-w-0 flex-1 flex-col gap-6 p-4 md:p-6 xl:p-8">
+        <main className="flex min-w-0 flex-1 flex-col gap-10 p-4 md:p-6 xl:p-8">
         {/* Header */}
         <section className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
           <div className="min-w-0 space-y-2">
@@ -417,7 +417,7 @@ export default function DashboardPage() {
         </section>
 
         {/* Action-first workspace: les décisions du jour avant les statistiques. */}
-        <section aria-labelledby="priorites-du-jour" className="space-y-3">
+        <section aria-labelledby="priorites-du-jour" className="space-y-5">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
@@ -439,7 +439,7 @@ export default function DashboardPage() {
             <Link
               to="/washes"
               viewTransition
-              className="surface-3d group rounded-2xl border border-primary/30 bg-primary/5 p-4 transition-all duration-200 hover:-translate-y-1 hover:border-primary/60 hover:shadow-lg hover:shadow-primary/10"
+              className="surface-3d group rounded-2xl bg-card p-4 transition-all duration-200 hover:-translate-y-1 hover:bg-accent"
             >
               <div className="flex items-start justify-between gap-3">
                 <span className="rounded-xl bg-primary/15 p-2.5 text-primary transition-transform duration-200 group-hover:scale-110">
@@ -454,7 +454,7 @@ export default function DashboardPage() {
             <Link
               to="/cash-drawer"
               viewTransition
-              className={`surface-3d group rounded-2xl border p-4 transition-all duration-200 hover:-translate-y-1 hover:shadow-lg ${cashSession ? 'border-emerald-500/30 bg-emerald-500/5 hover:border-emerald-500/60 hover:shadow-emerald-500/10' : 'border-amber-500/40 bg-amber-500/5 hover:border-amber-500/70 hover:shadow-amber-500/10'}`}
+              className="surface-3d group rounded-2xl bg-card p-4 transition-all duration-200 hover:-translate-y-1 hover:bg-accent"
             >
               <div className="flex items-start justify-between gap-3">
                 <span className={`rounded-xl p-2.5 ${cashSession ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'}`}>
@@ -469,10 +469,10 @@ export default function DashboardPage() {
             <Link
               to="/stock"
               viewTransition
-              className="surface-3d group rounded-2xl border border-orange-500/30 bg-orange-500/5 p-4 transition-all duration-200 hover:-translate-y-1 hover:border-orange-500/60 hover:shadow-lg hover:shadow-orange-500/10"
+              className="surface-3d group rounded-2xl bg-card p-4 transition-all duration-200 hover:-translate-y-1 hover:bg-accent"
             >
               <div className="flex items-start justify-between gap-3">
-                <span className="rounded-xl bg-orange-500/15 p-2.5 text-orange-500 transition-transform duration-200 group-hover:scale-110">
+                <span className="rounded-xl bg-muted p-2.5 text-warning transition-transform duration-200 group-hover:scale-110">
                   <Package className="size-5" aria-hidden="true" />
                 </span>
                 <AlertTriangle className="size-4 text-orange-500" aria-hidden="true" />
@@ -484,10 +484,10 @@ export default function DashboardPage() {
             <Link
               to="/washes"
               viewTransition
-              className="surface-3d group rounded-2xl border border-violet-500/30 bg-violet-500/5 p-4 transition-all duration-200 hover:-translate-y-1 hover:border-violet-500/60 hover:shadow-lg hover:shadow-violet-500/10"
+              className="surface-3d group rounded-2xl bg-card p-4 transition-all duration-200 hover:-translate-y-1 hover:bg-accent"
             >
               <div className="flex items-start justify-between gap-3">
-                <span className="rounded-xl bg-violet-500/15 p-2.5 text-violet-500 transition-transform duration-200 group-hover:scale-110">
+                <span className="rounded-xl bg-muted p-2.5 text-warning transition-transform duration-200 group-hover:scale-110">
                   <Clock3 className="size-5" aria-hidden="true" />
                 </span>
                 <Badge variant="outline">À traiter</Badge>
@@ -499,7 +499,7 @@ export default function DashboardPage() {
         </section>
 
         {/* Secondary metrics: conservées plus bas pour ne pas masquer les actions. */}
-        <section className="space-y-3">
+        <section className="space-y-5">
           <div className="flex items-end justify-between gap-3">
             <div>
               <h2 className="text-lg font-semibold tracking-tight">Indicateurs clés</h2>
@@ -515,7 +515,7 @@ export default function DashboardPage() {
         </section>
 
         {/* Finance and operations overview */}
-        <section className="space-y-3">
+        <section className="space-y-5">
           <div>
             <h2 className="text-lg font-semibold tracking-tight">
               Finances et activité
