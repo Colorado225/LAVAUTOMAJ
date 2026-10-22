@@ -2,7 +2,7 @@
 
 import * as React from "react"
 
-import { useApi } from "@/lib/api"
+import { apiFetch, useApi } from "@/lib/api"
 import type { AuditEntry, AuditListResponse } from "@/lib/audit-api"
 import type { QueuedMutation } from "@/lib/offline-queue"
 import { subscribeToQueue } from "@/lib/offline-sync"
@@ -36,6 +36,45 @@ export interface AppNotification {
   href?: string
   /** Action conseillée, formulée comme une consigne. */
   hint?: string
+}
+
+/**
+ * Notification telle que la base la conserve (`GET /api/v1/notifications`).
+ *
+ * Ces lignes ne sont pas recalculées à l'affichage : elles ont été écrites au
+ * moment du fait (un lavage terminé, par exemple) et survivent au rechargement,
+ * au changement d'appareil et à la fermeture de l'onglet. Les alertes locales
+ * ci-dessus décrivent l'état *maintenant* ; celles-ci racontent ce qui s'est
+ * passé, et l'écran a besoin des deux.
+ */
+interface ServerNotification {
+  id: string
+  type: string
+  title: string
+  message: string
+  site_id: string | null
+  entity_type: string | null
+  entity_id: string | null
+  read_at: string | null
+  created_at: string
+}
+
+interface ServerNotificationList {
+  notifications: ServerNotification[]
+  unread_count: number
+}
+
+/** Préfixe qui distingue une notification persistée d'une alerte calculée. */
+const SERVER_PREFIX = "server:"
+
+const SERVER_LEVELS: Record<string, NotificationLevel> = {
+  WASH_COMPLETED: "success",
+}
+
+/** Écran à ouvrir pour traiter une notification persistée. */
+function serverHref(item: ServerNotification): string | undefined {
+  if (item.entity_type === "wash" && item.entity_id) return `/washes/${item.entity_id}`
+  return undefined
 }
 
 const READ_KEY = "washpilot:notifications:read"
@@ -95,6 +134,15 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   const { data: audit, loading: auditLoading, error: auditError } =
     useApi<AuditListResponse>(canReadActivity ? "/api/v1/audit-logs?limit=8&offset=0" : "")
+
+  // Les notifications écrites en base par les opérations (lavage terminé…).
+  // Le droit est celui des lavages : un membre qui peut les consulter peut voir
+  // ce qui les concerne, et personne d'autre. La lecture échouée ne casse rien :
+  // le centre continue d'afficher ce qu'il sait calculer.
+  const canReadServer = can("wash:read")
+  const { data: serverFeed } = useApi<ServerNotificationList>(
+    canReadServer ? "/api/v1/notifications?limit=15" : "",
+  )
 
   React.useEffect(() => subscribeToQueue(setQueue), [])
 
@@ -178,10 +226,40 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       })
     }
 
-    return list.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
-  }, [state, pending, failed, activity])
+    // Notifications persistées : elles gardent leur date réelle, donc une alerte
+    // de la veille n'apparaît pas comme si elle venait d'arriver.
+    for (const item of serverFeed?.notifications ?? []) {
+      list.push({
+        id: `${SERVER_PREFIX}${item.id}`,
+        title: item.title,
+        description: item.message,
+        at: item.created_at,
+        level: SERVER_LEVELS[item.type] ?? "info",
+        href: serverHref(item),
+      })
+    }
 
-  const unreadCount = notifications.filter((item) => !read.includes(item.id)).length
+    return list.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+  }, [state, pending, failed, activity, serverFeed])
+
+  // Une notification lue sur un autre appareil ne redevient pas non lue ici :
+  // la date de lecture en base fait foi pour les lignes persistées.
+  const serverRead = React.useMemo(
+    () =>
+      new Set(
+        (serverFeed?.notifications ?? [])
+          .filter((item) => item.read_at)
+          .map((item) => `${SERVER_PREFIX}${item.id}`),
+      ),
+    [serverFeed],
+  )
+
+  const isRead = React.useCallback(
+    (id: string) => read.includes(id) || serverRead.has(id),
+    [read, serverRead],
+  )
+
+  const unreadCount = notifications.filter((item) => !isRead(item.id)).length
 
   const markRead = React.useCallback((id: string) => {
     setRead((current) => {
@@ -190,6 +268,16 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       writeIds(next)
       return next
     })
+    // Les lignes persistées se marquent aussi en base : sans cela, l'alerte
+    // reviendrait sur le téléphone du collègue, et sur le même appareil après
+    // une réinstallation. L'échec est sans conséquence — l'acquittement local
+    // a déjà eu lieu.
+    if (id.startsWith(SERVER_PREFIX)) {
+      const notificationId = id.slice(SERVER_PREFIX.length)
+      void apiFetch(`/api/v1/notifications/${encodeURIComponent(notificationId)}/read`, {
+        method: "POST",
+      }).catch(() => {})
+    }
   }, [])
 
   const markAllRead = React.useCallback(() => {
@@ -198,7 +286,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       writeIds(next)
       return next
     })
-  }, [notifications])
+    if ((serverFeed?.unread_count ?? 0) > 0) {
+      void apiFetch("/api/v1/notifications/read-all", { method: "POST" }).catch(() => {})
+    }
+  }, [notifications, serverFeed])
 
   const value = React.useMemo<NotificationContextValue>(
     () => ({
@@ -206,7 +297,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       unreadCount,
       markRead,
       markAllRead,
-      isRead: (id: string) => read.includes(id),
+      isRead,
       activity,
       activityLoading: canReadActivity && auditLoading,
       activityError: canReadActivity ? auditError : null,
@@ -218,6 +309,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       notifications,
       unreadCount,
       read,
+      isRead,
       markRead,
       markAllRead,
       activity,

@@ -14,6 +14,7 @@ import { createBackupRouter } from "./backup.ts"
 import { createSupportRouter } from "./support.ts"
 import { createCheckoutRouter } from "./checkout.ts"
 import { createAccessRouter } from "./access.ts"
+import { createNotificationsRouter } from "./notifications.ts"
 import { createAuditLogRouter } from "./audit-log.ts"
 import { createStockRouter } from "./stock.ts"
 import { createPurchaseRouter } from "./purchases.ts"
@@ -97,6 +98,8 @@ export function mountApi(app: Express) {
   app.use("/api/v1", createSupportRouter())
   app.use("/api/v1", createCheckoutRouter())
   app.use("/api/v1", createAccessRouter())
+  app.use("/api/v1", createNotificationsRouter())
+  app.use("/api/v1", createNotificationsRouter())
   app.use("/api/v1", createAuditLogRouter())
   app.use("/api/v1", createTeamRouter())
   app.use("/api/v1", createReportsRouter())

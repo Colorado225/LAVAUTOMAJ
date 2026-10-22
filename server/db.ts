@@ -461,10 +461,12 @@ CREATE TABLE IF NOT EXISTS cash_movements (
  amount_cents integer NOT NULL CHECK(amount_cents > 0), source text NOT NULL, description text,
  wash_id uuid REFERENCES washes(id), created_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE TABLE IF NOT EXISTS expense_categories (
- id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
- name text NOT NULL, is_active boolean NOT NULL DEFAULT true, UNIQUE(organization_id,name)
-);
+-- Pas de table « expense_categories » : la liste des catégories de dépense est
+-- un vocabulaire fermé, porté par le code (EXPENSE_CATEGORIES, côté serveur et
+-- côté interface). C'est délibéré : les rapports agrègent les dépenses par
+-- catégorie, et une liste libre par station rendrait ces totaux incomparables
+-- d'une station à l'autre. La table existait sans être ni écrite ni lue ; la
+-- garder aurait laissé croire à un référentiel modifiable qui n'existait pas.
 CREATE TABLE IF NOT EXISTS expenses (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  site_id uuid NOT NULL REFERENCES sites(id), category text NOT NULL, amount_cents integer NOT NULL CHECK(amount_cents > 0),

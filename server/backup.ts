@@ -53,7 +53,6 @@ export const EXPORT_QUERIES: { key: string; sql: string }[] = [
   { key: "payments", sql: "SELECT * FROM payments WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "cash_sessions", sql: "SELECT * FROM cash_sessions WHERE organization_id=$1::uuid ORDER BY opened_at" },
   { key: "cash_movements", sql: "SELECT * FROM cash_movements WHERE organization_id=$1::uuid ORDER BY created_at" },
-  { key: "expense_categories", sql: "SELECT * FROM expense_categories WHERE organization_id=$1::uuid" },
   { key: "expenses", sql: "SELECT * FROM expenses WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "product_categories", sql: "SELECT * FROM product_categories WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "products", sql: "SELECT * FROM products WHERE organization_id=$1::uuid ORDER BY created_at" },

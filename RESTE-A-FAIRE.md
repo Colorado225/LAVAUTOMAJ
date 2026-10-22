@@ -349,6 +349,24 @@ supplantée — sa suppression est une décision à prendre, pas un oubli.
 - Deuxième instance impossible (limitation en mémoire, `setInterval`).
 - `wash_quality_events` absente.
 
+### Branchement de la base — vérifié le 22 octobre 2026
+
+Le détail, table par table et fonctionnalité par fonctionnalité, est dans
+`BASE-DE-DONNEES.md`. Deux corrections en sont sorties :
+
+- **Les notifications sont désormais lues.** La table `notifications`
+  recevait « Lavage terminé » sans qu'aucune route ne la relise : le fait
+  était enregistré puis perdu, et `read_at` ne servait à rien. Trois routes
+  (`GET /notifications`, `POST /notifications/:id/read`, `POST …/read-all`)
+  et l'affichage dans le centre de notifications ferment la boucle.
+- **`expense_categories` a été retirée du schéma.** Elle n'était ni écrite ni
+  lue ; les catégories de dépense sont un vocabulaire fermé, porté par le
+  code, pour que les rapports restent comparables d'une station à l'autre.
+
+Le contrôle qui empêche la récidive est `tests/database-wiring.test.ts` : il
+joue chaque parcours et compte les lignes table par table. Une table morte
+supplémentaire, ou une fonctionnalité qui cesse d'écrire, le fait échouer.
+
 ### Messages de validation — réglés le 21 octobre 2026
 
 Une saisie refusée renvoyait le message brut de la bibliothèque de validation :

@@ -136,6 +136,9 @@ tests/               # Tests unitaires (node:test via tsx)
   l'en-tête `Idempotency-Replayed: true` ; une réutilisation avec un contenu différent → `409`.
 - **Limites de forfait** : `max_workers` / `max_users` imposés sous verrou advisory PostgreSQL.
 - **Argent** : entiers en centimes de XOF (`*_cents`), jamais de flottants.
+- **Tout passe par la base** : chaque fonctionnalité écrit et relit ses lignes ; le
+  tableau de correspondance et le contrôle automatique sont dans
+  [`BASE-DE-DONNEES.md`](BASE-DE-DONNEES.md) (`tests/database-wiring.test.ts`).
 
 ### Endpoints principaux (`/api/v1`, session requise sauf `/auth/*` publics)
 
@@ -149,6 +152,7 @@ tests/               # Tests unitaires (node:test via tsx)
 | Dépenses | `GET/POST /expenses` |
 | Équipe | `GET/POST /workers` · `PATCH /workers/:id` · `GET /users` |
 | Rapports | `GET /reports/summary?from&to` · `GET /dashboard/metrics` |
+| Notifications | `GET /notifications` · `POST /notifications/:id/read` · `POST /notifications/read-all` |
 
 ## Flux métier clés
 
