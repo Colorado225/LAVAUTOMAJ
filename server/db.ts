@@ -2,6 +2,7 @@ import pg from "pg";
 import { mkdir } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { resolvePgliteLocation, describePgliteLocation } from "./pglite-location.ts";
+import { chooseDatabaseTarget } from "./database-target.ts";
 import { env } from "./env.ts";
 import { migrateLegacyPlatformAdmins, syncPlatformOperators } from "./console-auth.ts";
 import { hashPassword } from "./auth.ts";
@@ -870,7 +871,11 @@ async function seedDemoData(
   queryFn: (sql: string, params?: unknown[]) => Promise<DbQueryResult<Record<string, unknown>>>,
 ) {
   if (env.NODE_ENV === "production") return;
-  if (env.SEED_DEMO_DATA.toLowerCase() === "false") return;
+  // En test, le jeu de démonstration est toujours semé : la quasi-totalité des
+  // suites s'authentifient avec ces comptes. Le désactiver par `.env` (ce que
+  // fait une installation réelle) rendrait la suite rouge pour une raison sans
+  // rapport avec le code testé — d'où l'exception explicite.
+  if (env.NODE_ENV !== "test" && env.SEED_DEMO_DATA.trim().toLowerCase() === "false") return;
 
   const existingUser = await queryFn("SELECT id FROM users WHERE lower(email) = $1", ["demo@washpilot.ci"]);
   if (existingUser.rows && existingUser.rows.length > 0) return;
@@ -1218,13 +1223,27 @@ export function embeddedFallbackAllowed(nodeEnv: string): boolean {
 }
 
 export async function initDatabaseSchema(): Promise<boolean> {
-  if (!embeddedFallbackAllowed(env.NODE_ENV) && !env.DATABASE_URL) {
+  // La base à ouvrir est décidée par une fonction pure, testée à part. En mode
+  // test, elle ignore `DATABASE_URL` : une suite qui écrirait dans la base de
+  // production (ou dans celle du développeur) serait pire qu'une suite rouge.
+  const decision = chooseDatabaseTarget({
+    nodeEnv: env.NODE_ENV,
+    databaseUrl: env.DATABASE_URL,
+  })
+
+  if (!embeddedFallbackAllowed(env.NODE_ENV) && decision.target === "embedded") {
     throw new Error(
       "DATABASE_URL est obligatoire en production. Sans elle, l'application démarrerait sur la base " +
         "embarquée, à l'intérieur du serveur : les données seraient perdues au premier redéploiement.",
     )
   }
-  if (env.DATABASE_URL) {
+  if (decision.ignoredDatabaseUrl) {
+    console.warn(
+      "[db] Mode test : DATABASE_URL est ignorée, la suite utilise une base embarquée en mémoire. " +
+        "Aucune donnée réelle n'est lue ni écrite.",
+    )
+  }
+  if (decision.target === "external") {
     try {
       const externalPool = new Pool({
         connectionString: env.DATABASE_URL,

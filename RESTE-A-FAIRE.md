@@ -410,3 +410,79 @@ Trois garde-fous :
 **Limite assumée :** annuler un achat reprend la marchandise mais ne restaure
 pas l'ancien coût de référence. Un prix payé par erreur se corrige à la main
 sur la fiche produit.
+
+---
+
+## Correctifs du 22 octobre 2026
+
+Trois défauts trouvés en rejouant le parcours complet d'un nouveau client, plus
+la cause qui les rendait invisibles.
+
+### 1. La suite de tests écrivait dans la vraie base
+
+`npm test` lançait `tsx --test tests/*.test.ts` sans `NODE_ENV`. Sans lui,
+`NODE_ENV` vaut `development` : les fichiers de tests ouvraient donc la base
+**sur disque** (`.data/pglite`), la même que le serveur de développement. Node
+exécute les fichiers en parallèle, plusieurs processus écrivaient dans une base
+PGlite mono-utilisateur, et chaque fichier héritait des données du précédent.
+
+Le symptôme était trompeur : **37 fichiers en échec**, des centaines de 403 et
+de « compte déjà existant », sans aucun rapport avec le code testé. Un `.env`
+renseigné renvoyait même la suite vers la base de production, où elle créait
+des stations et des encaissements.
+
+| | Avant | Maintenant |
+| --- | --- | --- |
+| `npm test` | base disque partagée, 250/287 | base mémoire par fichier, **826/826** |
+| Données réelles | lues et écrites par la suite | jamais touchées |
+| Glob des fichiers | développé par le shell (échec sous Windows) | lu en JavaScript |
+
+Trois garde-fous plutôt qu'un seul, parce que chacun couvre un cas différent :
+
+1. `scripts/run-tests.mjs` force `NODE_ENV=test`, `PGLITE_DATA_DIR=:memory:` et
+   vide `DATABASE_URL` pour ses processus enfants.
+2. `server/database-target.ts` — fonction pure, testée — **ignore
+   `DATABASE_URL` en mode test**, quel que soit le `.env` de la machine.
+3. `server/db.ts` sème toujours le jeu de démonstration en mode test, même si
+   `SEED_DEMO_DATA=false` : sinon une installation réelle rendrait la suite
+   rouge en supprimant les comptes sur lesquels elle s'authentifie.
+
+### 2. Une station neuve ne pouvait enregistrer aucun lavage
+
+La confirmation de l'assistant crée la station, les prestations, l'équipe et
+l'abonnement — mais **aucune catégorie de véhicule**. Or `vehicle_category_id`
+est obligatoire à la création d'un lavage, et l'écran de caisse désactive le
+sélecteur quand la liste est vide. Un gérant qui venait de terminer sa
+configuration arrivait donc sur un formulaire incapable d'encaisser, sans
+message expliquant quoi créer.
+
+- `server/default-catalog.ts` : trois catégories posées à la confirmation
+  (Berline, SUV / 4x4, Moto), jamais réappliquées si la station les a
+  supprimées depuis.
+- Écran « Nouveau lavage » : à défaut de catégorie, le champ dit désormais quoi
+  faire et renvoie vers l'écran de création.
+
+### 3. Un journal de débogage dans le chemin de confirmation
+
+`console.log("[api] confirm handler:", …)` traînait dans
+`POST /onboarding/confirm` et écrivait l'identifiant d'organisation et
+d'utilisateur dans les journaux du serveur à chaque confirmation. Retiré.
+
+### Ce qui empêche ces défauts de revenir
+
+`npm run smoke` (nouveau) démarre un serveur jetable sur une base en mémoire et
+joue le parcours entier : inscription → configuration → confirmation →
+ouverture de caisse → lavage → paiement → reçu → remboursement → clôture, puis
+activation et suspension depuis la console, et la séparation des deux sessions.
+**69 vérifications** en une dizaine de secondes, sans toucher aux données
+réelles. Il vérifie aussi que Vite transforme les 48 modules de pages — une
+route cassée est vue avant d'être ouverte chez un client.
+
+### Ce que cela laisse ouvert
+
+- Les stations créées **avant** ce correctif n'ont toujours pas de catégorie ;
+  l'écran « Nouveau lavage » les guide vers la création, mais rien n'est semé
+  rétroactivement — c'est un choix : on ne réintroduit pas des lignes qu'un
+  client a pu supprimer volontairement.
+- `npm run smoke` ne voit pas les défauts d'affichage (CSS, contraste,
+  ergonomie) : il vérifie les parcours, pas la mise en page.
