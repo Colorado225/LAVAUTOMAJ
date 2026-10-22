@@ -37,8 +37,11 @@
 
 // v2 : les fichiers dont le téléchargement échoue obtiennent désormais une
 // réponse explicite au lieu d'une promesse rejetée (voir assetCacheFirst).
-// Changer la version purge les caches de la v1 à l'activation.
-const VERSION = "v2"
+// v3 : une page d'erreur de la plateforme (504 pendant un déploiement) n'est
+// plus enregistrée comme coque de l'application ; la montée de version purge
+// les caches où elle aurait pu l'être.
+// Changer la version purge les caches des versions précédentes à l'activation.
+const VERSION = "v3"
 const SHELL_CACHE = `washpilot-shell-${VERSION}`
 const ASSET_CACHE = `washpilot-assets-${VERSION}`
 const API_CACHE = `washpilot-api-${VERSION}`
@@ -122,15 +125,24 @@ self.addEventListener("fetch", (event) => {
 })
 
 async function navigationNetworkFirst(request) {
+  const cached = (await caches.match("/index.html")) || (await caches.match("/"))
   try {
     const response = await fetch(request)
-    // L'application est une page unique : toute navigation retombe sur
-    // index.html, c'est donc lui qu'on garde à jour.
-    const cache = await caches.open(SHELL_CACHE)
-    cache.put("/index.html", response.clone())
-    return response
+    // On ne met en cache que la vraie application. Une page d'erreur de la
+    // plateforme (502, 504 pendant un déploiement) enregistrée comme
+    // `/index.html` condamnerait l'appareil à réafficher cette page à chaque
+    // ouverture hors ligne — et même en ligne, tant que le cache n'est pas
+    // vidé. Ce défaut a été constaté en production : après un 504, la station
+    // ouvrait l'application sur une page « Gateway Timeout ».
+    if (response.ok) {
+      const cache = await caches.open(SHELL_CACHE)
+      cache.put("/index.html", response.clone())
+      return response
+    }
+    // Une réponse en erreur n'apporte rien à l'utilisateur : la coque en
+    // cache est plus utile qu'un 504, et elle est la même application.
+    return cached ?? response
   } catch {
-    const cached = (await caches.match("/index.html")) || (await caches.match("/"))
     if (cached) return cached
     return new Response(
       "<!doctype html><meta charset=utf-8><title>Hors connexion</title>" +

@@ -18,6 +18,7 @@ import type { IncomingMessage, ServerResponse } from "node:http"
 import { handleServerlessRequest, type ServerlessRequest } from "./vercel-app.ts"
 
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const request = req as ServerlessRequest
-  await handleServerlessRequest(request, res as never, request.query?.slug)
+  // `req.query` est fourni par le runtime de Vercel ; c'est là que se trouve le
+  // chemin transmis par la réécriture (`__washpilot_api_path`).
+  await handleServerlessRequest(req as ServerlessRequest, res as never)
 }

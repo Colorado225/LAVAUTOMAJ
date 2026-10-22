@@ -4,12 +4,16 @@
   "buildCommand": "npm run build:vercel",
   "outputDirectory": "dist",
   "functions": {
-    "api/*.ts": {
+    "api/index.ts": {
       "maxDuration": 30,
       "memory": 1024
     }
   },
   "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api?__washpilot_api_path=:path*"
+    },
     {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
