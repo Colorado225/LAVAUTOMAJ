@@ -916,8 +916,8 @@ export function createApiRouter() {
                 id,
               ],
             )
-          } catch (e) {
-            // ignore
+          } catch {
+            // Notifications are best-effort and must not block the wash update.
           }
         }
         await client.query("COMMIT")

@@ -47,6 +47,12 @@ interface DashboardMetricsData {
   washer_performance?: { name: string; washes: number; avg_duration: number }[]
 }
 
+  const formatTooltipValue = (value: unknown) => {
+    if (typeof value === 'number') return value.toLocaleString()
+    if (typeof value === 'string') return value
+    return '0'
+  }
+
 const formatXOF = (cents: number) =>
   `${((cents || 0) / 100).toLocaleString('fr-CI', {
     style: 'currency',
@@ -337,7 +343,7 @@ export function DashboardMetrics() {
                           ))}
                         </Pie>
                         <Tooltip
-                          formatter={(value: any, name: any) => [value?.toLocaleString() ?? '0', name ?? '']}
+                          formatter={(value: unknown, name: unknown) => [formatTooltipValue(value), typeof name === 'string' ? name : '']}
                           contentStyle={{
                             backgroundColor: 'rgba(17, 24, 39, 0.95)',
                             border: '1px solid rgba(255, 255, 255, 0.1)',
@@ -407,7 +413,10 @@ export function DashboardMetrics() {
                           tickFormatter={val => val >= 1000 ? `${(val/1000).toFixed(1)}k` : val}
                         />
                         <Tooltip
-                          formatter={(value: any, name: any) => [value ?? 0, (STATUS_LABELS[name as keyof typeof STATUS_LABELS] ?? name ?? '')]}
+                          formatter={(value: unknown, name: unknown) => [
+                            formatTooltipValue(value),
+                            typeof name === 'string' ? (STATUS_LABELS[name as keyof typeof STATUS_LABELS] ?? name) : '',
+                          ]}
                           labelFormatter={(date) => date}
                           contentStyle={{
                             backgroundColor: 'rgba(17, 24, 39, 0.95)',
@@ -506,7 +515,7 @@ export function DashboardMetrics() {
                           tickLine={false}
                         />
                         <Tooltip
-                          formatter={(value: any, name: any) => [value?.toLocaleString() ?? '0', name ?? '']}
+                          formatter={(value: unknown, name: unknown) => [formatTooltipValue(value), typeof name === 'string' ? name : '']}
                           contentStyle={{
                             backgroundColor: 'rgba(17, 24, 39, 0.95)',
                             border: '1px solid rgba(255, 255, 255, 0.1)',
@@ -577,8 +586,8 @@ export function DashboardMetrics() {
                           tickFormatter={val => `${(val/1000).toFixed(0)}k`}
                         />
                         <Tooltip
-                          formatter={(value: any, name: any) => [
-                            name === 'washes' ? (value ?? 0) : ((value ?? 0)/100).toLocaleString('fr-CI') + ' FCFA',
+                          formatter={(value: unknown, name: unknown) => [
+                            name === 'washes' ? formatTooltipValue(value) : `${((typeof value === 'number' ? value : 0) / 100).toLocaleString('fr-CI')} FCFA`,
                             name === 'washes' ? 'Lavages' : 'Revenus'
                           ]}
                           labelFormatter={(date) => date}
@@ -660,7 +669,7 @@ export function DashboardMetrics() {
                           tickFormatter={val => `${(val/1000).toFixed(0)}k`}
                         />
                         <Tooltip
-                          formatter={(value: any) => [value?.toLocaleString('fr-CI') ?? '0' + ' FCFA', 'Revenu']}
+                          formatter={(value: unknown) => [`${formatTooltipValue(value)} FCFA`, 'Revenu']}
                           labelFormatter={(month) => month}
                           contentStyle={{
                             backgroundColor: 'rgba(17, 24, 39, 0.95)',
