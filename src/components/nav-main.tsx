@@ -1,5 +1,6 @@
 "use client"
 
+import * as React from "react"
 import { ChevronRight, type LucideIcon } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { motion } from "framer-motion"
@@ -39,6 +40,10 @@ export function NavMain({
   }[]
 }) {
   const location = useLocation()
+
+  React.useEffect(() => {
+    window.localStorage.setItem("washpilot:last-visited-route", location.pathname)
+  }, [location.pathname])
 
   // Check if any subitem is active to determine if parent should be open
   const shouldBeOpen = (item: (typeof items)[0]) => {
