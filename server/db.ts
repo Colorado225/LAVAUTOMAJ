@@ -137,6 +137,16 @@ CREATE TABLE IF NOT EXISTS service_catalog (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), category text NOT NULL, name text NOT NULL,
   price_cents integer, sort_order integer NOT NULL DEFAULT 0, is_active boolean NOT NULL DEFAULT true
 );
+-- Le catalogue de référence ne doit pas se dupliquer à chaque démarrage.
+-- Sans contrainte d'unicité, l'ancien « ON CONFLICT DO NOTHING » ne pouvait
+-- jamais entrer en conflit : neuf lignes s'ajoutaient à chaque initialisation,
+-- et l'assistant d'onboarding affichait le même lavage plusieurs fois.
+-- Le nettoyage précède l'index : créer l'index sur une table déjà dupliquée
+-- échouerait, et il faut bien garder une ligne par prestation.
+DELETE FROM service_catalog a USING service_catalog b
+ WHERE a.category = b.category AND a.name = b.name AND a.ctid > b.ctid;
+CREATE UNIQUE INDEX IF NOT EXISTS service_catalog_category_name_unique
+  ON service_catalog(category, name);
 INSERT INTO service_catalog(category,name,price_cents,sort_order) VALUES
   ('exterior_wash','Lavage extérieur simple',200000,1),
   ('exterior_wash','Nettoyage jantes et pneus',100000,2),
@@ -147,7 +157,7 @@ INSERT INTO service_catalog(category,name,price_cents,sort_order) VALUES
   ('exterior_wash','Nettoyage vitres',50000,7),
   ('exterior_wash','Séchage manuel',50000,8),
   ('exterior_wash','Lavage express',150000,9)
-ON CONFLICT DO NOTHING;
+ON CONFLICT (category, name) DO NOTHING;
 CREATE TABLE IF NOT EXISTS service_categories (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  name text NOT NULL, is_active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(),
@@ -847,9 +857,21 @@ CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user ON password_reset_toke
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_expires ON password_reset_tokens(expires_at);
 `;
 
+/**
+ * Jeu de démonstration (station, équipe, lavages, caisse).
+ *
+ * **Jamais en production.** Ces quatre comptes partagent un mot de passe
+ * public (`WashPilot2026!`) qui a longtemps été affiché sur la page de
+ * connexion : sur un déploiement neuf, les semer reviendrait à publier une
+ * porte d'entrée ouverte sur la première station. Le jeu reste utile en
+ * développement et en test, où il donne des données immédiatement lisibles.
+ */
 async function seedDemoData(
   queryFn: (sql: string, params?: unknown[]) => Promise<DbQueryResult<Record<string, unknown>>>,
 ) {
+  if (env.NODE_ENV === "production") return;
+  if (env.SEED_DEMO_DATA.toLowerCase() === "false") return;
+
   const existingUser = await queryFn("SELECT id FROM users WHERE lower(email) = $1", ["demo@washpilot.ci"]);
   if (existingUser.rows && existingUser.rows.length > 0) return;
 

@@ -73,6 +73,16 @@ const schema = z.object({
    * démarrage.
    */
   PLATFORM_ADMIN_PASSWORD: z.string().optional().default(""),
+
+  /**
+   * Jeu de démonstration (station « Cocody Riviera », comptes @washpilot.ci).
+   *
+   * Actif par défaut en développement et en test, où il donne des données
+   * lisibles immédiatement. Jamais en production. `false` sur une base réelle :
+   * sans cela, effacer les comptes serait inutile — le démarrage suivant les
+   * recréerait, avec leur mot de passe public.
+   */
+  SEED_DEMO_DATA: z.string().trim().optional().default(""),
 })
 
 const parsed = schema.safeParse(process.env)
