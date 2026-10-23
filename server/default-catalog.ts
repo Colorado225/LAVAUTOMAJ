@@ -95,33 +95,15 @@ export function needsDefaultVehicleCategories(existingCount: number): boolean {
 // existait, elle était simplement jetée à la confirmation.
 // ---------------------------------------------------------------------------
 
-/** Les catégories de prestations créées avec la station, dans l'ordre d'usage. */
-export const DEFAULT_SERVICE_CATEGORY_NAMES = [
-  "Lavage extérieur",
-  "Lavage intérieur",
-  "Lavage complet",
-  "Detailing & soins",
-  "Autres prestations",
-] as const
-
-/**
- * Classement des modèles du référentiel (`service_catalog.category`) vers les
- * catégories de la station. Une clé absente tombe dans « Autres prestations » :
- * un modèle ajouté plus tard n'est jamais laissé sans catégorie.
- */
-export const SERVICE_CATALOG_CATEGORY_LABELS: Record<string, string> = {
-  exterior_wash: "Lavage extérieur",
-  interior_cleaning: "Lavage intérieur",
-  complete_wash: "Lavage complet",
-  detailing: "Detailing & soins",
-  autre: "Autres prestations",
-}
-
-/** Catégorie à donner à une prestation d'après le modèle dont elle vient. */
-export function serviceCategoryName(templateCategory: string | null | undefined): string {
-  if (!templateCategory) return "Autres prestations"
-  return SERVICE_CATALOG_CATEGORY_LABELS[templateCategory] ?? "Autres prestations"
-}
+// Les libellés et le classement vivent dans `src/config/service-categories.ts` :
+// l'interface en a besoin pour pré-sélectionner la catégorie d'un type de
+// service choisi. Ils sont réexportés ici pour que le serveur et les tests
+// continuent de les importer depuis un seul module.
+export {
+  DEFAULT_SERVICE_CATEGORY_NAMES,
+  SERVICE_CATALOG_CATEGORY_LABELS,
+  serviceCategoryName,
+} from "../src/config/service-categories.ts"
 
 // ---------------------------------------------------------------------------
 // Catalogue des prestations

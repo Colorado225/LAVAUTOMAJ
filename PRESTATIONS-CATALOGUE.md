@@ -114,19 +114,66 @@ rien.
 
 ---
 
-## 5. Tests
+## 5. Le formulaire de prestation (CRUD complet)
+
+L'écran **Prestations** permet désormais de créer, modifier, désactiver et
+supprimer une prestation, en définissant les trois choses qui font son prix :
+
+| Champ | Rôle |
+|---|---|
+| **Type de service** | Liste des 11 types du catalogue (ou « Prestation personnalisée »). En choisir un pré-remplit le nom, la catégorie, la durée, la description et le prix indicatif — tout reste modifiable. |
+| **Catégorie de prestation** | Où la prestation se range (Lavage extérieur, Lavage intérieur, Lavage complet, Detailing & soins, Autres prestations). |
+| **Prix (F CFA)** + **Durée** | Le prix de base et la durée, ceux qui s'appliquent quand aucun tarif véhicule n'est défini. |
+| **Prix par famille de véhicule** | Neuf champs au plus : « le SUV, je le facture plus cher ». |
+| **Prix par catégorie de véhicule** | Panneau replié, groupé par famille, un champ par catégorie réellement configurée dans la station. Le tarif d'une catégorie l'emporte sur celui de sa famille. Le champ vide affiche ce qui s'appliquera : « 3 000 (famille) » ou « 2 000 (prix de base) ». |
+
+Le panneau des tarifs par catégorie s'ouvre d'office sur une prestation qui a
+déjà de tels tarifs : un tarif en vigueur ne doit jamais devenir invisible,
+donc incorrigible.
+
+Choisir un type retrouve la catégorie de station correspondante par son nom
+(`matchingServiceCategory` dans `src/config/service-categories.ts`) : le
+gérant n'a pas à savoir que « Lavage moteur complet » se range dans « Lavage
+extérieur ».
+
+### Ordre de résolution du prix
+
+```
+tarif de la catégorie de véhicule  →  tarif de sa famille  →  prix de base
+```
+
+Une seule fonction, `resolveUnitPrice` (`src/lib/service-pricing.ts`), appelée
+par le serveur **et** par les écrans : le prix affiché et le prix facturé ne
+peuvent pas diverger.
+
+### Suppression
+
+| Situation | Réponse |
+|---|---|
+| Prestation jamais vendue | `204`, supprimée |
+| Référencée par un lavage | `409 service_in_use` — l'historique garde son prix, on désactive |
+| Avec des consommables rattachés | `204` : les consommables partent avec elle (leur clé étrangère bloquait la suppression en 500) |
+| Prestation d'une autre station | `404` — l'identifiant d'une autre organisation ne doit rien révéler |
+
+Chaque suppression est journalisée (`service.deleted`), après le COMMIT : une
+suppression annulée ne laisse pas de trace dans l'audit.
+
+---
+
+## 6. Tests
 
 | Fichier | Ce qu'il garantit |
 |---|---|
 | `tests/default-catalog.test.ts` | La liste exacte, dans l'ordre ; pas de doublon ; prix > 0 ; durée dans 1…1440 ; description présente ; chaque modèle tombe dans une catégorie existante |
 | `tests/database-wiring.test.ts` | Le semis rejoué deux fois ne duplique pas ; le catalogue lu par l'API est la même liste ; la prestation créée par l'assistant a bien reçu sa durée et sa description |
+| `tests/services-crud.test.ts` | Création avec catégorie de véhicule et prix ; le lavage facture le prix de la catégorie puis celui de la famille ; une modification s'applique au lavage suivant ; refus d'une catégorie étrangère ; suppression refusée si vendue, acceptée sinon, consommables compris ; isolation entre stations |
 
-`npm test` : 900 tests, 0 échec. `tsc -b` 0 erreur, lint 0 erreur, build OK,
+`npm test` : 908 tests, 0 échec. `tsc -b` 0 erreur, lint 0 erreur, build OK,
 `npm run smoke` 69/69.
 
 ---
 
-## 6. Ce qui reste ouvert
+## 7. Ce qui reste ouvert
 
 - **Ordre des prestations dans l'écran « Prestations »** : il trie par nom
   (`ORDER BY name`), pas selon l'ordre de vente du catalogue. Un `sort_order`

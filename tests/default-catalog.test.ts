@@ -24,6 +24,7 @@ import {
   serviceCategoryName,
 } from "../server/default-catalog.ts"
 import { VEHICLE_FAMILIES, familyOrder, vehicleType } from "../src/config/vehicle-taxonomy.ts"
+import { matchingServiceCategory } from "../src/config/service-categories.ts"
 
 test("une station neuve reçoit des catégories de véhicules", () => {
   assert.ok(DEFAULT_VEHICLE_CATEGORIES.length > 0)
@@ -141,4 +142,26 @@ test("chaque prestation a un prix, une durée et une description exploitables", 
     assert.equal(typeof template.category, "string")
     assert.ok(template.category.length > 0)
   }
+})
+
+test("un type du catalogue retrouve sa catégorie de station par son nom", () => {
+  // Le formulaire « Nouvelle prestation » pré-sélectionne la catégorie à
+  // partir du type choisi : il compare des libellés, pas des identifiants.
+  const stationCategories = DEFAULT_SERVICE_CATEGORY_NAMES.map((name, index) => ({
+    id: `id-${index}`,
+    name,
+  }))
+  for (const template of SERVICE_CATALOG_TEMPLATES) {
+    const found = matchingServiceCategory(template.category, stationCategories)
+    assert.ok(found, `aucune catégorie pour le type « ${template.name} »`)
+    assert.ok(found.name.length > 0)
+  }
+  // La casse et les accents du libellé ne doivent pas empêcher la trouvaille.
+  assert.equal(
+    matchingServiceCategory("detailing", [{ id: "x", name: "Detailing & soins" }])?.id,
+    "x",
+  )
+  // Une catégorie absente de la station rend `null` : le formulaire garde
+  // alors la catégorie déjà choisie au lieu d'en inventer une.
+  assert.equal(matchingServiceCategory("exterior_wash", []), null)
 })

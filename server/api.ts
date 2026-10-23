@@ -765,18 +765,51 @@ export function createApiRouter() {
     }),
   )
 
+  // DELETE /api/v1/services/:id — supprimer une prestation jamais vendue.
+  //
+  // Trois refus, dans cet ordre :
+  //   • 404 si elle n'appartient pas à la station (l'identifiant d'une autre
+  //     organisation ne doit rien révéler) ;
+  //   • 409 si un lavage la référence — son prix est figé dans `wash_items` et
+  //     l'historique doit rester lisible, donc on désactive, on ne supprime pas ;
+  //   • 400 sinon… sauf les consommables, qui sont supprimés avec elle : leur
+  //     clé étrangère bloquerait sinon la suppression en erreur 500, et une
+  //     recette qui ne sert plus à rien n'a pas à survivre à sa prestation.
   r.delete(
     "/services/:id",
     requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
-      const used = await db().query("SELECT 1 FROM wash_items WHERE service_id=$1::uuid LIMIT 1", [id])
-      if (used.rowCount) {
-        throw new HttpError(409, "service_in_use", "Des lavages référencent cette prestation. Désactivez-la plutôt.")
+      const pool = db()
+      const serviceQ = await pool.query(
+        "SELECT name FROM services WHERE id=$1::uuid AND organization_id=$2::uuid",
+        [id, t.organizationId],
+      )
+      if (!serviceQ.rowCount) throw new HttpError(404, "service_not_found", "Prestation introuvable.")
+      const deletedName = String(serviceQ.rows[0].name)
+      const client = await pool.connect()
+      try {
+        await client.query("BEGIN")
+        const used = await client.query("SELECT 1 FROM wash_items WHERE service_id=$1::uuid LIMIT 1", [id])
+        if (used.rowCount) {
+          throw new HttpError(409, "service_in_use", "Des lavages référencent cette prestation. Désactivez-la plutôt.")
+        }
+        await client.query(
+          "DELETE FROM service_consumables WHERE service_id=$1::uuid AND organization_id=$2::uuid",
+          [id, t.organizationId],
+        )
+        await client.query("DELETE FROM services WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
+        await client.query("COMMIT")
+      } catch (error) {
+        await client.query("ROLLBACK")
+        throw error
+      } finally {
+        client.release()
       }
-      const q = await db().query("DELETE FROM services WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
-      if (!q.rowCount) throw new HttpError(404, "service_not_found", "Prestation introuvable.")
+      // Journalisé après le COMMIT : une suppression annulée ne doit pas
+      // laisser une ligne « prestation supprimée » dans l'audit.
+      await auditService(t, "service.deleted", id, { name: deletedName })
       res.status(204).send()
     }),
   )

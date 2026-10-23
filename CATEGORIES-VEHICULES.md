@@ -186,15 +186,13 @@ Suite complète : **896 tests**, 0 échec. `tsc -b`, `lint`, `build` et `smoke`
 
 ## 7. Ce qui reste ouvert
 
-- **Édition des tarifs par catégorie précise** : ils sont conservés et
-  respectés, mais pas éditables à l'écran (le niveau famille suffit dans la
-  pratique ; l'API l'accepte).
 - **Plafond `max_services`** toujours affiché et non appliqué (voir
   `ANALYSE-CATALOGUE-PRESTATIONS.md`, CAT-04).
-- **Suppression d'une prestation** depuis l'interface : la route existe et
-  refuse proprement si la prestation est utilisée ; le bouton n'est pas encore
-  posé.
 - **Duplication d'une prestation** d'une famille à l'autre (« même formule,
   tarif camion ») : à faire quand le besoin se présentera.
+
+**Fait depuis** (voir `PRESTATIONS-CATALOGUE.md` §5) : l'édition des tarifs par
+catégorie précise et la suppression d'une prestation sont désormais dans
+l'interface.
 - Les écrans Caisse, Achats et Rapports affichent encore « XOF » par endroits :
   la règle « F CFA » n'est pas encore généralisée.

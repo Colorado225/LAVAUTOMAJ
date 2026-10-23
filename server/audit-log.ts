@@ -60,6 +60,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "service.created": "Prestation créée",
   "service.updated": "Prestation modifiée",
   "service.consumables_updated": "Consommation de stock d’une prestation modifiée",
+  "service.deleted": "Prestation supprimée",
 
   // Interventions de l'éditeur sur l'abonnement. Elles sont journalisées chez
   // le client et non dans un registre séparé : une action invisible de celui
