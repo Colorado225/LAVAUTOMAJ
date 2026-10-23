@@ -6,6 +6,7 @@ import { chooseDatabaseTarget } from "./database-target.ts";
 import { env } from "./env.ts";
 import { migrateLegacyPlatformAdmins, syncPlatformOperators } from "./console-auth.ts";
 import { hashPassword } from "./auth.ts";
+import { DEFAULT_VEHICLE_CATEGORIES } from "./default-catalog.ts";
 
 const { Pool } = pg;
 
@@ -977,25 +978,21 @@ async function seedDemoData(
   );
   const siteId = siteRes.rows[0].id;
 
-  // Les catégories de démonstration portent leur famille et leur rang, comme
-  // celles créées par l'assistant : la démonstration doit montrer le produit
-  // tel qu'un client le configurera, pas une version plate du catalogue.
-  const berlineRes = await queryFn(
-    `INSERT INTO vehicle_categories (organization_id, name, family, sort_order, is_active)
-     VALUES ($1, 'Berline moyenne', 'berlines', 1, true) RETURNING id`,
-    [orgId]
-  );
-  const suvRes = await queryFn(
-    `INSERT INTO vehicle_categories (organization_id, name, family, sort_order, is_active)
-     VALUES ($1, 'SUV familial', 'suv', 2, true) RETURNING id`,
-    [orgId]
-  );
-  const motoRes = await queryFn(
-    `INSERT INTO vehicle_categories (organization_id, name, family, sort_order, is_active)
-     VALUES ($1, 'Moto', 'deux_roues', 0, true) RETURNING id`,
-    [orgId]
-  );
-  void motoRes;
+  // Les catégories de démonstration sont exactement celles qu'une station
+  // reçoit de l'assistant (un représentant par famille) : la démonstration
+  // doit montrer le produit tel qu'un client le configurera, pas une version
+  // plate du catalogue.
+  let berlineId = ""
+  let suvId = ""
+  for (const category of DEFAULT_VEHICLE_CATEGORIES) {
+    const inserted = await queryFn(
+      `INSERT INTO vehicle_categories (organization_id, name, family, sort_order, is_active)
+       VALUES ($1, $2, $3, $4, true) RETURNING id`,
+      [orgId, category.name, category.family, category.sort_order]
+    );
+    if (category.family === "berlines") berlineId = String(inserted.rows[0].id)
+    if (category.family === "suv") suvId = String(inserted.rows[0].id)
+  }
 
   const catLavage = await queryFn(
     `INSERT INTO service_categories (organization_id, name, is_active) VALUES ($1, 'Lavage classique', true) RETURNING id`,
@@ -1068,7 +1065,7 @@ async function seedDemoData(
     `INSERT INTO washes (organization_id, site_id, vehicle_category_id, reference, status, total_cents, payment_status, payment_method, created_by)
      VALUES ($1, $2, $3, 'LAV-2026-0001', 'completed', 600000, 'paid', 'cash', $4)
      RETURNING id`,
-    [orgId, siteId, berlineRes.rows[0].id, userId]
+    [orgId, siteId, berlineId, userId]
   );
   await queryFn(
     `INSERT INTO wash_items (wash_id, service_id, service_name, quantity, unit_price_cents, line_total_cents)
@@ -1094,7 +1091,7 @@ async function seedDemoData(
     `INSERT INTO washes (organization_id, site_id, vehicle_category_id, reference, status, total_cents, payment_status, payment_method, created_by)
      VALUES ($1, $2, $3, 'LAV-2026-0002', 'completed', 1200000, 'paid', 'wave', $4)
      RETURNING id`,
-    [orgId, siteId, suvRes.rows[0].id, userId]
+    [orgId, siteId, suvId, userId]
   );
   await queryFn(
     `INSERT INTO wash_items (wash_id, service_id, service_name, quantity, unit_price_cents, line_total_cents)
