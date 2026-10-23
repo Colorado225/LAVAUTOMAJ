@@ -169,6 +169,7 @@ const RLS_PARENT_TABLES = [
   { table: "wash_items", parent: "washes", foreignKey: "wash_id" },
   { table: "wash_assignments", parent: "washes", foreignKey: "wash_id" },
   { table: "support_messages", parent: "support_requests", foreignKey: "request_id" },
+  { table: "service_vehicle_prices", parent: "services", foreignKey: "service_id" },
 ] as const
 
 /** Journaux techniques : lignes sans organisation visibles de tous les clients. */
@@ -407,6 +408,33 @@ CREATE TABLE IF NOT EXISTS services (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE services ADD COLUMN IF NOT EXISTS price_by_vehicle_type jsonb NOT NULL DEFAULT '{}'::jsonb;
+-- Le type de service du catalogue choisi dans le formulaire. Le nom de la
+-- prestation en découle ; la clé reste stable même si le libellé du
+-- catalogue change. Une ligne de catalogue disparue laisse 'template_id'
+-- à NULL — jamais un pointeur cassé.
+ALTER TABLE services ADD COLUMN IF NOT EXISTS template_id uuid REFERENCES service_catalog(id) ON DELETE SET NULL;
+-- Éligibilité et tarif, enfin distincts.
+--
+-- L'ancien modèle mêlait les deux : 'price_by_vehicle_type' (clés UUID de
+-- catégorie ou codes de famille) avec repli sur le prix de base. Une
+-- catégorie sans tarif restait donc utilisable — au prix de base — et une
+-- clé de famille rendait éligible toute la famille sans que personne ne
+-- l'ait décidé. Ici, une ligne = « cette prestation est autorisée pour
+-- cette catégorie de véhicule, à ce prix ». Pas de ligne = pas
+-- d'utilisation dans un lavage ; aucun repli ne contourne l'interdiction.
+--
+-- 'price_cents' et 'price_by_vehicle_type' restent en place (affichage,
+-- compatibilité) mais ne décident plus de l'éligibilité.
+CREATE TABLE IF NOT EXISTS service_vehicle_prices (
+  service_id uuid NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+  vehicle_category_id uuid NOT NULL REFERENCES vehicle_categories(id) ON DELETE CASCADE,
+  price_cents integer NOT NULL CHECK(price_cents >= 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (service_id, vehicle_category_id)
+);
+CREATE INDEX IF NOT EXISTS idx_service_vehicle_prices_category
+  ON service_vehicle_prices(vehicle_category_id);
 CREATE TABLE IF NOT EXISTS workers (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  site_id uuid REFERENCES sites(id), first_name text NOT NULL, last_name text NOT NULL, phone text,
@@ -1478,6 +1506,45 @@ export function embeddedFallbackAllowed(nodeEnv: string): boolean {
   return nodeEnv !== "production"
 }
 
+/**
+ * Transcription unique des anciennes prestations vers l'éligibilité explicite.
+ *
+ * **Ce que cette migration dit, et ne dit pas.** Sous l'ancien modèle, une
+ * prestation s'appliquait à *tout* véhicule : le prix venait de la clé de
+ * catégorie exacte, puis de la clé de famille, puis du prix de base. Les
+ * catégories autorisées n'étaient donc jamais écrites — le comportement
+ * « autorisée partout » était la règle. Cette migration **transcrit** cette
+ * règle telle quelle, pour les catégories connues de la station au moment du
+ * passage : elle n'invente aucune autorisation nouvelle, elle grave dans le
+ * nouveau modèle ce que l'ancien faisait réellement.
+ *
+ * Deux limites assumées et documentées :
+ *   • les catégories créées **après** la migration ne deviennent pas
+ *     éligibles d'office — c'est la nouvelle règle qui s'applique, et le
+ *     gérant doit cocher explicitement ;
+ *   • une prestation n'est transcrite que si elle n'a **aucune** association
+ *     explicite : relancer la migration ne réactive jamais une catégorie
+ *     qu'un gérant a ensuite décochée.
+ *
+ * Les valeurs de l'ancien jsonb sont lues avec prudence (un texte non
+ * numérique ou négatif est ignoré, pas casté de force) : une donnée sale ne
+ * doit jamais empêcher le démarrage.
+ */
+export const SERVICE_ELIGIBILITY_TRANSCRIPTION_SQL = `
+INSERT INTO service_vehicle_prices(service_id, vehicle_category_id, price_cents)
+SELECT s.id, vc.id,
+  COALESCE(
+    CASE WHEN s.price_by_vehicle_type ->> vc.id::text ~ '^[0-9]+$'
+         THEN (s.price_by_vehicle_type ->> vc.id::text)::int END,
+    CASE WHEN s.price_by_vehicle_type ->> COALESCE(vc.family, '') ~ '^[0-9]+$'
+         THEN (s.price_by_vehicle_type ->> COALESCE(vc.family, ''))::int END,
+    s.price_cents
+  )
+FROM services s
+JOIN vehicle_categories vc ON vc.organization_id = s.organization_id
+WHERE NOT EXISTS (SELECT 1 FROM service_vehicle_prices p WHERE p.service_id = s.id)
+ON CONFLICT (service_id, vehicle_category_id) DO NOTHING`;
+
 export async function initDatabaseSchema(): Promise<boolean> {
   // La base à ouvrir est décidée par une fonction pure, testée à part. En mode
   // test, elle ignore `DATABASE_URL` : une suite qui écrirait dans la base de
@@ -1514,6 +1581,7 @@ export async function initDatabaseSchema(): Promise<boolean> {
       await externalPool.query(schemaSql);
       await probeRlsRole(externalPool);
       await seedServiceCatalog(externalPool.query.bind(externalPool));
+      await externalPool.query(SERVICE_ELIGIBILITY_TRANSCRIPTION_SQL);
       await migrateLegacyPlatformAdmins(externalPool.query.bind(externalPool));
       await syncPlatformOperators(externalPool.query.bind(externalPool));
       await backfillRevenueLedger(externalPool.query.bind(externalPool));
@@ -1558,6 +1626,7 @@ export async function initDatabaseSchema(): Promise<boolean> {
     pool = bindRlsGuard(rawPool as unknown as RlsPool) as unknown as pg.Pool;
     await seedServiceCatalog(pool.query.bind(pool));
     await seedDemoData(pool.query.bind(pool));
+    await pool.query(SERVICE_ELIGIBILITY_TRANSCRIPTION_SQL);
     await migrateLegacyPlatformAdmins(pool.query.bind(pool));
     await syncPlatformOperators(pool.query.bind(pool));
     await backfillRevenueLedger(pool.query.bind(pool));

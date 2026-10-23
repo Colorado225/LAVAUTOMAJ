@@ -19,7 +19,7 @@ import { enqueueMutation } from "@/lib/offline-sync"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { plateKey } from "@/lib/plate"
-import { resolveUnitPrice } from "@/lib/service-pricing"
+import { configuredPriceFor, isEligibleFor } from "@/lib/service-pricing"
 import { VEHICLE_FAMILIES, familyOrder } from "@/config/vehicle-taxonomy"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
@@ -71,6 +71,11 @@ interface Service {
    * famille. Facultatif — un serveur plus ancien que l'écran ne l'envoie pas.
    */
   price_by_vehicle_type?: Record<string, number> | null
+  /**
+   * Catégories autorisées et leur tarif (modèle explicite). La présence de la
+   * clé est l'autorisation ; une clé absente = indisponible, sans repli.
+   */
+  vehicle_prices?: Record<string, number> | null
   is_active: boolean
 }
 
@@ -396,9 +401,33 @@ export default function WashesPage() {
       (wash) => wash.operation_status === "pending" || wash.operation_status === "in_progress" || wash.operation_status === "overtime",
     )
 
+  // Véhicule retenu : sa catégorie. C'est elle qui décide de l'éligibilité
+  // et du prix, comme côté serveur — un seul calcul, une seule vérité.
+  const selectedVehicle = useMemo(() => {
+    const category = activeCategories.find((item) => item.id === vehicleCategoryId)
+    return category ? { id: category.id, family: category.family ?? null } : null
+  }, [activeCategories, vehicleCategoryId])
+
+  // Prestations offertes pour le véhicule retenu : une prestation non
+  // autorisée pour sa catégorie n'est même pas proposée — elle ne peut donc
+  // pas finir dans le panier. Sans véhicule choisi, la liste reste complète
+  // mais les tarifs sont annoncés « selon la catégorie ».
+  const eligibleServices = useMemo(
+    () =>
+      selectedVehicle
+        ? activeServices.filter((service) => isEligibleFor(service, selectedVehicle.id))
+        : activeServices,
+    [activeServices, selectedVehicle],
+  )
+
   const selectedServices = useMemo(
-    () => activeServices.filter((service) => (quantities[service.id] ?? 0) > 0),
-    [activeServices, quantities]
+    () =>
+      activeServices.filter(
+        (service) =>
+          (quantities[service.id] ?? 0) > 0 &&
+          (!selectedVehicle || isEligibleFor(service, selectedVehicle.id)),
+      ),
+    [activeServices, quantities, selectedVehicle]
   )
   // Tant qu'une de ces listes charge, on ne conclut rien : annoncer « aucune
   // station » pendant une seconde ferait croire à une installation vide.
@@ -409,15 +438,9 @@ export default function WashesPage() {
     activeWorkerCount: activeWorkers.length,
   })
 
-  // Véhicule retenu : sa catégorie **et** sa famille. C'est cet objet qui
-  // décide du prix, comme côté serveur — un seul calcul, une seule vérité.
-  const selectedVehicle = useMemo(() => {
-    const category = activeCategories.find((item) => item.id === vehicleCategoryId)
-    return category ? { id: category.id, family: category.family ?? null } : null
-  }, [activeCategories, vehicleCategoryId])
-
   const totalCents = selectedServices.reduce(
-    (total, service) => total + resolveUnitPrice(service, selectedVehicle) * (quantities[service.id] ?? 0),
+    (total, service) =>
+      total + (configuredPriceFor(service, selectedVehicle?.id ?? null) ?? 0) * (quantities[service.id] ?? 0),
     0
   )
   const amountReceivedCents = parseXofAmount(amountReceived)
@@ -442,6 +465,26 @@ export default function WashesPage() {
     setMutationError(null)
     setMutationSuccess(null)
     setWashToReceipt(null)
+  }
+
+  /**
+   * Changer la catégorie du véhicule purge le panier des prestations qui ne
+   * sont plus autorisées : une case cochée ne doit jamais survivre à
+   * l'interdiction, ni en silence ni en espérant un prix de repli.
+   */
+  function chooseVehicleCategory(value: string) {
+    setVehicleCategoryId(value)
+    const category = activeCategories.find((item) => item.id === value)
+    if (!category) return
+    setQuantities((previous) => {
+      const next = { ...previous }
+      for (const service of activeServices) {
+        if (next[service.id] != null && !isEligibleFor(service, category.id)) {
+          delete next[service.id]
+        }
+      }
+      return next
+    })
   }
 
   function toggleService(serviceId: string, checked: boolean) {
@@ -896,7 +939,7 @@ export default function WashesPage() {
                     className="h-10 rounded-md border border-input bg-background px-3"
                     value={vehicleCategoryId}
                     onChange={(event) => {
-                      setVehicleCategoryId(event.target.value)
+                      chooseVehicleCategory(event.target.value)
                       markFormChanged()
                     }}
                     disabled={categoriesLoading || activeCategories.length === 0}
@@ -985,9 +1028,14 @@ export default function WashesPage() {
                   <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
                     Aucune prestation active. Configurez le catalogue avant d’enregistrer un lavage.
                   </p>
+                ) : eligibleServices.length === 0 ? (
+                  <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                    Aucune prestation n’est autorisée pour cette catégorie de véhicule. Ouvrez
+                    Prestations pour cocher les catégories autorisées et leurs tarifs.
+                  </p>
                 ) : (
                   <div className="grid gap-3 sm:grid-cols-2">
-                    {activeServices.map((service) => {
+                    {eligibleServices.map((service) => {
                       const quantity = quantities[service.id] ?? 0
                       return (
                         <div
@@ -1006,10 +1054,9 @@ export default function WashesPage() {
                           <label htmlFor={`service-${service.id}`} className="min-w-0 flex-1 cursor-pointer">
                             <span className="block truncate font-medium">{service.name}</span>
                             <span className="text-xs text-muted-foreground">
-                              {formatXof(resolveUnitPrice(service, selectedVehicle))} / unité
-                              {selectedVehicle && resolveUnitPrice(service, selectedVehicle) !== service.price_cents
-                                ? " (tarif véhicule)"
-                                : ""}
+                              {selectedVehicle
+                                ? `${formatXof(configuredPriceFor(service, selectedVehicle.id) ?? 0)} / unité`
+                                : "Tarif selon la catégorie de véhicule"}
                             </span>
                           </label>
                           {quantity > 0 && (

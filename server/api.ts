@@ -8,7 +8,6 @@ import { consumeForWash, reverseWashConsumption } from "./stock.ts"
 import { initialPaymentStatus, resolvePaymentStatus, PAYMENT_METHODS } from "./payments.ts"
 import { plateDisplay, plateKey } from "./plate.ts"
 import { assertSiteCapacity, assertSiteWritable, loadSiteLimitState } from "./plan-limits.ts"
-import { resolveUnitPrice } from "../src/lib/service-pricing.ts"
 import {
   VEHICLE_FAMILIES,
   VEHICLE_TYPES,
@@ -26,13 +25,39 @@ export const catalogValidators = {
     .strip(),
   service: z
     .object({
+      template_id: z.string().uuid().nullable().optional(),
       name: z.string().trim().min(1, "Le nom est obligatoire.").max(120),
       description: z.string().max(1000).nullable().optional(),
       category_id: z.string().uuid().nullable().optional(),
-      price_cents: z.number().int().min(0).max(100000000),
       duration_minutes: z.number().int().min(1).max(1440).nullable().optional(),
       is_active: z.boolean().optional(),
-      price_by_vehicle_type: z.record(z.string(), z.number().int().min(0).max(100000000)).optional(),
+      /**
+       * Éligibilité + tarif, inséparables : une entrée = « cette catégorie de
+       * véhicule peut bénéficier de la prestation, à ce prix ». Au moins une
+       * catégorie ; un prix obligatoire par catégorie — jamais de zéro par
+       * silence. Les anciens champs `price_cents` / `price_by_vehicle_type`
+       * n'entrent plus dans ce contrat : eux seuls ne distinguaient pas
+       * l'éligibilité du tarif.
+       */
+      vehicle_pricing: z
+        .array(
+          z
+            .object({
+              vehicle_category_id: z.string().uuid(),
+              // Absent ou nul passe le schéma pour que le refus métier puisse
+              // nommer la catégorie (« Renseignez le prix pour la catégorie
+              // Berline. »). `assertVehiclePricing` refuse ensuite toujours
+              // une sauvegarde sans tarif : jamais de zéro par silence.
+              price_cents: z.number().int().min(0).max(100000000).nullish(),
+            })
+            .strip(),
+        )
+        // Le minimum d'une catégorie est un refus métier (code
+        // `vehicle_pricing_required`), pas une erreur de schéma : le message
+        // doit rester celui du catalogue d'erreurs, quel que soit le champ
+        // manquant. Le schéma ne borne que la taille haute et chaque entrée.
+        .max(200)
+        .optional(),
     })
     .strip(),
   /**
@@ -71,8 +96,6 @@ export const catalogValidators = {
 }
 
 /** UUID canonique : sert à distinguer une clé de tarif « catégorie » d'une famille. */
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 /**
  * Refuse une famille inconnue.
  *
@@ -93,57 +116,149 @@ function assertVehicleFamily(family: string | null | undefined) {
 }
 
 /**
- * Vérifie les clés de `price_by_vehicle_type`.
+ * Valide la liste « catégories autorisées + tarif » d'une prestation.
  *
- * Deux formes acceptées, et deux seulement :
- *   • un code de famille du référentiel (`suv`, `poids_lourds`) ;
- *   • l'identifiant d'une catégorie **de cette organisation**.
+ * C'est le cœur du contrat : une entrée = une catégorie de véhicule
+ * autorisée, avec **son** prix. Chaque contrôle a son message :
+ *   • liste vide → « Sélectionnez au moins une catégorie de véhicule. » ;
+ *   • catégorie listée deux fois → refus (laquelle des deux prix croirait ?) ;
+ *   • prix absent ou non numérique → jamais remplacé par zéro en silence ;
+ *   • catégorie inconnue, d'une autre station, ou inactive (hors associations
+ *     déjà enregistrées) → « Cette catégorie de véhicule n'est plus
+ *     disponible. »
  *
- * Sans ce contrôle, un tarif peut viser une catégorie inexistante — ou pire,
- * celle d'une autre station — et rester en base sans que personne ne le voie.
+ * `keepExisting` porte les catégories déjà associées à la prestation en
+ * modification : une catégorie **devenue** inactive n'est pas effacée en
+ * silence — l'association est conservée et l'écran l'annonce explicitement.
+ * En revanche, on ne peut pas **ajouter** une association à une catégorie
+ * inactive.
  */
-async function assertVehiclePriceKeys(
-  overrides: Record<string, number> | null | undefined,
-  organizationId: string,
-) {
-  if (!overrides) return
-  const keys = Object.keys(overrides)
-  if (keys.length === 0) return
+interface VehiclePriceInput {
+  vehicle_category_id: string
+  price_cents?: unknown
+}
 
-  const unknownFamily = keys.find((key) => !UUID_PATTERN.test(key) && !isVehicleFamily(key))
-  if (unknownFamily) {
+async function assertVehiclePricing(
+  vehiclePricing: VehiclePriceInput[] | null | undefined,
+  organizationId: string,
+  keepExisting: Set<string> = new Set(),
+): Promise<void> {
+  if (!vehiclePricing || vehiclePricing.length === 0) {
     throw new HttpError(
       400,
-      "invalid_vehicle_family",
-      `Clé de tarif inconnue : « ${unknownFamily} ». Utilisez une famille de véhicules ou une catégorie de votre station.`,
+      "vehicle_pricing_required",
+      "Sélectionnez au moins une catégorie de véhicule.",
     )
   }
+  const seen = new Set<string>()
+  for (const entry of vehiclePricing) {
+    if (seen.has(entry.vehicle_category_id)) {
+      throw new HttpError(
+        400,
+        "duplicate_vehicle_category",
+        "Une catégorie de véhicule est listée deux fois.",
+      )
+    }
+    seen.add(entry.vehicle_category_id)
+  }
 
-  const categoryIds = keys.filter((key) => UUID_PATTERN.test(key))
-  if (categoryIds.length === 0) return
   const q = await db().query(
-    "SELECT id FROM vehicle_categories WHERE organization_id=$1::uuid AND id = ANY($2::uuid[])",
-    [organizationId, categoryIds],
+    "SELECT id, name, is_active FROM vehicle_categories WHERE organization_id=$1::uuid AND id = ANY($2::uuid[])",
+    [organizationId, [...seen]],
   )
-  const found = new Set(q.rows.map((row) => String(row.id)))
-  const missing = categoryIds.find((id) => !found.has(id))
-  if (missing) {
+  const found = new Map(q.rows.map((row) => [String(row.id), row as { name: string; is_active: boolean }]))
+
+  for (const entry of vehiclePricing) {
+    const category = found.get(entry.vehicle_category_id)
+    if (!category) {
+      throw new HttpError(
+        400,
+        "invalid_vehicle_category",
+        "Cette catégorie de véhicule n'est plus disponible.",
+      )
+    }
+    if (!category.is_active && !keepExisting.has(entry.vehicle_category_id)) {
+      throw new HttpError(
+        400,
+        "inactive_vehicle_category",
+        `Cette catégorie de véhicule n'est plus disponible : « ${category.name} ».`,
+      )
+    }
+    const price = entry.price_cents
+    if (price === undefined || price === null || (typeof price === "number" && Number.isNaN(price))) {
+      throw new HttpError(
+        400,
+        "vehicle_price_required",
+        `Renseignez le prix pour la catégorie ${category.name}.`,
+      )
+    }
+    if (typeof price !== "number" || !Number.isInteger(price) || price < 0 || price > 100000000) {
+      throw new HttpError(400, "invalid_vehicle_price", "Le prix doit être un montant valide en FCFA.")
+    }
+  }
+}
+
+/**
+ * Le type de service choisi doit exister et être actif au catalogue.
+ *
+ * Le formulaire ne propose jamais un type supprimé ou désactivé ; le serveur
+ * le refuse pareillement, même envoyé à la main.
+ */
+async function assertServiceTemplate(templateId: string | null | undefined): Promise<void> {
+  if (!templateId) return
+  const q = await db().query("SELECT 1 FROM service_catalog WHERE id=$1::uuid AND is_active", [templateId])
+  if (!q.rowCount) {
     throw new HttpError(
       400,
-      "invalid_vehicle_category",
-      "Une catégorie de véhicule visée par ce tarif n'existe pas dans cette station.",
+      "invalid_service_template",
+      "Ce type de service n'est plus disponible.",
     )
   }
 }
 
+/**
+ * Représentation API d'une prestation : associations d'éligibilité en liste
+ * (`vehicle_pricing`, le contrat) et en map (`vehicle_prices`, pour les
+ * écrans qui indexent par catégorie).
+ */
+function serviceResponse(
+  row: Record<string, unknown>,
+  pricing: Array<{ vehicle_category_id: string; price_cents: number }>,
+): Record<string, unknown> {
+  return {
+    ...row,
+    vehicle_pricing: pricing,
+    vehicle_prices: Object.fromEntries(pricing.map((entry) => [entry.vehicle_category_id, entry.price_cents])),
+  }
+}
+
+/** Charge les associations de plusieurs prestations en une requête. */
+async function loadServicePricing(
+  serviceIds: string[],
+): Promise<Map<string, Array<{ vehicle_category_id: string; price_cents: number }>>> {
+  const byService = new Map<string, Array<{ vehicle_category_id: string; price_cents: number }>>()
+  if (serviceIds.length === 0) return byService
+  const q = await db().query(
+    "SELECT service_id, vehicle_category_id, price_cents FROM service_vehicle_prices WHERE service_id = ANY($1::uuid[]) ORDER BY created_at",
+    [serviceIds],
+  )
+  for (const row of q.rows) {
+    const list = byService.get(String(row.service_id)) ?? []
+    list.push({ vehicle_category_id: String(row.vehicle_category_id), price_cents: Number(row.price_cents) })
+    byService.set(String(row.service_id), list)
+  }
+  return byService
+}
+
 /** Trace une écriture du catalogue des prestations (prix compris). */
 async function auditService(
+  q: { query: (text: string, values?: unknown[]) => Promise<unknown> },
   t: { organizationId: string; userId: string },
   action: string,
   entityId: string,
   metadata: Record<string, unknown>,
 ) {
-  await db().query(
+  await q.query(
     `INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, metadata)
      VALUES($1,$2,$3,'service',$4,$5)`,
     [t.organizationId, t.userId, action, entityId, JSON.stringify(metadata)],
@@ -677,10 +792,11 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
-        "SELECT id, name, description, category_id, price_cents, price_by_vehicle_type, duration_minutes, is_active, created_at, updated_at FROM services WHERE organization_id=$1::uuid ORDER BY name",
+        "SELECT id, template_id, name, description, category_id, price_cents, price_by_vehicle_type, duration_minutes, is_active, created_at, updated_at FROM services WHERE organization_id=$1::uuid ORDER BY name",
         [t.organizationId],
       )
-      res.json(q.rows)
+      const pricing = await loadServicePricing(q.rows.map((row) => String(row.id)))
+      res.json(q.rows.map((row) => serviceResponse(row, pricing.get(String(row.id)) ?? [])))
     }),
   )
 
@@ -692,7 +808,8 @@ export function createApiRouter() {
       const id = parseId(req.params.id)
       const q = await db().query("SELECT * FROM services WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!q.rowCount) throw new HttpError(404, "service_not_found", "Prestation introuvable.")
-      res.json(q.rows[0])
+      const pricing = await loadServicePricing([id])
+      res.json(serviceResponse(q.rows[0], pricing.get(id) ?? []))
     }),
   )
 
@@ -702,22 +819,55 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(catalogValidators.service, req.body)
-      await assertVehiclePriceKeys(input.price_by_vehicle_type, t.organizationId)
+      await assertVehiclePricing(input.vehicle_pricing, t.organizationId)
+      await assertServiceTemplate(input.template_id)
       if (input.category_id) {
         const categoryQ = await db().query("SELECT 1 FROM service_categories WHERE id=$1::uuid AND organization_id=$2::uuid", [input.category_id, t.organizationId])
         if (!categoryQ.rowCount) throw new HttpError(400, "invalid_category", "Catégorie de prestation invalide.")
       }
-      const q = await db().query(
-        `INSERT INTO services(organization_id, name, description, category_id, price_cents, price_by_vehicle_type, duration_minutes, is_active)
-         VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE($8,true)) RETURNING *`,
-        [t.organizationId, input.name, input.description ?? null, input.category_id ?? null, input.price_cents, JSON.stringify(input.price_by_vehicle_type ?? {}), input.duration_minutes ?? null, input.is_active ?? null],
-      )
-      await auditService(t, "service.created", q.rows[0].id, {
-        name: input.name,
-        price_cents: input.price_cents,
-        price_by_vehicle_type: input.price_by_vehicle_type ?? {},
-      })
-      res.status(201).json(q.rows[0])
+      // Prestation + associations dans une seule transaction : jamais une
+      // prestation sans ses catégories autorisées, ni l'inverse.
+      const client = await db().connect()
+      try {
+        await client.query("BEGIN")
+        // `price_cents` et `price_by_vehicle_type` ne sont plus des sources de
+        // décision : le premier sert d'affichage (le plus bas des tarifs
+        // configurés), le second est un miroir des associations pour les
+        // écrans anciens. L'éligibilité et le tarif réels vivent dans
+        // `service_vehicle_prices`.
+        const pricing = (input.vehicle_pricing ?? []).map((entry) => ({
+          vehicle_category_id: entry.vehicle_category_id,
+          price_cents: entry.price_cents as number,
+        }))
+        const displayPrice = Math.min(...pricing.map((entry) => entry.price_cents))
+        const q = await client.query(
+          `INSERT INTO services(organization_id, template_id, name, description, category_id, price_cents, price_by_vehicle_type, duration_minutes, is_active)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,true)) RETURNING *`,
+          [t.organizationId, input.template_id ?? null, input.name, input.description ?? null, input.category_id ?? null, displayPrice, JSON.stringify(Object.fromEntries(pricing.map((e) => [e.vehicle_category_id, e.price_cents]))), input.duration_minutes ?? null, input.is_active ?? null],
+        )
+        const service = q.rows[0]
+        for (const entry of pricing) {
+          await client.query(
+            "INSERT INTO service_vehicle_prices(service_id, vehicle_category_id, price_cents) VALUES($1,$2,$3)",
+            [service.id, entry.vehicle_category_id, entry.price_cents],
+          )
+        }
+        // La trace est écrite dans la même transaction : l'écriture et sa
+        // journalisation sont atomiques, et surtout aucune requête du pool
+        // n'est lancée pendant qu'un client est tenu (la couche RLS ouvrirait
+        // un second client et se bloquerait sur le verrou de transaction).
+        await auditService(client, t, "service.created", service.id, {
+          name: input.name,
+          vehicle_pricing: pricing,
+        })
+        await client.query("COMMIT")
+        res.status(201).json(serviceResponse(service, pricing))
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {})
+        throw error
+      } finally {
+        client.release()
+      }
     }),
   )
 
@@ -728,26 +878,85 @@ export function createApiRouter() {
       const t = tenant(req)
       const id = parseId(req.params.id)
       const input = body(catalogValidators.service.partial(), req.body)
-      await assertVehiclePriceKeys(input.price_by_vehicle_type, t.organizationId)
       const oldQ = await db().query("SELECT * FROM services WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!oldQ.rowCount) throw new HttpError(404, "service_not_found", "Prestation introuvable.")
+      if (input.template_id !== undefined) await assertServiceTemplate(input.template_id)
       if (input.category_id) {
         const categoryQ = await db().query("SELECT 1 FROM service_categories WHERE id=$1::uuid AND organization_id=$2::uuid", [input.category_id, t.organizationId])
         if (!categoryQ.rowCount) throw new HttpError(400, "invalid_category", "Catégorie de prestation invalide.")
       }
-      const merged = { ...oldQ.rows[0], ...input }
-      const q = await db().query(
-        `UPDATE services SET name=$3, description=$4, category_id=$5::uuid, price_cents=$6, price_by_vehicle_type=$7, duration_minutes=$8, is_active=$9, updated_at=now()
-         WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING *`,
-        [id, t.organizationId, merged.name, merged.description, merged.category_id, merged.price_cents, JSON.stringify(merged.price_by_vehicle_type ?? {}), merged.duration_minutes, merged.is_active],
+
+      const oldPricingQ = await db().query(
+        "SELECT vehicle_category_id, price_cents FROM service_vehicle_prices WHERE service_id=$1::uuid ORDER BY created_at",
+        [id],
       )
+      const oldPricing = oldPricingQ.rows.map((row) => ({
+        vehicle_category_id: String(row.vehicle_category_id),
+        price_cents: Number(row.price_cents),
+      }))
+      // Les catégories déjà associées ne sont jamais effacées en silence par
+      // la règle « catégorie inactive » : elles restent conservables telles
+      // quelles, et l'écran signale leur état.
+      const keepExisting = new Set(oldPricing.map((entry) => entry.vehicle_category_id))
+      const replacesPricing = input.vehicle_pricing !== undefined
+      if (input.vehicle_pricing !== undefined) {
+        await assertVehiclePricing(input.vehicle_pricing, t.organizationId, keepExisting)
+      }
+
+      const pricing = replacesPricing
+        ? input.vehicle_pricing!.map((entry) => ({
+            vehicle_category_id: entry.vehicle_category_id,
+            price_cents: entry.price_cents as number,
+          }))
+        : oldPricing
+
+      const merged = { ...oldQ.rows[0], ...input }
+      const displayPrice = pricing.length > 0 ? Math.min(...pricing.map((entry) => entry.price_cents)) : Number(oldQ.rows[0].price_cents)
+      const client = await db().connect()
+      let updated
+      try {
+        await client.query("BEGIN")
+        const q = await client.query(
+          `UPDATE services SET template_id=$3, name=$4, description=$5, category_id=$6::uuid, price_cents=$7, price_by_vehicle_type=$8, duration_minutes=$9, is_active=$10, updated_at=now()
+           WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING *`,
+          [id, t.organizationId, merged.template_id ?? null, merged.name, merged.description ?? null, merged.category_id ?? null, displayPrice, JSON.stringify(Object.fromEntries(pricing.map((e) => [e.vehicle_category_id, e.price_cents]))), merged.duration_minutes ?? null, merged.is_active],
+        )
+        updated = q.rows[0]
+        if (replacesPricing) {
+          // L'ensemble est remplacé : les catégories décochées perdent leur
+          // association (et deviennent inutilisables dans un lavage), les
+          // autres reçoivent leur tarif. Rien n'est rétroactivement changé
+          // dans les lavages existants : leurs prix sont des instantanés.
+          const keep = new Set(pricing.map((entry) => entry.vehicle_category_id))
+          for (const entry of oldPricing) {
+            if (!keep.has(entry.vehicle_category_id)) {
+              await client.query(
+                "DELETE FROM service_vehicle_prices WHERE service_id=$1::uuid AND vehicle_category_id=$2::uuid",
+                [id, entry.vehicle_category_id],
+              )
+            }
+          }
+          for (const entry of pricing) {
+            await client.query(
+              `INSERT INTO service_vehicle_prices(service_id, vehicle_category_id, price_cents)
+               VALUES($1,$2,$3)
+               ON CONFLICT (service_id, vehicle_category_id)
+               DO UPDATE SET price_cents=EXCLUDED.price_cents, updated_at=now()`,
+              [id, entry.vehicle_category_id, entry.price_cents],
+            )
+          }
+        }
+        await client.query("COMMIT")
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {})
+        throw error
+      } finally {
+        client.release()
+      }
+
       // On ne journalise que ce qui a bougé : une écriture identique ne doit
       // pas noyer le journal sous des « prestation modifiée » sans effet.
       const changed: Record<string, unknown> = {}
-      if (Number(oldQ.rows[0].price_cents) !== Number(merged.price_cents)) {
-        changed.price_before_cents = Number(oldQ.rows[0].price_cents)
-        changed.price_after_cents = Number(merged.price_cents)
-      }
       if (String(oldQ.rows[0].name) !== String(merged.name)) {
         changed.name_before = oldQ.rows[0].name
         changed.name_after = merged.name
@@ -755,13 +964,13 @@ export function createApiRouter() {
       if (Boolean(oldQ.rows[0].is_active) !== Boolean(merged.is_active)) {
         changed.is_active = merged.is_active
       }
-      if (JSON.stringify(oldQ.rows[0].price_by_vehicle_type ?? {}) !== JSON.stringify(merged.price_by_vehicle_type ?? {})) {
-        changed.price_by_vehicle_type = merged.price_by_vehicle_type ?? {}
+      if (replacesPricing && JSON.stringify(oldPricing) !== JSON.stringify(pricing)) {
+        changed.vehicle_pricing = pricing
       }
       if (Object.keys(changed).length > 0) {
-        await auditService(t, "service.updated", id, changed)
+        await auditService(db(), t, "service.updated", id, changed)
       }
-      res.json(q.rows[0])
+      res.json(serviceResponse(updated, pricing))
     }),
   )
 
@@ -809,7 +1018,7 @@ export function createApiRouter() {
       }
       // Journalisé après le COMMIT : une suppression annulée ne doit pas
       // laisser une ligne « prestation supprimée » dans l'audit.
-      await auditService(t, "service.deleted", id, { name: deletedName })
+      await auditService(db(), t, "service.deleted", id, { name: deletedName })
       res.status(204).send()
     }),
   )
@@ -972,22 +1181,38 @@ export function createApiRouter() {
             [input.vehicle_category_id, t.organizationId],
           )
           if (!categoryQ.rowCount) throw new HttpError(400, "invalid_vehicle_category", "Catégorie de véhicule invalide.")
-          // La famille accompagne la catégorie dans tout le calcul : c'est
-          // elle qui porte le tarif quand la station n'a pas saisi 61 prix.
-          const vehicle = {
-            id: input.vehicle_category_id,
-            family: (categoryQ.rows[0].family as string | null) ?? null,
-          }
-
           const serviceIds = input.items.map((item) => item.service_id)
+          // Éligibilité et tarif viennent de `service_vehicle_prices`, la
+          // table des associations explicites. Une seule jointure répond à
+          // deux questions : la prestation est-elle **autorisée** pour la
+          // catégorie du véhicule, et à **quel prix**. Aucun repli vers un
+          // prix de base ou de famille : une association absente est une
+          // interdiction, même si un formulaire a contourné l'interface.
           const servicesQ = await client.query(
-            "SELECT id, name, price_cents, price_by_vehicle_type, duration_minutes FROM services WHERE organization_id=$1::uuid AND id = ANY($2::uuid[]) AND is_active",
-            [t.organizationId, serviceIds],
+            `SELECT s.id, s.name, s.duration_minutes, p.price_cents AS configured_price_cents
+               FROM services s
+               LEFT JOIN service_vehicle_prices p
+                 ON p.service_id = s.id AND p.vehicle_category_id = $3::uuid
+              WHERE s.organization_id=$1::uuid AND s.id = ANY($2::uuid[]) AND s.is_active`,
+            [t.organizationId, serviceIds, input.vehicle_category_id],
           )
           if (servicesQ.rowCount !== new Set(serviceIds).size) {
             throw new HttpError(400, "invalid_service", "Une prestation sélectionnée est invalide ou inactive.")
           }
           const serviceById = new Map(servicesQ.rows.map((row) => [row.id as string, row]))
+          // La catégorie non autorisée est refusée explicitement, service par
+          // service : « indisponible », jamais « gratuite » ni « au prix de
+          // base ». Une ligne sans association ne passe pas.
+          for (const item of input.items) {
+            const service = serviceById.get(item.service_id)!
+            if (service.configured_price_cents == null) {
+              throw new HttpError(
+                400,
+                "service_not_available_for_vehicle",
+                `La prestation « ${service.name} » n'est pas disponible pour la catégorie de véhicule sélectionnée.`,
+              )
+            }
+          }
 
           if (input.worker_ids.length) {
             const workersQ = await client.query(
@@ -1001,7 +1226,7 @@ export function createApiRouter() {
 
           const totalCents = input.items.reduce((total, item) => {
             const service = serviceById.get(item.service_id)!
-            return total + resolveUnitPrice(service, vehicle) * item.quantity
+            return total + Number(service.configured_price_cents) * item.quantity
           }, 0)
           if (input.amount_received_cents > totalCents) {
             throw new HttpError(400, "amount_exceeds_total", "Le montant reçu dépasse le total du lavage.")
@@ -1081,7 +1306,9 @@ export function createApiRouter() {
 
           for (const item of input.items) {
             const service = serviceById.get(item.service_id)!
-            const unitPrice = resolveUnitPrice(service, vehicle)
+            // Instantané : ce prix est celui du jour, gravé dans la ligne. Un
+            // changement de tarif ultérieur ne le réécrit jamais.
+            const unitPrice = Number(service.configured_price_cents)
             await client.query(
               "INSERT INTO wash_items(wash_id, service_id, service_name, quantity, unit_price_cents, line_total_cents) VALUES($1,$2,$3,$4,$5,$6)",
               [wash.id, item.service_id, service.name, item.quantity, unitPrice, unitPrice * item.quantity],

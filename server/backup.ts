@@ -36,6 +36,11 @@ export const EXPORT_QUERIES: { key: string; sql: string }[] = [
   { key: "service_categories", sql: "SELECT * FROM service_categories WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "vehicle_categories", sql: "SELECT * FROM vehicle_categories WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "services", sql: "SELECT * FROM services WHERE organization_id=$1::uuid ORDER BY created_at" },
+  {
+    key: "service_vehicle_prices",
+    sql: `SELECT p.* FROM service_vehicle_prices p JOIN services s ON s.id = p.service_id
+          WHERE s.organization_id=$1::uuid ORDER BY p.service_id`,
+  },
   { key: "workers", sql: "SELECT * FROM workers WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "customers", sql: "SELECT * FROM customers WHERE organization_id=$1::uuid ORDER BY created_at" },
   { key: "washes", sql: "SELECT * FROM washes WHERE organization_id=$1::uuid ORDER BY created_at" },

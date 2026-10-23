@@ -242,7 +242,7 @@ test("un gérant lit le référentiel mais ne peut pas l'écrire", async () => {
 
 // --- 4. Tarification par famille -----------------------------------------
 
-test("le lavage facture le tarif de la famille, pas le prix de base", async () => {
+test("un ancien tarif de famille ne décide plus rien : sans autorisation explicite, le lavage est refusé", async () => {
   const suv = await api("/api/v1/vehicle-categories", {
     as: "demo@washpilot.ci",
     method: "POST",
@@ -251,19 +251,18 @@ test("le lavage facture le tarif de la famille, pas le prix de base", async () =
   assert.equal(suv.status, 201)
   const suvCategory = await suv.json()
 
-  const service = await api("/api/v1/services", {
-    as: "demo@washpilot.ci",
-    method: "POST",
-    body: {
-      name: "Lavage test famille",
-      price_cents: 200_000,
-      price_by_vehicle_type: { suv: 450_000, deux_roues: 100_000 },
-    },
-  })
-  assert.equal(service.status, 201)
-  const created = await service.json()
+  // Données héritées de l'ancien modèle, gravées comme l'ancienne version le
+  // faisait : prix de base + tarif de famille. Elles ne doivent plus rien
+  // décider — ni éligibilité, ni prix. L'écran d'API les expose encore
+  // (affichage), mais le lavage ne s'appuie que sur les autorisations
+  // explicites de `service_vehicle_prices`.
+  const legacy = await pool.query(
+    `INSERT INTO services(organization_id, name, price_cents, price_by_vehicle_type, duration_minutes, is_active)
+     VALUES($1::uuid,'Lavage test famille',200000,'{"suv":450000}',30,true) RETURNING id`,
+    [orgId],
+  )
+  const legacyId = legacy.rows[0].id
 
-  // Le prix renvoyé par le catalogue est bien celui de la famille.
   const wash = await api("/api/v1/washes", {
     as: "demo@washpilot.ci",
     method: "POST",
@@ -271,25 +270,17 @@ test("le lavage facture le tarif de la famille, pas le prix de base", async () =
     body: {
       site_id: siteId,
       vehicle_category_id: suvCategory.id,
-      items: [{ service_id: created.id, quantity: 2 }],
+      items: [{ service_id: legacyId, quantity: 2 }],
       worker_ids: [],
       payment_method: "orange_money",
       amount_received_cents: 0,
     },
   })
-  assert.equal(wash.status, 201)
-  const recorded = await wash.json()
-  assert.equal(recorded.total_cents, 900_000, "2 × 4 500 F attendus")
-
-  const items = await pool.query(
-    "SELECT unit_price_cents, line_total_cents FROM wash_items WHERE wash_id=$1::uuid",
-    [recorded.id],
-  )
-  assert.equal(items.rows[0].unit_price_cents, 450_000)
-  assert.equal(items.rows[0].line_total_cents, 900_000)
+  assert.equal(wash.status, 400, "le tarif de famille ne doit pas rendre la prestation disponible")
+  assert.equal((await wash.json()).error.code, "service_not_available_for_vehicle")
 })
 
-test("un tarif par catégorie exacte prime sur celui de la famille", async () => {
+test("le tarif facturé est celui de la catégorie, explicite", async () => {
   const moto = await pool.query(
     "SELECT id FROM vehicle_categories WHERE organization_id=$1::uuid AND name='Moto' LIMIT 1",
     [orgId],
@@ -301,12 +292,18 @@ test("un tarif par catégorie exacte prime sur celui de la famille", async () =>
     method: "POST",
     body: {
       name: "Lavage test catégorie exacte",
-      price_cents: 200_000,
-      price_by_vehicle_type: { deux_roues: 100_000, [motoId]: 50_000 },
+      duration_minutes: 30,
+      vehicle_pricing: [{ vehicle_category_id: motoId, price_cents: 50_000 }],
     },
   })
   assert.equal(service.status, 201)
   const created = await service.json()
+
+  // Un reliquat d'ancien tarif de famille, gravé à côté, n'altère rien.
+  await pool.query(
+    `UPDATE services SET price_by_vehicle_type = price_by_vehicle_type || '{"deux_roues":100000}'::jsonb WHERE id=$1::uuid`,
+    [created.id],
+  )
 
   const wash = await api("/api/v1/washes", {
     as: "demo@washpilot.ci",
@@ -322,29 +319,28 @@ test("un tarif par catégorie exacte prime sur celui de la famille", async () =>
     },
   })
   assert.equal(wash.status, 201)
-  assert.equal((await wash.json()).total_cents, 50_000)
+  assert.equal((await wash.json()).total_cents, 50_000, "500 F pour la moto, pas le tarif de famille")
 })
 
-test("une clé de tarif inconnue est refusée", async () => {
-  const wrongFamily = await api("/api/v1/services", {
+test("les champs de tarif hérités ne sont plus des entrées : la sauvegarde exige les catégories autorisées", async () => {
+  const onlyLegacy = await api("/api/v1/services", {
     as: "demo@washpilot.ci",
     method: "POST",
     body: { name: "Tarif famille inconnue", price_cents: 1000, price_by_vehicle_type: { avion: 5000 } },
   })
-  assert.equal(wrongFamily.status, 400)
-  assert.equal((await wrongFamily.json()).error.code, "invalid_vehicle_family")
+  assert.equal(onlyLegacy.status, 400)
+  assert.equal((await onlyLegacy.json()).error.code, "vehicle_pricing_required")
 
-  const wrongCategory = await api("/api/v1/services", {
+  const unknownCategory = await api("/api/v1/services", {
     as: "demo@washpilot.ci",
     method: "POST",
     body: {
       name: "Tarif catégorie inconnue",
-      price_cents: 1000,
-      price_by_vehicle_type: { [randomUUID()]: 5000 },
+      vehicle_pricing: [{ vehicle_category_id: randomUUID(), price_cents: 5000 }],
     },
   })
-  assert.equal(wrongCategory.status, 400)
-  assert.equal((await wrongCategory.json()).error.code, "invalid_vehicle_category")
+  assert.equal(unknownCategory.status, 400)
+  assert.equal((await unknownCategory.json()).error.code, "invalid_vehicle_category")
 })
 
 test("un tarif par catégorie d'une autre station est refusé", async () => {
@@ -363,8 +359,7 @@ test("un tarif par catégorie d'une autre station est refusé", async () => {
     method: "POST",
     body: {
       name: "Tarif volé",
-      price_cents: 1000,
-      price_by_vehicle_type: { [foreign.rows[0].id]: 5000 },
+      vehicle_pricing: [{ vehicle_category_id: foreign.rows[0].id, price_cents: 5000 }],
     },
   })
   assert.equal(response.status, 400)
@@ -373,23 +368,32 @@ test("un tarif par catégorie d'une autre station est refusé", async () => {
 
 // --- 5. Suppression -------------------------------------------------------
 
-test("supprimer une catégorie retire aussi le tarif qui la visait", async () => {
+test("supprimer une catégorie retire aussi son autorisation et son tarif", async () => {
   const created = await api("/api/v1/vehicle-categories", {
     as: "demo@washpilot.ci",
     method: "POST",
     body: { name: "Catégorie éphémère", family: "berlines" },
   })
   const category = await created.json()
+  const keptCreated = await api("/api/v1/vehicle-categories", {
+    as: "demo@washpilot.ci",
+    method: "POST",
+    body: { name: "Catégorie sœur de tarif", family: "suv" },
+  })
+  const keptCategory = await keptCreated.json()
 
   const service = await api("/api/v1/services", {
     as: "demo@washpilot.ci",
     method: "POST",
     body: {
       name: "Prestation à tarif orphelin",
-      price_cents: 100_000,
-      price_by_vehicle_type: { [category.id]: 300_000, suv: 400_000 },
+      vehicle_pricing: [
+        { vehicle_category_id: category.id, price_cents: 300_000 },
+        { vehicle_category_id: keptCategory.id, price_cents: 400_000 },
+      ],
     },
   })
+  assert.equal(service.status, 201)
   const created2 = await service.json()
 
   const deleted = await api(`/api/v1/vehicle-categories/${category.id}`, {
@@ -398,8 +402,16 @@ test("supprimer une catégorie retire aussi le tarif qui la visait", async () =>
   })
   assert.equal(deleted.status, 204)
 
+  // L'association est partie avec la catégorie (clé étrangère en cascade) :
+  // plus aucune autorisation orpheline, et le miroir hérité est nettoyé.
+  const rows = await pool.query(
+    "SELECT vehicle_category_id FROM service_vehicle_prices WHERE service_id=$1::uuid",
+    [created2.id],
+  )
+  assert.equal(rows.rowCount, 1, "une seule association survit")
+  assert.equal(String(rows.rows[0].vehicle_category_id), String(keptCategory.id))
   const after = await pool.query("SELECT price_by_vehicle_type FROM services WHERE id=$1::uuid", [created2.id])
-  assert.deepEqual(after.rows[0].price_by_vehicle_type, { suv: 400_000 })
+  assert.deepEqual(after.rows[0].price_by_vehicle_type, { [String(keptCategory.id)]: 400_000 })
 })
 
 test("une catégorie utilisée par un lavage ne peut pas être supprimée", async () => {
@@ -413,7 +425,10 @@ test("une catégorie utilisée par un lavage ne peut pas être supprimée", asyn
     await api("/api/v1/services", {
       as: "demo@washpilot.ci",
       method: "POST",
-      body: { name: "Prestation catégorie utilisée", price_cents: 5000 },
+      body: {
+        name: "Prestation catégorie utilisée",
+        vehicle_pricing: [{ vehicle_category_id: category.id, price_cents: 5000 }],
+      },
     })
   ).json()
 

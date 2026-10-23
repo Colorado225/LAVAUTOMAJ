@@ -103,6 +103,12 @@ async function makeStation(name: string): Promise<Station> {
     [organizationId, serviceCategoryQ.rows[0].id],
   )
   const serviceId = serviceQ.rows[0].id as string
+  // Nouveau modèle : l'éligibilité est explicite. Sans cette association, le
+  // lavage serait refusé — c'est précisément la règle que la refonte pose.
+  await pool.query(
+    "INSERT INTO service_vehicle_prices(service_id, vehicle_category_id, price_cents) VALUES($1,$2,600000)",
+    [serviceId, vehicleCategoryId],
+  )
 
   async function member(role: string, first: string): Promise<Member> {
     seq += 1

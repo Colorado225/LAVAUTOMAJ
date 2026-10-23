@@ -192,7 +192,11 @@ before(async () => {
   const svc = await api("/api/v1/services", {
     as: "demo@washpilot.ci",
     method: "POST",
-    body: { name: `Lavage équipe ${randomUUID().slice(0, 6)}`, price_cents: 200_000, duration_minutes: 30 },
+    body: {
+      name: `Lavage équipe ${randomUUID().slice(0, 6)}`,
+      duration_minutes: 30,
+      vehicle_pricing: [{ vehicle_category_id: vehicleCategoryId, price_cents: 200_000 }],
+    },
   })
   serviceId = String((await svc.json()).id)
 

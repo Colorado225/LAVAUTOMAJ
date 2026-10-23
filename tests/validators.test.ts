@@ -99,10 +99,44 @@ test("washValidators.cancel requires a meaningful reason", () => {
 
 // ----------------------------------------------------------------- catalog --
 
-test("catalogValidators.service bounds price and duration", () => {
-  assert.ok(catalogValidators.service.safeParse({ name: "Lustrage", price_cents: 15000 }).success)
-  assert.equal(catalogValidators.service.safeParse({ name: "Lustrage", price_cents: -1 }).success, false)
-  assert.equal(catalogValidators.service.safeParse({ name: "Lustrage", price_cents: 1000, duration_minutes: 2000 }).success, false)
+test("catalogValidators.service borne les prix par catégorie et la durée", () => {
+  const uuid = "3f1d2a44-88c4-4f6d-9b3a-2c5f0a1e77aa"
+  // Contrat nouveau : le nom vient du type, le tarif vit par catégorie.
+  assert.ok(
+    catalogValidators.service.safeParse({
+      name: "Lustrage",
+      duration_minutes: 45,
+      vehicle_pricing: [{ vehicle_category_id: uuid, price_cents: 15000 }],
+    }).success,
+  )
+  // Le prix par catégorie est borné ; un montant négatif est rejeté.
+  assert.equal(
+    catalogValidators.service.safeParse({
+      name: "Lustrage",
+      vehicle_pricing: [{ vehicle_category_id: uuid, price_cents: -1 }],
+    }).success,
+    false,
+  )
+  assert.equal(
+    catalogValidators.service.safeParse({
+      name: "Lustrage",
+      duration_minutes: 2000,
+      vehicle_pricing: [{ vehicle_category_id: uuid, price_cents: 1000 }],
+    }).success,
+    false,
+  )
+  // L'identifiant de catégorie doit être un UUID ; une clé héritée (famille,
+  // texte libre) ne passe même pas la validation de forme.
+  assert.equal(
+    catalogValidators.service.safeParse({
+      name: "Lustrage",
+      vehicle_pricing: [{ vehicle_category_id: "avion", price_cents: 1000 }],
+    }).success,
+    false,
+  )
+  // « au moins une catégorie » est un refus métier (`vehicle_pricing_required`,
+  // message « Sélectionnez au moins une catégorie de véhicule. »), pas une
+  // erreur de schéma : voir services-crud.test.ts qui le vérifie par l'API.
 })
 
 // -------------------------------------------------------------- operations --

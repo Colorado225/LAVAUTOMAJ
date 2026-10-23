@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
   SelectContent,
@@ -49,16 +50,22 @@ import { useCapability } from "@/lib/subscription"
 import { ConsumablesDialog } from "@/components/stock/consumables-dialog"
 import { Package } from "lucide-react"
 import { formatXof } from "@/lib/format"
-import { VEHICLE_FAMILIES, familyLabel } from "@/config/vehicle-taxonomy"
+import { VEHICLE_FAMILIES } from "@/config/vehicle-taxonomy"
 import { matchingServiceCategory } from "@/config/service-categories"
-import { hasVehiclePricing, isFamilyPriceKey, priceRange } from "@/lib/service-pricing"
+import { configuredPriceRange } from "@/lib/service-pricing"
 
 interface Service {
   id: string
+  template_id: string | null
   name: string
   description: string | null
   price_cents: number
   price_by_vehicle_type: Record<string, number> | null
+  /**
+   * Catégories de véhicules autorisées et leur tarif, en centimes.
+   * La **présence** de la clé est l'autorisation ; sa valeur, le prix.
+   */
+  vehicle_prices: Record<string, number> | null
   category_id: string | null
   duration_minutes: number | null
   is_active: boolean
@@ -94,41 +101,52 @@ interface ServiceTemplate {
 }
 
 interface ServiceForm {
-  /** Type du catalogue choisi (`id`) ou « custom » pour une saisie libre. */
+  /** Type du catalogue choisi (`id`) ou « custom » pour un type maison. */
   template_id: string
+  /**
+   * Le nom — jamais saisi dans le formulaire principal : il vient du type de
+   * service sélectionné. Pour un type maison, il est créé dans la boîte dédiée
+   * « Ajouter un type de service au catalogue ».
+   */
   name: string
   description: string
-  price_xof: string
   category_id: string | null
   duration_minutes: string
   /**
-   * Tarif par **famille** de véhicules, saisi en francs.
+   * Tarifs saisis par catégorie de véhicule, en francs (texte).
    *
-   * Un champ vide signifie « pas de tarif propre » : la prestation retombe
-   * alors sur son prix de base. C'est le niveau qui suffit dans la plupart des
-   * stations — 9 familles tiennent sur un écran, 61 types n'y tiennent pas.
+   * La valeur survit à un décochage-recochage pendant la même édition :
+   * seule la soumission ne retient que les catégories cochées. Un champ vide
+   * n'est pas « zéro franc », c'est « prix non renseigné ».
    */
-  family_prices: Record<string, string>
-  /**
-   * Tarif par **catégorie de véhicule précise** (clé UUID), saisi en francs.
-   *
-   * Le tarif de catégorie l'emporte sur celui de sa famille. Les catégories
-   * qui ne sont plus proposées par la station restent dans cette table et sont
-   * renvoyées telles quelles : les effacer parce qu'elles ne s'affichent plus
-   * supprimerait un tarif en vigueur sans que personne ne l'ait demandé.
-   */
-  category_prices: Record<string, string>
+  priceDrafts: Record<string, string>
+  /** Catégories cochées = autorisées. Décochée, une catégorie disparaît de la configuration enregistrée. */
+  enabled: Record<string, boolean>
 }
 
 const emptyForm = (): ServiceForm => ({
   template_id: "custom",
   name: "",
   description: "",
-  price_xof: "",
   category_id: null,
   duration_minutes: "",
-  family_prices: {},
-  category_prices: {},
+  priceDrafts: {},
+  enabled: {},
+})
+
+/** Type maison en cours de création dans la boîte dédiée. */
+interface CustomTypeForm {
+  name: string
+  description: string
+  category_id: string | null
+  duration_minutes: string
+}
+
+const emptyCustomType = (): CustomTypeForm => ({
+  name: "",
+  description: "",
+  category_id: null,
+  duration_minutes: "",
 })
 
 function parseXofAmount(value: string): number | null {
@@ -170,18 +188,6 @@ export default function ServicesPage() {
   const { data: member } = useApi<CurrentMember>(`/api/v1/auth/me?refresh=${refreshKey}`)
   const servicesList = useMemo(() => services ?? [], [services])
   const categoryById = useMemo(() => new Map((categories ?? []).map((category) => [category.id, category.name])), [categories])
-  // Familles réellement utilisées par la station : ce sont elles que le
-  // formulaire propose de tarifer. Une station qui n'a que des motos et des
-  // berlines n'a rien à faire d'un prix « poids lourds ».
-  const stationFamilies = useMemo(
-    () =>
-      new Set(
-        (vehicleCategories ?? [])
-          .map((category) => category.family)
-          .filter((code): code is string => Boolean(code)),
-      ),
-    [vehicleCategories],
-  )
   const canManage = member?.role === "owner" || member?.role === "manager"
 
   /**
@@ -212,11 +218,11 @@ export default function ServicesPage() {
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingService, setEditingService] = useState<Service | null>(null)
-  // Le panneau des tarifs par catégorie est replié par défaut (la grille peut
-  // compter 61 champs). Il s'ouvre d'office sur une prestation qui a déjà des
-  // tarifs par catégorie : sinon un tarif en vigueur deviendrait invisible,
-  // donc impossible à corriger.
-  const [pricesExpanded, setPricesExpanded] = useState(false)
+  // Boîte dédiée « Ajouter un type de service au catalogue » : le formulaire
+  // principal reste sobre (choisir un type, autoriser des catégories, fixer
+  // leurs prix), la création d'un type maison a son propre flux.
+  const [customDialogOpen, setCustomDialogOpen] = useState(false)
+  const [customType, setCustomType] = useState<CustomTypeForm>(emptyCustomType)
   const [form, setForm] = useState<ServiceForm>(emptyForm)
   const availableCategories = useMemo(
     () => (categories ?? []).filter((category) => category.is_active || category.id === form.category_id),
@@ -237,54 +243,61 @@ export default function ServicesPage() {
   function openCreateDialog() {
     setEditingService(null)
     setForm(emptyForm())
-    setPricesExpanded(false)
+    setCustomType(emptyCustomType())
     mutation.reset()
     setDialogOpen(true)
   }
 
   function openEditDialog(service: Service) {
     setEditingService(service)
+    const template =
+      (templates ?? []).find((item) => item.id === service.template_id) ??
+      // Repli par le nom : les prestations créées avant la clé de type n'ont
+      // pas de `template_id`, mais leur nom vient souvent du catalogue.
+      (templates ?? []).find(
+        (item) => item.name.toLocaleLowerCase("fr-CI") === service.name.toLocaleLowerCase("fr-CI"),
+      )
+    // Les associations déjà enregistrées cochent leurs catégories et
+    // pré-remplissent leurs prix. Une catégorie autorisée n'est jamais
+    // décochée d'office ; une catégorie sans association n'est pas cochée.
+    const configured = service.vehicle_prices ?? {}
     setForm({
-      // Retrouver le type du catalogue par le nom évite d'afficher
-      // « Personnalisée » sur une prestation qui vient justement du catalogue.
-      template_id:
-        (templates ?? []).find(
-          (template) => template.name.toLocaleLowerCase("fr-CI") === service.name.toLocaleLowerCase("fr-CI"),
-        )?.id ?? "custom",
+      template_id: template?.id ?? "custom",
       name: service.name,
       description: service.description ?? "",
-      price_xof: String(service.price_cents / 100),
       category_id: service.category_id,
       duration_minutes: service.duration_minutes == null ? "" : String(service.duration_minutes),
-      family_prices: Object.fromEntries(
-        Object.entries(service.price_by_vehicle_type ?? {})
-          .filter(([key]) => isFamilyPriceKey(key))
-          .map(([key, value]) => [key, String(value / 100)]),
+      priceDrafts: Object.fromEntries(
+        Object.entries(configured).map(([id, cents]) => [id, String(cents / 100)]),
       ),
-      category_prices: Object.fromEntries(
-        Object.entries(service.price_by_vehicle_type ?? {})
-          .filter(([key]) => !isFamilyPriceKey(key))
-          .map(([key, value]) => [key, String(value / 100)]),
-      ),
+      enabled: Object.fromEntries(Object.keys(configured).map((id) => [id, true])),
     })
-    setPricesExpanded(
-      Object.keys(service.price_by_vehicle_type ?? {}).some((key) => !isFamilyPriceKey(key)),
+    setCustomType(
+      template
+        ? emptyCustomType()
+        : {
+            name: service.name,
+            description: service.description ?? "",
+            category_id: service.category_id,
+            duration_minutes: service.duration_minutes == null ? "" : String(service.duration_minutes),
+          },
     )
     mutation.reset()
     setDialogOpen(true)
   }
 
   /**
-   * Choisir un type du catalogue pré-remplit le formulaire.
+   * Choisir un type du catalogue pré-remplit la prestation.
    *
-   * Le prix et la durée sont ceux du catalogue, la catégorie est retrouvée par
-   * son nom, et la description suit. Tout reste modifiable : un type n'est
-   * qu'un point de départ, jamais une contrainte.
+   * Le nom, la durée et la description viennent du catalogue, la catégorie est
+   * retrouvée par son nom. Les tarifs, eux, ne bougent pas : ce sont les
+   * catégories autorisées et leurs prix qui les portent.
    */
   function applyTemplate(value: string | null) {
     const templateId = value ?? "custom"
     if (templateId === "custom") {
-      setForm((previous) => ({ ...previous, template_id: "custom" }))
+      // Flux distinct : le type maison se crée dans sa propre boîte.
+      setCustomDialogOpen(true)
       return
     }
     const template = (templates ?? []).find((item) => item.id === templateId)
@@ -295,11 +308,31 @@ export default function ServicesPage() {
       template_id: templateId,
       name: template.name,
       description: template.description ?? "",
-      price_xof: template.price_cents == null ? "" : String(template.price_cents / 100),
       duration_minutes:
         template.duration_minutes == null ? "" : String(template.duration_minutes),
       category_id: category?.id ?? previous.category_id,
     }))
+  }
+
+  /** Valide et applique un type maison créé dans la boîte dédiée. */
+  function confirmCustomType() {
+    const name = customType.name.trim()
+    if (!name || name.length > 100) {
+      return
+    }
+    const duration = customType.duration_minutes.trim() ? Number(customType.duration_minutes) : null
+    if (duration !== null && (!Number.isInteger(duration) || duration < 1 || duration > 1440)) {
+      return
+    }
+    setForm((previous) => ({
+      ...previous,
+      template_id: "custom",
+      name,
+      description: customType.description.trim(),
+      category_id: customType.category_id,
+      duration_minutes: customType.duration_minutes,
+    }))
+    setCustomDialogOpen(false)
   }
 
   function handleDialogChange(open: boolean) {
@@ -313,10 +346,9 @@ export default function ServicesPage() {
   async function saveService(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const name = form.name.trim()
-    const priceCents = parseXofAmount(form.price_xof)
     const durationMinutes = form.duration_minutes.trim() ? Number(form.duration_minutes) : null
-    if (!name || name.length > 100 || priceCents == null) {
-      mutation.fail("Saisissez un nom (100 caractères maximum) et un prix valide.")
+    if (!name || name.length > 100) {
+      mutation.fail("Sélectionnez un type de service valide.")
       return
     }
     if (durationMinutes !== null && (!Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 1440)) {
@@ -324,50 +356,43 @@ export default function ServicesPage() {
       return
     }
 
-    // Tarifs par famille : un champ vide n'est pas un zéro, c'est « pas de
-    // tarif propre ». On ne l'envoie donc pas du tout, et la prestation
-    // retombe sur son prix de base.
-    const familyPrices: Record<string, number> = {}
-    for (const [code, raw] of Object.entries(form.family_prices)) {
-      if (!raw.trim()) continue
-      const cents = parseXofAmount(raw)
-      if (cents == null) {
-        mutation.fail(`Prix invalide pour la famille « ${familyLabel(code) ?? code} ».`)
-        return
+    // Catégories autorisées, dans l'ordre du référentiel. Une catégorie
+    // cochée exige un prix valide ; un prix manquant n'est jamais remplacé
+    // par zéro en silence. Une catégorie décochée n'est pas envoyée du tout :
+    // elle n'est ni gratuite, ni au prix de base — simplement indisponible.
+    const vehiclePricing: Array<{ vehicle_category_id: string; price_cents: number }> = []
+    for (const group of vehicleGroups) {
+      for (const category of group.categories) {
+        if (!form.enabled[category.id]) continue
+        const raw = form.priceDrafts[category.id] ?? ""
+        if (!raw.trim()) {
+          mutation.fail(`Renseignez le prix pour la catégorie ${category.name}.`)
+          return
+        }
+        const cents = parseXofAmount(raw)
+        if (cents == null) {
+          mutation.fail(`Le prix doit être un montant valide en FCFA. Catégorie ${category.name}.`)
+          return
+        }
+        vehiclePricing.push({ vehicle_category_id: category.id, price_cents: cents })
       }
-      familyPrices[code] = cents
     }
-
-    // Tarifs par catégorie de véhicule. Un champ vidé retire le tarif de
-    // cette catégorie — elle retombe alors sur sa famille, puis sur le prix
-    // de base. Les catégories qui ne sont plus proposées par la station
-    // gardent leur tarif : on ne les affiche pas, on ne les efface pas.
-    const categoryPrices: Record<string, number> = {}
-    for (const [categoryId, raw] of Object.entries(form.category_prices)) {
-      if (!raw.trim()) continue
-      const cents = parseXofAmount(raw)
-      if (cents == null) {
-        mutation.fail(`Prix invalide pour la catégorie « ${categoryById.get(categoryId) ?? "archivée"} ».`)
-        return
-      }
-      categoryPrices[categoryId] = cents
+    if (vehiclePricing.length === 0) {
+      mutation.fail("Sélectionnez au moins une catégorie de véhicule.")
+      return
     }
 
     const outcome = await mutation.run({
       url: editingService ? `/api/v1/services/${encodeURIComponent(editingService.id)}` : "/api/v1/services",
       method: editingService ? "PATCH" : "POST",
       body: {
+        template_id: form.template_id === "custom" ? null : form.template_id,
         name,
         description: form.description.trim() || null,
-        price_cents: priceCents,
         category_id: form.category_id,
         duration_minutes: durationMinutes,
         is_active: editingService?.is_active ?? true,
-        // Le serveur remplace l'objet entier : les tarifs qui ne sont pas
-        // renvoyés disparaîtraient. On renvoie donc à la fois les tarifs de
-        // famille et ceux des catégories, y compris les catégories archivées
-        // que le formulaire n'affiche pas.
-        price_by_vehicle_type: { ...categoryPrices, ...familyPrices },
+        vehicle_pricing: vehiclePricing,
       },
       success: editingService ? "Prestation mise à jour." : "Prestation créée.",
       failure: "Impossible d’enregistrer la prestation.",
@@ -378,45 +403,25 @@ export default function ServicesPage() {
     setRefreshKey((key) => key + 1)
   }
 
-  /**
-   * Familles proposées au tarif.
-   *
-   * Celles que la station utilise réellement, plus celles qui portent déjà un
-   * tarif même si la station n'a plus de catégorie dedans : un tarif invisible
-   * serait un tarif impossible à corriger.
-   */
-  const pricingFamilies = useMemo(() => {
-    const used = VEHICLE_FAMILIES.filter((item) => stationFamilies.has(item.code))
-    const extra = VEHICLE_FAMILIES.filter(
-      (item) => !stationFamilies.has(item.code) && Boolean(form.family_prices[item.code]),
-    )
-    return [...used, ...extra]
-  }, [stationFamilies, form.family_prices])
-
-  function setFamilyPrice(code: string, value: string) {
+  function toggleCategory(categoryId: string) {
     setForm((previous) => ({
       ...previous,
-      family_prices: { ...previous.family_prices, [code]: value },
+      enabled: { ...previous.enabled, [categoryId]: !previous.enabled[categoryId] },
     }))
   }
 
-  function setCategoryPrice(categoryId: string, value: string) {
+  function setPriceDraft(categoryId: string, value: string) {
     setForm((previous) => ({
       ...previous,
-      category_prices: { ...previous.category_prices, [categoryId]: value },
+      priceDrafts: { ...previous.priceDrafts, [categoryId]: value },
     }))
   }
 
-  /**
-   * Texte indicatif d'un champ de prix par catégorie : ce qui s'appliquera si
-   * on le laisse vide. Sans cela, un champ vide ne dit pas s'il vaut « prix de
-   * base » ou « tarif de la famille ».
-   */
-  function categoryPlaceholder(familyCode: string): string {
-    const familyPrice = familyCode ? form.family_prices[familyCode]?.trim() : ""
-    if (familyPrice) return `${familyPrice} (famille)`
-    return form.price_xof ? `${form.price_xof} (prix de base)` : "Prix de base"
-  }
+  /** Catégories cochées : au moins une, et toutes pourvues d'un prix saisissable. */
+  const enabledCount = useMemo(
+    () => Object.values(form.enabled).filter(Boolean).length,
+    [form.enabled],
+  )
 
   /**
    * Suppression définitive, réservée aux prestations jamais vendues.
@@ -459,7 +464,7 @@ export default function ServicesPage() {
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
           <div>
             <p className="text-sm text-muted-foreground">Les modifications sont enregistrées dans l’organisation active. Les prix historiques restent figés sur chaque lavage.</p>
-            <p className="mt-1 text-xs text-muted-foreground">Un tarif peut varier selon la <strong>famille du véhicule</strong> (moto, SUV, poids lourds…). À défaut, le prix de base s’applique.</p>
+            <p className="mt-1 text-xs text-muted-foreground">Chaque prestation est proposée aux <strong>catégories de véhicules autorisées</strong>, avec un tarif propre à chacune. Une catégorie non cochée ne peut pas recevoir la prestation.</p>
           </div>
           {canManage && (
             <div className="flex flex-col items-start gap-1.5">
@@ -521,14 +526,20 @@ export default function ServicesPage() {
                         <TableCell>{service.category_id ? categoryById.get(service.category_id) ?? "Catégorie archivée" : "—"}</TableCell>
                         <TableCell>{service.duration_minutes ? `${service.duration_minutes} min` : "—"}</TableCell>
                         <TableCell className="text-right">
-                          {hasVehiclePricing(service) ? (
-                            <span className="inline-flex flex-col items-end">
-                              <span className="font-medium">dès {formatXof(priceRange(service).min)}</span>
-                              <span className="text-xs text-muted-foreground">jusqu’à {formatXof(priceRange(service).max)}</span>
-                            </span>
-                          ) : (
-                            formatXof(service.price_cents)
-                          )}
+                          {(() => {
+                            const range = configuredPriceRange(service)
+                            if (!range) {
+                              return <span className="text-xs text-muted-foreground">Non configurée</span>
+                            }
+                            return (
+                              <span className="inline-flex flex-col items-end">
+                                <span className="font-medium">dès {formatXof(range.min)}</span>
+                                {range.max !== range.min && (
+                                  <span className="text-xs text-muted-foreground">jusqu’à {formatXof(range.max)}</span>
+                                )}
+                              </span>
+                            )
+                          })()}
                         </TableCell>
                         <TableCell><Badge variant={service.is_active ? "secondary" : "outline"}>{service.is_active ? "Active" : "Inactive"}</Badge></TableCell>
                         {canManage && <TableCell><div className="flex justify-end gap-1">{planStock.allowed && <Button variant="ghost" size="icon" disabled={catalogForm.disabled} title={catalogForm.reason ?? "Ce que cette prestation sort du stock"} aria-label={`Consommables de ${service.name}`} onClick={() => setRecettePour(service)}><Package className="size-4" /></Button>}<Button variant="ghost" size="icon" disabled={catalogForm.disabled} title={catalogForm.reason ?? undefined} aria-label={`Modifier ${service.name}`} onClick={() => openEditDialog(service)}><Pencil className="size-4" /></Button><Button variant="ghost" size="icon" title={catalogWrite.reason ?? undefined} disabled={catalogWrite.disabled || mutation.busyKey === service.id} aria-label={service.is_active ? `Désactiver ${service.name}` : `Réactiver ${service.name}`} onClick={() => void toggleService(service)}>{mutation.busyKey === service.id ? <RefreshCw className="size-4 animate-spin" /> : service.is_active ? <ToggleLeft className="size-4" /> : <ToggleRight className="size-4" />}</Button><Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" title={catalogWrite.reason ?? "Supprimer définitivement cette prestation"} disabled={catalogWrite.disabled || mutation.busyKey === service.id} aria-label={`Supprimer ${service.name}`} onClick={() => void deleteService(service)}><Trash2 className="size-4" /></Button></div></TableCell>}
@@ -552,122 +563,142 @@ export default function ServicesPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="flex flex-col gap-1.5 text-sm font-medium sm:col-span-2">Type de service
                 <Select value={form.template_id} onValueChange={applyTemplate}>
-                  <SelectTrigger><SelectValue placeholder="Prestation personnalisée" /></SelectTrigger>
+                  <SelectTrigger className="w-full"><SelectValue placeholder="Prestation personnalisée" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="custom">Prestation personnalisée</SelectItem>
+                    <SelectItem value="custom">
+                      {form.template_id === "custom" && form.name
+                        ? `Type personnalisé — ${form.name}`
+                        : "Prestation personnalisée…"}
+                    </SelectItem>
                     {(templates ?? []).map((template) => (
                       <SelectItem key={template.id} value={template.id}>
                         {template.name}
-                        {template.price_cents != null ? ` — ${formatXof(template.price_cents)}` : ""}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 <span className="text-xs font-normal text-muted-foreground">
-                  Un type du catalogue remplit le nom, la catégorie, la durée, la description et le prix
-                  indicatif. Tout reste modifiable ensuite.
+                  Le nom de la prestation vient du type choisi. Un type maison se crée dans
+                  « Ajouter un type de service au catalogue ».
                 </span>
               </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium sm:col-span-2">Nom de la prestation<Input required maxLength={100} value={form.name} onChange={(event) => setForm((previous) => ({ ...previous, name: event.target.value }))} placeholder="Ex. Lavage moteur" /></label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium">Prix (F CFA)<Input required type="number" min={0} step="any" value={form.price_xof} onChange={(event) => setForm((previous) => ({ ...previous, price_xof: event.target.value }))} placeholder="0" /></label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium">Durée (minutes)<Input type="number" min={1} max={1440} step={1} value={form.duration_minutes} onChange={(event) => setForm((previous) => ({ ...previous, duration_minutes: event.target.value }))} placeholder="Facultatif" /></label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium sm:col-span-2">Catégorie
+              <label className="flex flex-col gap-1.5 text-sm font-medium">Catégorie de service
                 <Select value={form.category_id ?? "none"} onValueChange={(value) => setForm((previous) => ({ ...previous, category_id: value && value !== "none" ? String(value) : null }))}>
                   <SelectTrigger><SelectValue placeholder="Sans catégorie" /></SelectTrigger>
                   <SelectContent><SelectItem value="none">Sans catégorie</SelectItem>{availableCategories.map((category) => <SelectItem key={category.id} value={category.id}>{category.name}{category.is_active ? "" : " (inactive)"}</SelectItem>)}</SelectContent>
                 </Select>
               </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium">Durée (minutes)<Input type="number" min={1} max={1440} step={1} value={form.duration_minutes} onChange={(event) => setForm((previous) => ({ ...previous, duration_minutes: event.target.value }))} placeholder="Facultatif" /></label>
               <label className="flex flex-col gap-1.5 text-sm font-medium sm:col-span-2">Description
                 <Input maxLength={1000} value={form.description} onChange={(event) => setForm((previous) => ({ ...previous, description: event.target.value }))} placeholder="Une phrase reprise sur la fiche de la prestation" />
               </label>
             </div>
 
             <fieldset className="rounded-lg border p-3">
-              <legend className="px-1 text-sm font-medium">Prix par famille de véhicule</legend>
+              <legend className="px-1 text-sm font-medium">Catégories de véhicules autorisées</legend>
               <p className="mb-3 text-xs text-muted-foreground">
-                Facultatif. Laissez vide pour facturer le prix de base. Un SUV ou un camion demande
-                plus de temps et de produit qu’une citadine : c’est ici que cela se traduit.
-              </p>
-              {pricingFamilies.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  Aucune famille de véhicules n’est encore configurée. Ajoutez des catégories dans
-                  Configuration › Catégories de véhicules pour pouvoir tarifer par gabarit.
-                </p>
-              ) : (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {pricingFamilies.map((item) => (
-                    <label key={item.code} className="flex flex-col gap-1.5 text-sm">
-                      <span className="font-medium">{item.label}</span>
-                      <Input
-                        type="number"
-                        min={0}
-                        step="any"
-                        inputMode="decimal"
-                        value={form.family_prices[item.code] ?? ""}
-                        onChange={(event) => setFamilyPrice(item.code, event.target.value)}
-                        placeholder={form.price_xof ? `${form.price_xof} (prix de base)` : "Prix de base"}
-                        aria-label={`Prix ${item.label}`}
-                      />
-                    </label>
-                  ))}
-                </div>
-              )}
-            </fieldset>
-
-            <details
-              className="rounded-lg border p-3"
-              open={pricesExpanded}
-              onToggle={(event) => setPricesExpanded(event.currentTarget.open)}
-            >
-              <summary className="cursor-pointer text-sm font-medium">
-                Prix par catégorie de véhicule
-                <span className="ml-2 text-xs font-normal text-muted-foreground">facultatif, pour un modèle précis</span>
-              </summary>
-              <p className="mb-3 mt-2 text-xs text-muted-foreground">
-                Le tarif d’une catégorie l’emporte sur celui de sa famille. Laissez vide pour
-                appliquer le tarif de la famille, puis le prix de base.
+                Sélectionnez les catégories de véhicules pouvant bénéficier de cette prestation.
+                Définissez ensuite un tarif pour chaque catégorie sélectionnée.
               </p>
               {vehicleGroups.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
                   Aucune catégorie de véhicule configurée. Ajoutez-en dans Configuration ›
-                  Catégories de véhicules pour pouvoir affiner un prix par modèle.
+                  Catégories de véhicules avant de créer une prestation.
                 </p>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-4">
                   {vehicleGroups.map((group) => (
                     <div key={group.code || "sans-famille"}>
                       <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                         {group.label}
                       </p>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        {group.categories.map((category) => (
-                          <label key={category.id} className="flex flex-col gap-1.5 text-sm">
-                            <span>{category.name}</span>
-                            <Input
-                              type="number"
-                              min={0}
-                              step="any"
-                              inputMode="decimal"
-                              value={form.category_prices[category.id] ?? ""}
-                              onChange={(event) => setCategoryPrice(category.id, event.target.value)}
-                              placeholder={categoryPlaceholder(group.code)}
-                              aria-label={`Prix ${category.name}`}
-                            />
-                          </label>
-                        ))}
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {group.categories.map((category) => {
+                          const checked = Boolean(form.enabled[category.id])
+                          const priceId = `prix-${category.id}`
+                          return (
+                            <div
+                              key={category.id}
+                              className={`flex flex-col gap-1.5 rounded-md border p-2.5 text-sm transition-colors ${
+                                checked ? "border-primary/60 bg-primary/5" : "bg-muted/30"
+                              }`}
+                            >
+                              <label className="flex items-center gap-2 font-medium">
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={() => toggleCategory(category.id)}
+                                  id={`cat-${category.id}`}
+                                />
+                                <span>
+                                  {category.name}
+                                  {category.is_active ? "" : " — catégorie désactivée"}
+                                </span>
+                              </label>
+                              {checked && (
+                                <label className="flex flex-col gap-1 text-xs" htmlFor={priceId}>
+                                  <span className="text-muted-foreground">Prix en FCFA</span>
+                                  <Input
+                                    id={priceId}
+                                    type="number"
+                                    min={0}
+                                    step="any"
+                                    inputMode="decimal"
+                                    value={form.priceDrafts[category.id] ?? ""}
+                                    onChange={(event) => setPriceDraft(category.id, event.target.value)}
+                                    placeholder="Ex. 5 000"
+                                    aria-label={`Prix en FCFA pour ${category.name}`}
+                                  />
+                                </label>
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   ))}
                 </div>
               )}
-            </details>
+            </fieldset>
 
             {mutation.error && <p role="alert" className="text-sm text-destructive">{mutation.error}</p>}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => handleDialogChange(false)} disabled={saving}>Annuler</Button>
-              <Button type="submit" disabled={saving || !form.name.trim() || parseXofAmount(form.price_xof) == null}>{saving && <RefreshCw className="mr-2 size-4 animate-spin" />}{editingService ? "Enregistrer" : "Créer la prestation"}</Button>
+              <Button type="submit" disabled={saving || !form.name.trim() || enabledCount === 0}>{saving && <RefreshCw className="mr-2 size-4 animate-spin" />}{editingService ? "Enregistrer" : "Créer la prestation"}</Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={customDialogOpen} onOpenChange={(next) => { if (!next) setCustomDialogOpen(false) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Ajouter un type de service au catalogue</DialogTitle>
+            <DialogDescription>
+              Ce type devient le nom de la prestation. Pour un tarif différent selon les véhicules,
+              cela se règle ensuite dans « Catégories de véhicules autorisées ».
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4">
+            <label className="flex flex-col gap-1.5 text-sm font-medium">Nom du type
+              <Input required maxLength={100} value={customType.name} onChange={(event) => setCustomType((previous) => ({ ...previous, name: event.target.value }))} placeholder="Ex. Lustrage carrosserie" />
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-medium">Catégorie de service
+              <Select value={customType.category_id ?? "none"} onValueChange={(value) => setCustomType((previous) => ({ ...previous, category_id: value && value !== "none" ? String(value) : null }))}>
+                <SelectTrigger className="w-full"><SelectValue placeholder="Sans catégorie" /></SelectTrigger>
+                <SelectContent><SelectItem value="none">Sans catégorie</SelectItem>{availableCategories.map((category) => <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-medium">Durée (minutes)
+              <Input type="number" min={1} max={1440} step={1} value={customType.duration_minutes} onChange={(event) => setCustomType((previous) => ({ ...previous, duration_minutes: event.target.value }))} placeholder="Facultatif" />
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-medium">Description
+              <Input maxLength={1000} value={customType.description} onChange={(event) => setCustomType((previous) => ({ ...previous, description: event.target.value }))} placeholder="Facultatif" />
+            </label>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setCustomDialogOpen(false)}>Annuler</Button>
+            <Button type="button" onClick={confirmCustomType} disabled={!customType.name.trim()}>Ajouter au catalogue</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

@@ -198,7 +198,7 @@ test("sur Starter, la recette d'une prestation est fermée des deux côtés", as
   const service = await api("/api/v1/services", {
     as: "demo@washpilot.ci",
     method: "POST",
-    body: { name: `Lavage forfait ${randomUUID().slice(0, 8)}`, price_cents: 200_000, duration_minutes: 30 },
+    body: { name: `Lavage forfait ${randomUUID().slice(0, 8)}`, duration_minutes: 30, vehicle_pricing: [{ vehicle_category_id: vehicleCategoryId, price_cents: 200_000 }] },
   })
   const serviceId = (await service.json()).id
 
@@ -282,7 +282,7 @@ test("une station rétrogradée conserve ses produits et sa recette en base", as
       await api("/api/v1/services", {
         as: "demo@washpilot.ci",
         method: "POST",
-        body: { name: `Lavage conservé ${suffix}`, price_cents: 200_000, duration_minutes: 30 },
+        body: { name: `Lavage conservé ${suffix}`, duration_minutes: 30, vehicle_pricing: [{ vehicle_category_id: vehicleCategoryId, price_cents: 200_000 }] },
       })
     ).json()
   ).id
@@ -320,7 +320,7 @@ test("sur Starter, enregistrer un lavage reste possible et ne touche plus au sto
       await api("/api/v1/services", {
         as: "demo@washpilot.ci",
         method: "POST",
-        body: { name: `Lavage figé ${suffix}`, price_cents: 200_000, duration_minutes: 30 },
+        body: { name: `Lavage figé ${suffix}`, duration_minutes: 30, vehicle_pricing: [{ vehicle_category_id: vehicleCategoryId, price_cents: 200_000 }] },
       })
     ).json()
   ).id
