@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express"
 import type { PoolClient } from "pg"
 import { getPool } from "./db.ts"
 import { HttpError } from "./auth.ts"
+import { runWithTenant } from "./tenant-context.ts"
 import { effectivePermissions, type Permission, type PermissionOverride } from "./permissions.ts"
 
 interface TenantRow {
@@ -77,7 +78,14 @@ export async function requireTenantContext(req: Request, _res: Response, next: N
       permissions,
       can: (permission: Permission) => permissions.has(permission),
     }
-    next()
+    // La portée de locataire accompagne tout le reste de la requête, jusqu'aux
+    // transactions ouvertes dans les services : c'est elle qui borne le garde
+    // RLS de la base (voir server/db-rls.ts). Sans elle, une route qui
+    // oublierait son `WHERE organization_id` lirait quand même chez les autres.
+    runWithTenant(
+      { organizationId: row.organization_id, userId: auth.userId },
+      () => next(),
+    )
   } catch (error) {
     next(error)
   }

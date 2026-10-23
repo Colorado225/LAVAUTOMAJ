@@ -43,15 +43,18 @@ function arrayValues(source: string, anchor: string): string[] {
 
 /** Valeurs d'une liste `{ value: "…", label: "…" }` de l'interface. */
 function uiValues(source: string, name: string): string[] {
-  const start = source.indexOf(`const ${name} = [`)
+  const start = source.indexOf(`const ${name}`)
   assert.ok(start >= 0, `liste « ${name} » introuvable`)
-  const end = source.indexOf("]", start)
-  const block = source.slice(start, end)
+  // Tolère une annotation de type entre le nom et le tableau
+  // (`const NOM: Option[] = [`), sans confondre les crochets du type.
+  const open = source.indexOf("[", source.indexOf("=", start))
+  const end = source.indexOf("]", open)
+  const block = source.slice(open, end)
   return [...block.matchAll(/value:\s*"([a-z_]+)"/g)].map((m) => m[1]).sort()
 }
 
 test("les catégories de dépense proposées sont celles que le serveur accepte", () => {
-  const ui = uiValues(read("src/app/expenses/page.tsx"), "expenseCategories")
+  const ui = uiValues(read("src/lib/expenses.ts"), "EXPENSE_CATEGORIES")
   const server = serverEnum(read("server/operations.ts"), "category: z.enum([")
   assert.deepEqual(ui, server, "l'écran propose une catégorie que l'API refuserait (ou l'inverse)")
 })

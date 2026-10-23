@@ -361,8 +361,10 @@ export function registerAccountRoutes(r: Router): void {
         )
         await client.query("COMMIT")
 
+        // Sur la connexion déjà ouverte : appeler le pool ici laisserait un
+        // code tenter la requête pendant que le client est encore tenu.
         await logConsoleAction(
-          pool,
+          client,
           operator,
           "member.role_changed",
           organizationId,

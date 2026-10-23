@@ -1,14 +1,12 @@
 "use client"
 
-import { useRef, useState, type FormEvent } from "react"
+import { useState } from "react"
 import { Link } from "react-router-dom"
 import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
 import { actionGate } from "@/lib/action-blocking"
 import { BlockedReason } from "@/components/access/blocked-reason"
 import { useApi } from "@/lib/api"
-import { useMutation } from "@/lib/use-mutation"
-import { createIdempotencyKey } from "@/lib/idempotency"
 import {
   Table,
   TableBody,
@@ -18,26 +16,8 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { Label } from "@/components/ui/label"
+import { Dialog, DialogTrigger } from "@/components/ui/dialog"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
-import { SubmitButton } from "@/components/ui/submit-button"
 import {
   ResponsiveTable,
   SortableHead,
@@ -47,84 +27,20 @@ import {
   useDataTable,
   type ColumnDefinition,
 } from "@/components/ui/data-table"
+import { CreateExpenseModal } from "@/components/modals"
+import {
+  EXPENSE_CATEGORIES,
+  EXPENSE_PAYMENT_METHODS,
+  type ExpenseRecord,
+} from "@/lib/expenses"
 import { formatDate, formatXof } from "@/lib/format"
-import { useSuccessFlash } from "@/hooks/use-success-flash"
-import { Lock, Plus, Receipt, X } from "lucide-react"
-
-interface Site {
-  id: string
-  name: string
-  city: string | null
-}
-
-interface CashSession {
-  id: string
-  status: string
-  site_id: string
-}
-
-interface Expense {
-  id: string
-  category: string
-  amount_cents: number
-  expense_date: string
-  payment_method: string
-  status: string
-  site_id: string | null
-  cash_session_id: string | null
-  description: string | null
-  beneficiary: string | null
-  /** Renseigné quand la dépense a été écrite par un achat, jamais à la main. */
-  purchase_id: string | null
-}
-
-const paymentMethods = [
-  { value: "cash", label: "Espèces" },
-  { value: "orange_money", label: "Orange Money" },
-  { value: "mtn_momo", label: "MTN MoMo" },
-  { value: "moov_money", label: "Moov Money" },
-  { value: "wave", label: "Wave" },
-  { value: "other", label: "Autre" },
-]
-
-const expenseCategories = [
-  { value: "supply", label: "Approvisionnement" },
-  { value: "salary", label: "Salaire" },
-  { value: "maintenance", label: "Maintenance" },
-  { value: "utilities", label: "Factures (électricité, eau)" },
-  { value: "rent", label: "Loyer" },
-  { value: "tax", label: "Impôts & taxes" },
-  { value: "marketing", label: "Marketing & publicité" },
-  { value: "other", label: "Autre" },
-]
-
-function parseXofAmount(value: string): number | null {
-  if (!value.trim()) return null
-  const amount = Number(value)
-  if (!Number.isFinite(amount) || amount < 0) return null
-  const cents = Math.round(amount * 100)
-  return Number.isSafeInteger(cents) ? cents : null
-}
+import { Lock, Plus, Receipt } from "lucide-react"
 
 function expenseStatusLabel(status: string): string {
   if (status === "recorded") return "Enregistrée"
   if (status === "cancelled") return "Annulée"
   return status
 }
-
-interface CreateExpenseRequest {
-  category: string
-  amount_cents: number
-  payment_method: string
-  site_id?: string
-  beneficiary?: string
-  description?: string
-  reference?: string
-  cash_session_id?: string
-}
-
-/** Clé d'occupation du formulaire. */
-const FORM_KEY = "formulaire"
 
 export default function ExpensesPage() {
   const manageExpenses = useAccess("expense:create", "expenses.manage")
@@ -136,7 +52,7 @@ export default function ExpensesPage() {
     reason: manageExpenses.reason,
   })
   const [refreshKey, setRefreshKey] = useState(0)
-  const { data, loading, error } = useApi<Expense[]>(`/api/v1/expenses?refresh=${refreshKey}`)
+  const { data, loading, error } = useApi<ExpenseRecord[]>(`/api/v1/expenses?refresh=${refreshKey}`)
   const expenses = data ?? []
 
   const columns: ColumnDefinition[] = [
@@ -149,11 +65,11 @@ export default function ExpensesPage() {
   ]
 
   const labelCategory = (value: string) =>
-    expenseCategories.find((category) => category.value === value)?.label ?? value
+    EXPENSE_CATEGORIES.find((category) => category.value === value)?.label ?? value
   const labelMethod = (value: string) =>
-    paymentMethods.find((method) => method.value === value)?.label ?? value
+    EXPENSE_PAYMENT_METHODS.find((method) => method.value === value)?.label ?? value
 
-  const table = useDataTable<Expense>({
+  const table = useDataTable<ExpenseRecord>({
     storageKey: "washpilot:table:depenses",
     rows: expenses,
     columns,
@@ -176,113 +92,17 @@ export default function ExpensesPage() {
       status: (a, b) => expenseStatusLabel(a.status).localeCompare(expenseStatusLabel(b.status)),
     },
   })
-  const { data: sites } = useApi<Site[]>(`/api/v1/sites?refresh=${refreshKey}`)
-  const { data: cashSessions } = useApi<CashSession[]>(`/api/v1/cash-sessions?status=open&refresh=${refreshKey}`)
-
   const [open, setOpen] = useState(false)
-  // Le contrôleur porte l'occupation et les deux messages de l'écriture.
-  const mutation = useMutation()
-  const saving = mutation.busyKey === FORM_KEY
-  const [saveSuccess, flashSaveSuccess] = useSuccessFlash()
-  // La dépense qui vient d'être créée est surlignée brièvement dans la liste.
+  // La dépense qui vient d'être créée est surlignée brièvement dans la liste,
+  // au moment où le formulaire se referme et où la liste se rafraîchit.
+  const [createdExpenseId, setCreatedExpenseId] = useState<string | null>(null)
   const [highlightedExpenseId, setHighlightedExpenseId] = useState<string | null>(null)
 
-  const idempotencyKeys = useRef(new Map<string, string>())
-
-  // Form fields
-  const [siteId, setSiteId] = useState("")
-  const [category, setCategory] = useState("")
-  const [amount, setAmount] = useState("")
-  const [paymentMethod, setPaymentMethod] = useState("cash")
-  const [beneficiary, setBeneficiary] = useState("")
-  const [description, setDescription] = useState("")
-  const [reference, setReference] = useState("")
-  const [cashSessionId, setCashSessionId] = useState("")
-
-  // Gestionnaires pour les composants Select qui peuvent renvoyer null
-  const handleSiteChange = (value: string | null) => setSiteId(value ?? "")
-  const handleCategoryChange = (value: string | null) => setCategory(value ?? "")
-  const handlePaymentMethodChange = (value: string | null) => setPaymentMethod(value ?? "cash")
-  const handleCashSessionChange = (value: string | null) => setCashSessionId(value ?? "")
-
-  const activeSites = sites ?? []
-  const openCashSessions = cashSessions ?? []
-  const amountCents = parseXofAmount(amount)
-  const needsCashSession = paymentMethod === "cash"
-
-  function resetForm() {
-    setSiteId("")
-    setCategory("")
-    setAmount("")
-    setPaymentMethod("cash")
-    setBeneficiary("")
-    setDescription("")
-    setReference("")
-    setCashSessionId("")
-    mutation.reset()
-  }
-
-  async function submitExpense(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    mutation.reset()
-
-    if (!category) {
-      mutation.fail("Veuillez sélectionner une catégorie.")
-      return
-    }
-    if (amountCents == null || amountCents <= 0) {
-      mutation.fail("Le montant doit être un nombre positif valide.")
-      return
-    }
-    if (needsCashSession && !cashSessionId) {
-      mutation.fail("Une session de caisse ouverte est requise pour les paiements en espèces.")
-      return
-    }
-
-    const body: CreateExpenseRequest = {
-      category,
-      amount_cents: amountCents,
-      payment_method: paymentMethod,
-    }
-    if (siteId) body.site_id = siteId
-    if (beneficiary) body.beneficiary = beneficiary
-    if (description) body.description = description
-    if (reference) body.reference = reference
-    if (cashSessionId) body.cash_session_id = cashSessionId
-
-    // Même dépense renvoyée deux fois = même clé : le serveur n'en crée
-    // qu'une. La clé n'est oubliée qu'une fois l'écriture acceptée.
-    const fingerprint = JSON.stringify(body)
-    let requestKey = idempotencyKeys.current.get(fingerprint)
-    if (!requestKey) {
-      requestKey = createIdempotencyKey()
-      idempotencyKeys.current.set(fingerprint, requestKey)
-    }
-
-    const outcome = await mutation.run<{ id?: string }>({
-      url: "/api/v1/expenses",
-      method: "POST",
-      headers: { "Idempotency-Key": requestKey },
-      body,
-      success: "Dépense enregistrée avec succès !",
-      failure: "Échec de l'enregistrement de la dépense.",
-      busyKey: FORM_KEY,
-    })
-    if (!outcome.ok) return
-
-    idempotencyKeys.current.clear()
-    if (outcome.data?.id) setHighlightedExpenseId(outcome.data.id)
-    flashSaveSuccess()
-    setTimeout(() => {
-      setOpen(false)
-      resetForm()
-      setRefreshKey((key) => key + 1)
-    }, 1500)
-  }
-
   function handleOpenChange(isOpen: boolean) {
-    if (!isOpen && !saving) {
-      resetForm()
+    if (!isOpen && createdExpenseId) {
+      setHighlightedExpenseId(createdExpenseId)
+      setCreatedExpenseId(null)
+      setRefreshKey((key) => key + 1)
     }
     setOpen(isOpen)
   }
@@ -317,170 +137,12 @@ export default function ExpensesPage() {
             </DialogTrigger>
             <BlockedReason reason={expenseForm.reason} className="max-w-72" />
             </div>
-            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>Nouvelle dépense</DialogTitle>
-                <DialogDescription>
-                  Enregistrez une nouvelle dépense pour votre station.
-                </DialogDescription>
-              </DialogHeader>
-
-              <form onSubmit={submitExpense} className="space-y-6 py-4">
-                {mutation.error && (
-                  <div className="p-3 bg-destructive/10 text-destructive rounded-md text-sm">
-                    {mutation.error}
-                  </div>
-                )}
-                {mutation.success && (
-                  <div className="p-3 bg-green-100 text-green-800 rounded-md text-sm">
-                    {mutation.success}
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="site">Station (optionnel)</Label>
-                    <Select value={siteId} onValueChange={handleSiteChange}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Sélectionner une station" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {activeSites.map((site) => (
-                          <SelectItem key={site.id} value={site.id}>
-                            {site.name} {site.city ? `(${site.city})` : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="category">Catégorie *</Label>
-                    <Select value={category} onValueChange={handleCategoryChange}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Sélectionner une catégorie" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {expenseCategories.map((cat) => (
-                          <SelectItem key={cat.value} value={cat.value}>
-                            {cat.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="amount">Montant (XOF) *</Label>
-                    <Input
-                      id="amount"
-                      type="number"
-                      min="0"
-                      step="100"
-                      value={amount}
-                      onChange={(e) => setAmount(e.target.value)}
-                      placeholder="50000"
-                    />
-                    {amountCents && amountCents > 0 && (
-                      <p className="text-sm text-muted-foreground">
-                        {formatXof(amountCents)}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="payment_method">Moyen de paiement *</Label>
-                    <Select value={paymentMethod} onValueChange={handlePaymentMethodChange}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Moyen de paiement" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {paymentMethods.map((method) => (
-                          <SelectItem key={method.value} value={method.value}>
-                            {method.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {needsCashSession && (
-                    <div className="space-y-2">
-                      <Label htmlFor="cash_session">Session de caisse *</Label>
-                      <Select value={cashSessionId} onValueChange={handleCashSessionChange}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Session ouverte" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {openCashSessions.length === 0 ? (
-                            <SelectItem value="" disabled>
-                              Aucune session ouverte
-                            </SelectItem>
-                          ) : (
-                            openCashSessions.map((session) => (
-                              <SelectItem key={session.id} value={session.id}>
-                                Session #{session.id.slice(0, 8)}...
-                              </SelectItem>
-                            ))
-                          )}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-
-                  <div className="space-y-2">
-                    <Label htmlFor="beneficiary">Bénéficiaire (optionnel)</Label>
-                    <Input
-                      id="beneficiary"
-                      value={beneficiary}
-                      onChange={(e) => setBeneficiary(e.target.value)}
-                      placeholder="Nom du bénéficiaire"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="reference">Référence (optionnel)</Label>
-                    <Input
-                      id="reference"
-                      value={reference}
-                      onChange={(e) => setReference(e.target.value)}
-                      placeholder="Facture #123"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="description">Description (optionnel)</Label>
-                  <Textarea
-                    id="description"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Détails supplémentaires..."
-                    rows={3}
-                  />
-                </div>
-
-                <div className="flex justify-end gap-3">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={() => handleOpenChange(false)}
-                    disabled={saving}
-                  >
-                    <X className="mr-2 h-4 w-4" /> Annuler
-                  </Button>
-                  <SubmitButton
-                    type="submit"
-                    pending={saving}
-                    success={saveSuccess}
-                    successLabel="Dépense enregistrée"
-                  >
-                    Enregistrer la dépense
-                  </SubmitButton>
-                </div>
-              </form>
-            </DialogContent>
           </Dialog>
+          <CreateExpenseModal
+            open={open}
+            onOpenChange={handleOpenChange}
+            onExpenseCreated={(expense) => setCreatedExpenseId(expense.id)}
+          />
         </div>
 
         {loading && <TableSkeleton rows={6} cols={6} label="Chargement des dépenses" />}
