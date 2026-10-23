@@ -16,24 +16,28 @@ import { vehicleType, type FlatVehicleType } from "../src/config/vehicle-taxonom
 /**
  * Types de véhicules créés avec la station.
  *
- * Un représentant par famille plutôt que les soixante et un types du
- * référentiel : à l'ouverture, un gérant doit pouvoir encaisser en trente
- * secondes, pas trier une liste de 61 lignes. Les autres types s'ajoutent en
- * deux clics depuis l'écran « Catégories de véhicules », famille par famille.
+ * Exactement **un représentant par famille**, soit neuf lignes, plutôt que les
+ * soixante et un types du référentiel : à l'ouverture, un gérant doit pouvoir
+ * encaisser en trente secondes, pas trier une liste de 61 lignes. Or chaque
+ * famille porte un tarif : si une famille manque, ses véhicules n'ont aucune
+ * case et le supplément de prix prévu pour eux ne s'applique jamais. Les
+ * autres types s'ajoutent en deux clics depuis l'écran « Catégories de
+ * véhicules », famille par famille.
  *
- * « Moto », « Citadine » et « Berline moyenne » couvrent l'immense majorité du
- * parc ivoirien ; les six suivants évitent qu'un utilitaire, un minibus ou un
- * camion ne trouve aucune case le jour où il se présente.
+ * L'ordre suit celui du référentiel, du plus fréquent au plus rare : « Moto »,
+ * « Citadine » et « Berline moyenne » couvrent l'immense majorité du parc
+ * ivoirien ; les suivants ouvrent une porte à l'utilitaire, au minibus, au
+ * camion, à l'engin de chantier et à l'électrique.
  */
 export const DEFAULT_VEHICLE_CATEGORY_CODES = [
   "moto",
   "citadine",
   "berline_moyenne",
   "suv_familial",
-  "quatre_quatre",
   "fourgonnette",
   "minibus",
   "camion_porteur",
+  "engin_chantier",
   "voiture_electrique",
 ] as const
 

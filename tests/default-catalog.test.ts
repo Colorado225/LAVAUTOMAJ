@@ -46,12 +46,17 @@ test("chaque défaut vient du référentiel, avec sa famille et son rang", () =>
   }
 })
 
-test("les défauts couvrent plusieurs familles sans en noyer aucune", () => {
-  const families = new Set(DEFAULT_VEHICLE_CATEGORIES.map((category) => category.family))
-  // Assez pour qu'un utilitaire ou un camion trouve sa case dès l'ouverture…
-  assert.ok(families.size >= 6, `seulement ${families.size} familles représentées`)
-  // …mais pas les 61 types du référentiel : l'ouverture doit rester courte.
-  assert.ok(DEFAULT_VEHICLE_CATEGORIES.length <= 12)
+test("les défauts couvrent chaque famille, une seule fois", () => {
+  const families = DEFAULT_VEHICLE_CATEGORIES.map((category) => category.family)
+  // Chaque famille porte un tarif : une famille absente, et ses véhicules
+  // n'ont aucune case — donc aucun supplément de prix possible.
+  assert.deepEqual(
+    [...new Set(families)].sort(),
+    VEHICLE_FAMILIES.map((family) => family.code).sort()
+  )
+  // Une seule ligne par famille : l'écran d'ouverture doit rester court.
+  assert.equal(families.length, new Set(families).size)
+  assert.equal(DEFAULT_VEHICLE_CATEGORIES.length, VEHICLE_FAMILIES.length)
 })
 
 test("aucun défaut n'est rangé dans une famille inventée", () => {

@@ -129,7 +129,13 @@ avant : le tarif d'aujourd'hui ne réécrit pas les ventes d'hier.
 ### 4.4 Assistant (`/onboarding`)
 
 - Les neuf catégories par défaut portent leur famille : la station neuve peut
-  facturer par gabarit dès la première recette.
+  facturer par gabarit dès la première recette. Un représentant **par famille**
+  et un seul (Moto, Citadine, Berline moyenne, SUV familial, Fourgonnette,
+  Minibus, Camion porteur, Engin de chantier, Voiture électrique) : une famille
+  oubliée, et ses véhicules n'ont aucune case — donc aucun tarif appliqué.
+- La **station de démonstration** boucle sur cette même liste. Elle n'en créait
+  que trois (Moto, Berline moyenne, SUV familial) : un utilitaire, un minibus
+  ou un camion n'avaient aucune case à l'ouverture de la démo.
 - Les **catégories de prestations** sont désormais créées (Lavage extérieur,
   Lavage intérieur, Lavage complet, Detailing & soins, Autres prestations) et
   chaque prestation reçoit celle de son modèle — le classement existait déjà
