@@ -5,7 +5,12 @@ import { getPool } from "./db.ts"
 import { asyncRoute, body, tenant, requirePermission } from "./http.ts"
 import { HttpError } from "./auth.ts"
 import { TRIAL_DAYS, invalidateSubscriptionCache } from "./entitlements.ts"
-import { DEFAULT_VEHICLE_CATEGORIES, needsDefaultVehicleCategories } from "./default-catalog.ts"
+import {
+  DEFAULT_SERVICE_CATEGORY_NAMES,
+  DEFAULT_VEHICLE_CATEGORIES,
+  needsDefaultVehicleCategories,
+  serviceCategoryName,
+} from "./default-catalog.ts"
 
 /** Wizard stages, in order. "review" is the confirmation screen. */
 export const ONBOARDING_STAGES = ["station", "services", "workers", "plan", "review"] as const
@@ -142,7 +147,8 @@ export function createOnboardingRouter() {
     asyncRoute(async (req, res) => {
       tenant(req)
       const q = await db().query(
-        "SELECT id, category, name, price_cents, sort_order FROM service_catalog WHERE is_active = true ORDER BY sort_order, name",
+        `SELECT id, category, name, price_cents, duration_minutes, description, sort_order
+           FROM service_catalog WHERE is_active = true ORDER BY sort_order, name`,
       )
       res.json(q.rows)
     }),
@@ -342,28 +348,116 @@ export function createOnboardingRouter() {
           [t.organizationId],
         )
         if (needsDefaultVehicleCategories(Number(categoryQ.rows[0]?.n ?? 0))) {
-          for (const name of DEFAULT_VEHICLE_CATEGORIES) {
+          // Un représentant par famille, avec sa famille et son rang : sans
+          // eux, le sélecteur de la caisse afficherait 9 lignes en vrac et la
+          // tarification par famille n'aurait aucune prise sur ces catégories.
+          for (const category of DEFAULT_VEHICLE_CATEGORIES) {
             await client.query(
-              `INSERT INTO vehicle_categories(organization_id, name)
-               VALUES($1, $2)
+              `INSERT INTO vehicle_categories(organization_id, name, family, sort_order)
+               VALUES($1, $2, $3, $4)
                ON CONFLICT (organization_id, name) DO NOTHING`,
-              [t.organizationId, name],
+              [t.organizationId, category.name, category.family, category.sort_order],
             )
           }
         }
 
+        // 1 ter. Catégories de prestations — même raisonnement que pour les
+        // véhicules : une page de catégories vide à la sortie de l'assistant
+        // laisse un référentiel inutilisé et des prestations « sans
+        // catégorie ». On les crée une fois, et on ne les recrée pas si la
+        // station a délibérément vidé sa liste.
+        const serviceCategoryQ = await client.query(
+          "SELECT count(*)::int AS n FROM service_categories WHERE organization_id=$1::uuid",
+          [t.organizationId],
+        )
+        const serviceCategoryByName = new Map<string, string>()
+        if (Number(serviceCategoryQ.rows[0]?.n ?? 0) === 0) {
+          for (const name of DEFAULT_SERVICE_CATEGORY_NAMES) {
+            const inserted = await client.query(
+              `INSERT INTO service_categories(organization_id, name)
+               VALUES($1,$2)
+               ON CONFLICT (organization_id, name) DO NOTHING
+               RETURNING id`,
+              [t.organizationId, name],
+            )
+            if (inserted.rowCount) serviceCategoryByName.set(name.toLowerCase(), inserted.rows[0].id)
+          }
+        } else {
+          // La station a déjà son référentiel : on s'y rattache par le nom.
+          const existing = await client.query(
+            "SELECT id, name FROM service_categories WHERE organization_id=$1::uuid",
+            [t.organizationId],
+          )
+          for (const row of existing.rows) {
+            serviceCategoryByName.set(String(row.name).toLowerCase(), row.id)
+          }
+        }
+
         // 2. Services — create missing ones by name (idempotent on retry).
+        //
+        // Chacun reçoit la catégorie de son modèle : le classement existait
+        // déjà dans `service_catalog` et l'écran d'assistant le montrait, il
+        // n'y avait aucune raison de le perdre à l'enregistrement.
         if (services.success) {
+          const templateIds = services.data.selected
+            .map((item) => item.template_id)
+            .filter((id): id is string => Boolean(id))
+          // Le modèle fournit plus que sa catégorie : sa durée et sa
+          // description suivent jusqu'à la prestation de la station. Sans la
+          // durée, tous les lavages recevaient la même heure de fin estimée.
+          const templates = new Map<
+            string,
+            { category: string; duration_minutes: number | null; description: string | null }
+          >()
+          if (templateIds.length > 0) {
+            const catalogQ = await client.query(
+              "SELECT id, category, duration_minutes, description FROM service_catalog WHERE id = ANY($1::uuid[])",
+              [templateIds],
+            )
+            for (const row of catalogQ.rows) {
+              templates.set(String(row.id), {
+                category: String(row.category),
+                duration_minutes:
+                  row.duration_minutes == null ? null : Number(row.duration_minutes),
+                description: row.description == null ? null : String(row.description),
+              })
+            }
+          }
+
           const allServices = [
-            ...services.data.selected.map((item) => ({ name: item.name, price_cents: item.price_cents ?? 0 })),
-            ...services.data.custom.map((item) => ({ name: item.name, price_cents: item.price_cents ?? 0 })),
+            ...services.data.selected.map((item) => {
+              const template = item.template_id ? templates.get(item.template_id) : undefined
+              return {
+                name: item.name,
+                price_cents: item.price_cents ?? 0,
+                categoryName: serviceCategoryName(template?.category),
+                duration_minutes: template?.duration_minutes ?? null,
+                description: template?.description ?? null,
+              }
+            }),
+            ...services.data.custom.map((item) => ({
+              name: item.name,
+              price_cents: item.price_cents ?? 0,
+              categoryName: serviceCategoryName(item.category),
+              duration_minutes: null,
+              description: null,
+            })),
           ]
           for (const service of allServices) {
+            const categoryId =
+              serviceCategoryByName.get(service.categoryName.toLowerCase()) ?? null
             await client.query(
-              `INSERT INTO services(organization_id, name, price_cents)
-               SELECT $1, $2, $3
+              `INSERT INTO services(organization_id, name, price_cents, category_id, duration_minutes, description)
+               SELECT $1, $2, $3, $4, $5, $6
                WHERE NOT EXISTS (SELECT 1 FROM services WHERE organization_id=$1::uuid AND lower(name)=lower($2))`,
-              [t.organizationId, service.name, service.price_cents],
+              [
+                t.organizationId,
+                service.name,
+                service.price_cents,
+                categoryId,
+                service.duration_minutes,
+                service.description,
+              ],
             )
           }
         }

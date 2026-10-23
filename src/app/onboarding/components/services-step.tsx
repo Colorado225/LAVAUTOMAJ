@@ -106,10 +106,15 @@ export function ServicesStep({ progress, onDone, onQuit }: OnboardingWizardProps
                 checked={checked}
                 onCheckedChange={() => toggle(t)}
               />
-              <span className="flex-1 text-sm">{t.name}</span>
-              <span className="text-xs text-muted-foreground">
-                {formatXOF(t.price_cents)}
+              <span className="flex-1 text-sm" title={t.description ?? undefined}>
+                {t.name}
               </span>
+              {t.duration_minutes ? (
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {t.duration_minutes} min
+                </span>
+              ) : null}
+              <span className="text-xs text-muted-foreground">{formatXOF(t.price_cents)}</span>
             </label>
           )
         })}

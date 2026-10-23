@@ -51,6 +51,17 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "onboarding.completed": "Mise en service terminée",
   "backup.exported": "Sauvegarde exportée",
 
+  // Référentiel du catalogue. Un changement de tarif ou de catégorie touche
+  // l'argent du client : il doit laisser une trace, comme un lavage annulé.
+  "vehicle_category.created": "Catégorie de véhicule créée",
+  "vehicle_category.updated": "Catégorie de véhicule modifiée",
+  "vehicle_category.deleted": "Catégorie de véhicule supprimée",
+  "vehicle_category.imported": "Types de véhicules ajoutés au catalogue",
+  "service.created": "Prestation créée",
+  "service.updated": "Prestation modifiée",
+  "service.consumables_updated": "Consommation de stock d’une prestation modifiée",
+  "service.deleted": "Prestation supprimée",
+
   // Interventions de l'éditeur sur l'abonnement. Elles sont journalisées chez
   // le client et non dans un registre séparé : une action invisible de celui
   // qui la subit serait une porte dérobée, pas une administration.
@@ -72,6 +83,8 @@ export const AUDIT_ENTITY_LABELS: Record<string, string> = {
   backup: "Sauvegarde",
   subscription: "Abonnement",
   plan: "Forfait",
+  vehicle_category: "Catégorie de véhicule",
+  service: "Prestation",
 }
 
 export function auditActionLabel(action: string): string {

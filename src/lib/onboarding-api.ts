@@ -35,6 +35,9 @@ export interface CatalogTemplate {
   category: string;
   name: string;
   price_cents: number | null;
+  /** Durée indicative en minutes — affichée à côté du prix. */
+  duration_minutes: number | null;
+  description: string | null;
   sort_order: number;
 }
 

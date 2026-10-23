@@ -25,6 +25,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { apiFetch, apiErrorMessage } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
+import { resolveUnitPrice } from "@/lib/service-pricing"
 import { toastSuccess, toastError } from "@/lib/toast"
 import { RefreshCw, CarFront, Wallet } from "lucide-react"
 
@@ -66,12 +67,14 @@ interface Site {
 interface VehicleCategory {
   id: string
   name: string
+  family?: string | null
   is_active: boolean
 }
 interface Service {
   id: string
   name: string
   price_cents: number
+  price_by_vehicle_type?: Record<string, number> | null
   is_active: boolean
 }
 interface Worker {
@@ -205,14 +208,22 @@ export function CreateWashModal({
       ),
     [items]
   )
+  // Le véhicule retenu porte le prix : même règle que le serveur, sans quoi
+  // le total affiché ici divergerait de celui qui sera facturé.
+  const selectedVehicle = useMemo(() => {
+    const id = form.watch("vehicle_category_id")
+    const category = categories.find((item) => item.id === id)
+    return category ? { id: category.id, family: category.family ?? null } : null
+  }, [categories, form])
+
   const totalCents = useMemo(
     () =>
       activeServices.reduce(
         (total, service) =>
-          total + service.price_cents * (selectedServices.get(service.id) ?? 0),
+          total + resolveUnitPrice(service, selectedVehicle) * (selectedServices.get(service.id) ?? 0),
         0
       ),
-    [activeServices, selectedServices]
+    [activeServices, selectedServices, selectedVehicle]
   )
   const cashNeedsSession =
     paymentMethod === "cash" && amountReceivedCents > 0
@@ -419,9 +430,9 @@ export function CreateWashModal({
                         />
                       )}
                       <span className="ml-auto text-xs text-muted-foreground">
-                        {service.price_cents > 0
-                          ? (service.price_cents / 100).toLocaleString("fr-CI") +
-                          " XOF"
+                        {resolveUnitPrice(service, selectedVehicle) > 0
+                          ? (resolveUnitPrice(service, selectedVehicle) / 100).toLocaleString("fr-CI") +
+                          " F CFA"
                           : "Gratuit"}
                       </span>
                     </label>

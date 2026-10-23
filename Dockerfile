@@ -51,9 +51,21 @@ ENV PORT=3000
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-# Uniquement ce qui sert à servir : le serveur, et l'interface construite.
+# Uniquement ce qui sert à servir : le serveur, les modules purs qu'il importe,
+# et l'interface construite.
+#
+# `src/config` et `src/lib` ne sont pas là pour l'interface — elle est déjà
+# compilée dans `dist/`. Ils sont là parce que **le serveur les importe** : le
+# référentiel des véhicules, les catégories de prestations et le calcul du prix
+# unitaire sont partagés entre l'API et l'écran, justement pour qu'ils ne
+# puissent pas diverger. Les oublier ne casse pas la construction de l'image :
+# elle réussit, et le conteneur meurt au démarrage sur un ERR_MODULE_NOT_FOUND
+# qui ne dit rien de la vraie cause. `tests/docker-image.test.ts` empêche que
+# cela se reproduise.
 COPY --chown=node:node server.ts ./
 COPY --chown=node:node server ./server
+COPY --chown=node:node src/config ./src/config
+COPY --chown=node:node src/lib ./src/lib
 COPY --from=builder --chown=node:node /app/dist ./dist
 
 USER node
