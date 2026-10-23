@@ -237,6 +237,9 @@ test("la configuration de la station remplit les référentiels métier", async 
   await expectRows("services")
   await expectRows("workers")
   await expectRows("vehicle_categories")
+  // Les catégories de prestations aussi : sans elles, la colonne « Catégorie »
+  // du catalogue resterait vide pour tout nouveau client.
+  await expectRows("service_categories")
   // L'essai gratuit est un abonnement daté, créé à la confirmation : c'est lui
   // qui porte l'échéance, donc la bascule en lecture seule.
   await expectRows("subscriptions")
@@ -246,6 +249,15 @@ test("la configuration de la station remplit les référentiels métier", async 
   const category = (await api("/api/v1/vehicle-categories")).json?.[0]
   const worker = (await api("/api/v1/workers")).json?.[0]
   assert.ok(site?.id && service?.id && category?.id && worker?.id, "référentiels interrogeables après confirmation")
+
+  // Chaque prestation est classée dès sa création, et chaque catégorie de
+  // véhicule appartient à une famille : c'est la famille qui portera le tarif.
+  assert.ok(service.category_id, "la prestation créée n'a pas reçu de catégorie")
+  assert.ok(category.family, "la catégorie de véhicule n'a pas reçu de famille")
+  const families = new Set(
+    ((await api("/api/v1/vehicle-categories")).json ?? []).map((row: { family: string | null }) => row.family),
+  )
+  assert.ok(families.size >= 6, "les catégories par défaut doivent couvrir plusieurs familles")
   siteId = site.id
   serviceId = service.id
   vehicleCategoryId = category.id

@@ -19,6 +19,8 @@ import { enqueueMutation } from "@/lib/offline-sync"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { plateKey } from "@/lib/plate"
+import { resolveUnitPrice } from "@/lib/service-pricing"
+import { VEHICLE_FAMILIES, familyOrder } from "@/config/vehicle-taxonomy"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
 import {
@@ -55,6 +57,7 @@ interface Site {
 interface VehicleCategory {
   id: string
   name: string
+  family?: string | null
   is_active: boolean
 }
 
@@ -63,6 +66,11 @@ interface Service {
   category_id: string | null
   name: string
   price_cents: number
+  /**
+   * Tarifs propres à un véhicule : par identifiant de catégorie ou par code de
+   * famille. Facultatif — un serveur plus ancien que l'écran ne l'envoie pas.
+   */
+  price_by_vehicle_type?: Record<string, number> | null
   is_active: boolean
 }
 
@@ -266,7 +274,28 @@ export default function WashesPage() {
       setSearchParams(next, { replace: true })
     }
   }
-  const activeCategories = (categories ?? []).filter((item) => item.is_active)
+  const activeCategories = useMemo(
+    () => (categories ?? []).filter((item) => item.is_active),
+    [categories],
+  )
+  // Sélecteur groupé par famille, dans l'ordre du référentiel. Les catégories
+  // sans famille connue restent accessibles, en fin de liste.
+  const categoryGroups = useMemo(() => {
+    const known = VEHICLE_FAMILIES.map((family) => ({
+      code: family.code as string | null,
+      label: family.label,
+      categories: activeCategories
+        .filter((category) => category.family === family.code)
+        .sort((a, b) => a.name.localeCompare(b.name, "fr-CI")),
+    })).filter((group) => group.categories.length > 0)
+    const others = activeCategories
+      .filter((category) => !category.family || familyOrder(category.family) >= VEHICLE_FAMILIES.length)
+      .sort((a, b) => a.name.localeCompare(b.name, "fr-CI"))
+    if (others.length > 0) {
+      known.push({ code: null, label: "Autres véhicules", categories: others })
+    }
+    return known
+  }, [activeCategories])
   const activeServices = (serviceCatalog ?? []).filter((item) => item.is_active)
   const activeWorkers = (workers ?? []).filter((worker) => worker.status === "active")
 
@@ -380,8 +409,15 @@ export default function WashesPage() {
     activeWorkerCount: activeWorkers.length,
   })
 
+  // Véhicule retenu : sa catégorie **et** sa famille. C'est cet objet qui
+  // décide du prix, comme côté serveur — un seul calcul, une seule vérité.
+  const selectedVehicle = useMemo(() => {
+    const category = activeCategories.find((item) => item.id === vehicleCategoryId)
+    return category ? { id: category.id, family: category.family ?? null } : null
+  }, [activeCategories, vehicleCategoryId])
+
   const totalCents = selectedServices.reduce(
-    (total, service) => total + service.price_cents * (quantities[service.id] ?? 0),
+    (total, service) => total + resolveUnitPrice(service, selectedVehicle) * (quantities[service.id] ?? 0),
     0
   )
   const amountReceivedCents = parseXofAmount(amountReceived)
@@ -867,8 +903,15 @@ export default function WashesPage() {
                     required
                   >
                     <option value="">Sélectionner une catégorie</option>
-                    {activeCategories.map((category) => (
-                      <option key={category.id} value={category.id}>{category.name}</option>
+                    {/* Regroupées par famille : sur 60 catégories, une liste
+                        plate se parcourt mal, et le caissier cherche un
+                        gabarit (« SUV », « camion ») avant un modèle. */}
+                    {categoryGroups.map((group) => (
+                      <optgroup key={group.code ?? "autres"} label={group.label}>
+                        {group.categories.map((category) => (
+                          <option key={category.id} value={category.id}>{category.name}</option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                   {/* Sans catégorie, le sélecteur reste vide et le bouton
@@ -962,7 +1005,12 @@ export default function WashesPage() {
                           />
                           <label htmlFor={`service-${service.id}`} className="min-w-0 flex-1 cursor-pointer">
                             <span className="block truncate font-medium">{service.name}</span>
-                            <span className="text-xs text-muted-foreground">{formatXof(service.price_cents)} / unité</span>
+                            <span className="text-xs text-muted-foreground">
+                              {formatXof(resolveUnitPrice(service, selectedVehicle))} / unité
+                              {selectedVehicle && resolveUnitPrice(service, selectedVehicle) !== service.price_cents
+                                ? " (tarif véhicule)"
+                                : ""}
+                            </span>
                           </label>
                           {quantity > 0 && (
                             <label className="flex items-center gap-2 text-xs text-muted-foreground">

@@ -8,6 +8,14 @@ import { consumeForWash, reverseWashConsumption } from "./stock.ts"
 import { initialPaymentStatus, resolvePaymentStatus, PAYMENT_METHODS } from "./payments.ts"
 import { plateDisplay, plateKey } from "./plate.ts"
 import { assertSiteCapacity, assertSiteWritable, loadSiteLimitState } from "./plan-limits.ts"
+import { resolveUnitPrice } from "../src/lib/service-pricing.ts"
+import {
+  VEHICLE_FAMILIES,
+  VEHICLE_TYPES,
+  isVehicleFamily,
+  sortVehicleCategories,
+  vehicleType,
+} from "../src/config/vehicle-taxonomy.ts"
 
 export const catalogValidators = {
   category: z
@@ -27,6 +35,28 @@ export const catalogValidators = {
       price_by_vehicle_type: z.record(z.string(), z.number().int().min(0).max(100000000)).optional(),
     })
     .strip(),
+  /**
+   * Catégorie de véhicule : même socle que les autres catégories, plus la
+   * famille (qui porte le tarif) et le rang d'affichage.
+   *
+   * `family` reste un texte libre validé contre le référentiel : la base
+   * n'impose pas de clé étrangère, une station peut donc ranger une catégorie
+   * maison dans une famille connue sans migration.
+   */
+  vehicleCategory: z
+    .object({
+      name: z.string().trim().min(1, "Le nom est obligatoire.").max(100),
+      is_active: z.boolean().optional(),
+      family: z.string().trim().max(40).nullable().optional(),
+      sort_order: z.number().int().min(0).max(999).optional(),
+    })
+    .strip(),
+  /** Ajout en lot depuis le référentiel : codes de types (`suv_familial`) ou libellés. */
+  vehicleCategoryImport: z
+    .object({
+      types: z.array(z.string().trim().min(1).max(120)).min(1, "Sélectionnez au moins un type.").max(200),
+    })
+    .strip(),
   site: z
     .object({
       name: z.string().trim().min(2).max(120),
@@ -38,6 +68,100 @@ export const catalogValidators = {
       is_active: z.boolean().optional(),
     })
     .strip(),
+}
+
+/** UUID canonique : sert à distinguer une clé de tarif « catégorie » d'une famille. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Refuse une famille inconnue.
+ *
+ * Une faute de frappe (`suvs`, `poids-lourd`) rangerait la catégorie dans une
+ * famille qui n'existe nulle part : elle n'apparaîtrait dans aucun
+ * regroupement et ne recevrait aucun tarif de famille. Mieux vaut un 400 net
+ * au moment de l'écriture qu'une catégorie silencieusement orpheline.
+ */
+function assertVehicleFamily(family: string | null | undefined) {
+  if (family == null || family === "") return
+  if (!isVehicleFamily(family)) {
+    throw new HttpError(
+      400,
+      "invalid_vehicle_family",
+      `Famille de véhicules inconnue : « ${family} ». Choisissez-en une dans la liste proposée.`,
+    )
+  }
+}
+
+/**
+ * Vérifie les clés de `price_by_vehicle_type`.
+ *
+ * Deux formes acceptées, et deux seulement :
+ *   • un code de famille du référentiel (`suv`, `poids_lourds`) ;
+ *   • l'identifiant d'une catégorie **de cette organisation**.
+ *
+ * Sans ce contrôle, un tarif peut viser une catégorie inexistante — ou pire,
+ * celle d'une autre station — et rester en base sans que personne ne le voie.
+ */
+async function assertVehiclePriceKeys(
+  overrides: Record<string, number> | null | undefined,
+  organizationId: string,
+) {
+  if (!overrides) return
+  const keys = Object.keys(overrides)
+  if (keys.length === 0) return
+
+  const unknownFamily = keys.find((key) => !UUID_PATTERN.test(key) && !isVehicleFamily(key))
+  if (unknownFamily) {
+    throw new HttpError(
+      400,
+      "invalid_vehicle_family",
+      `Clé de tarif inconnue : « ${unknownFamily} ». Utilisez une famille de véhicules ou une catégorie de votre station.`,
+    )
+  }
+
+  const categoryIds = keys.filter((key) => UUID_PATTERN.test(key))
+  if (categoryIds.length === 0) return
+  const q = await db().query(
+    "SELECT id FROM vehicle_categories WHERE organization_id=$1::uuid AND id = ANY($2::uuid[])",
+    [organizationId, categoryIds],
+  )
+  const found = new Set(q.rows.map((row) => String(row.id)))
+  const missing = categoryIds.find((id) => !found.has(id))
+  if (missing) {
+    throw new HttpError(
+      400,
+      "invalid_vehicle_category",
+      "Une catégorie de véhicule visée par ce tarif n'existe pas dans cette station.",
+    )
+  }
+}
+
+/** Trace une écriture du catalogue des prestations (prix compris). */
+async function auditService(
+  t: { organizationId: string; userId: string },
+  action: string,
+  entityId: string,
+  metadata: Record<string, unknown>,
+) {
+  await db().query(
+    `INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+     VALUES($1,$2,$3,'service',$4,$5)`,
+    [t.organizationId, t.userId, action, entityId, JSON.stringify(metadata)],
+  )
+}
+
+/** Trace une écriture sur le référentiel des véhicules. */
+async function auditVehicleCategory(
+  t: { organizationId: string; userId: string },
+  action: string,
+  entityId: string,
+  metadata: Record<string, unknown>,
+) {
+  await db().query(
+    `INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+     VALUES($1,$2,$3,'vehicle_category',$4,$5)`,
+    [t.organizationId, t.userId, action, entityId, JSON.stringify(metadata)],
+  )
 }
 
 export const washValidators = {
@@ -353,16 +477,107 @@ export function createApiRouter() {
   )
 
   // --------------------------------------------------- vehicle categories --
+  //
+  // Une catégorie de véhicule est ce que le caissier choisit ; sa **famille**
+  // est ce qui porte le tarif. Les deux vivent dans le même enregistrement
+  // parce qu'une catégorie sans famille n'aurait aucun prix propre : elle
+  // retomberait sur le prix de base, ce qui est justement le défaut que le
+  // référentiel corrige.
   r.get(
     "/vehicle-categories",
     requirePermission("service:read"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const q = await db().query(
-        "SELECT id, name, is_active, created_at, created_at AS updated_at FROM vehicle_categories WHERE organization_id=$1::uuid ORDER BY name",
+        "SELECT id, name, family, sort_order, is_active, created_at, updated_at FROM vehicle_categories WHERE organization_id=$1::uuid",
         [t.organizationId],
       )
-      res.json(q.rows)
+      // Ordre famille → rang → nom : c'est celui du sélecteur de la caisse.
+      // Trier en SQL obligerait à réécrire l'ordre des familles dans chaque
+      // requête ; il est déjà dans le référentiel partagé.
+      res.json(sortVehicleCategories(q.rows))
+    }),
+  )
+
+  // Référentiel complet + état d'avancement de la station.
+  //
+  // L'écran « Catégories de véhicules » ne peut pas proposer 61 noms à la
+  // saisie : il affiche cette liste, famille par famille, et n'ajoute que ce
+  // que le gérant coche. `added` évite les doublons et permet de proposer
+  // d'un coup « ajouter toute la famille ».
+  r.get(
+    "/vehicle-categories/catalog",
+    requirePermission("service:read"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const q = await db().query(
+        "SELECT id, name FROM vehicle_categories WHERE organization_id=$1::uuid",
+        [t.organizationId],
+      )
+      const existing = new Map(q.rows.map((row) => [String(row.name).toLowerCase(), row.id as string]))
+      const families = VEHICLE_FAMILIES.map((family) => ({
+        code: family.code,
+        label: family.label,
+        description: family.description,
+        types: family.types.map((type) => ({
+          code: type.code,
+          name: type.name,
+          category_id: existing.get(type.name.toLowerCase()) ?? null,
+          added: existing.has(type.name.toLowerCase()),
+        })),
+      }))
+      res.json({
+        families,
+        total_types: VEHICLE_TYPES.length,
+        total_categories: q.rowCount ?? 0,
+        added_types: families.reduce(
+          (total, family) => total + family.types.filter((type) => type.added).length,
+          0,
+        ),
+      })
+    }),
+  )
+
+  // Ajout en lot depuis le référentiel. Idempotent : les types déjà présents
+  // sont ignorés, ce qui rend le bouton « tout ajouter » rejouable sans
+  // doublon ni erreur.
+  r.post(
+    "/vehicle-categories/catalog",
+    requirePermission("service:manage"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const input = body(catalogValidators.vehicleCategoryImport, req.body)
+
+      const resolved = input.types.map((value) => vehicleType(value))
+      const unknown = input.types.filter((_, index) => !resolved[index])
+      if (unknown.length > 0) {
+        throw new HttpError(
+          400,
+          "invalid_vehicle_type",
+          `Type de véhicule inconnu : « ${unknown[0]} ». Choisissez-le dans la liste proposée.`,
+        )
+      }
+
+      let added = 0
+      for (const type of resolved) {
+        if (!type) continue
+        const q = await db().query(
+          `INSERT INTO vehicle_categories(organization_id, name, family, sort_order)
+           VALUES($1,$2,$3,$4)
+           ON CONFLICT (organization_id, name) DO NOTHING
+           RETURNING id`,
+          [t.organizationId, type.name, type.family, type.sort_order],
+        )
+        added += q.rowCount ?? 0
+      }
+
+      await db().query(
+        `INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES($1,$2,'vehicle_category.imported','vehicle_category',$3,$4)`,
+        [t.organizationId, t.userId, t.organizationId, JSON.stringify({ requested: input.types.length, added })],
+      )
+
+      res.status(201).json({ requested: input.types.length, added, skipped: input.types.length - added })
     }),
   )
 
@@ -371,12 +586,19 @@ export function createApiRouter() {
     requirePermission("service:manage"),
     asyncRoute(async (req, res) => {
       const t = tenant(req)
-      const input = body(catalogValidators.category, req.body)
+      const input = body(catalogValidators.vehicleCategory, req.body)
+      assertVehicleFamily(input.family)
       try {
         const q = await db().query(
-          "INSERT INTO vehicle_categories(organization_id, name, is_active) VALUES($1,$2,COALESCE($3,true)) RETURNING id, name, is_active, created_at, created_at AS updated_at",
-          [t.organizationId, input.name, input.is_active ?? null],
+          `INSERT INTO vehicle_categories(organization_id, name, family, sort_order, is_active)
+           VALUES($1,$2,$3,COALESCE($4,0),COALESCE($5,true))
+           RETURNING id, name, family, sort_order, is_active, created_at, updated_at`,
+          [t.organizationId, input.name, input.family ?? null, input.sort_order ?? null, input.is_active ?? null],
         )
+        await auditVehicleCategory(t, "vehicle_category.created", q.rows[0].id, {
+          name: input.name,
+          family: input.family ?? null,
+        })
         res.status(201).json(q.rows[0])
       } catch (error) {
         if ((error as { code?: string }).code === "23505") {
@@ -393,15 +615,22 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const id = parseId(req.params.id)
-      const input = body(catalogValidators.category.partial(), req.body)
+      const input = body(catalogValidators.vehicleCategory.partial(), req.body)
+      if (input.family !== undefined) assertVehicleFamily(input.family)
       const oldQ = await db().query("SELECT * FROM vehicle_categories WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!oldQ.rowCount) throw new HttpError(404, "category_not_found", "Catégorie introuvable.")
       const merged = { ...oldQ.rows[0], ...input }
       try {
         const q = await db().query(
-          "UPDATE vehicle_categories SET name=$3, is_active=$4 WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING id, name, is_active, created_at, created_at AS updated_at",
-          [id, t.organizationId, merged.name, merged.is_active],
+          `UPDATE vehicle_categories SET name=$3, family=$4, sort_order=$5, is_active=$6, updated_at=now()
+           WHERE id=$1::uuid AND organization_id=$2::uuid
+           RETURNING id, name, family, sort_order, is_active, created_at, updated_at`,
+          [id, t.organizationId, merged.name, merged.family ?? null, merged.sort_order ?? 0, merged.is_active],
         )
+        await auditVehicleCategory(t, "vehicle_category.updated", id, {
+          before: { name: oldQ.rows[0].name, family: oldQ.rows[0].family, is_active: oldQ.rows[0].is_active },
+          after: { name: merged.name, family: merged.family ?? null, is_active: merged.is_active },
+        })
         res.json(q.rows[0])
       } catch (error) {
         if ((error as { code?: string }).code === "23505") {
@@ -424,6 +653,19 @@ export function createApiRouter() {
       }
       const q = await db().query("DELETE FROM vehicle_categories WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!q.rowCount) throw new HttpError(404, "category_not_found", "Catégorie introuvable.")
+      // Une prestation pouvait porter un tarif visant précisément cette
+      // catégorie. La clé deviendrait orpheline : elle ne s'appliquerait plus
+      // à rien tout en restant en base, et ferait croire à un tarif actif.
+      // On la retire dans la même foulée.
+      const purged = await db().query(
+        `UPDATE services SET price_by_vehicle_type = price_by_vehicle_type - $2::text, updated_at=now()
+         WHERE organization_id=$1::uuid AND price_by_vehicle_type ? $2::text
+         RETURNING id`,
+        [t.organizationId, id],
+      )
+      await auditVehicleCategory(t, "vehicle_category.deleted", id, {
+        services_with_cleaned_price: purged.rowCount ?? 0,
+      })
       res.status(204).send()
     }),
   )
@@ -460,6 +702,7 @@ export function createApiRouter() {
     asyncRoute(async (req, res) => {
       const t = tenant(req)
       const input = body(catalogValidators.service, req.body)
+      await assertVehiclePriceKeys(input.price_by_vehicle_type, t.organizationId)
       if (input.category_id) {
         const categoryQ = await db().query("SELECT 1 FROM service_categories WHERE id=$1::uuid AND organization_id=$2::uuid", [input.category_id, t.organizationId])
         if (!categoryQ.rowCount) throw new HttpError(400, "invalid_category", "Catégorie de prestation invalide.")
@@ -469,6 +712,11 @@ export function createApiRouter() {
          VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE($8,true)) RETURNING *`,
         [t.organizationId, input.name, input.description ?? null, input.category_id ?? null, input.price_cents, JSON.stringify(input.price_by_vehicle_type ?? {}), input.duration_minutes ?? null, input.is_active ?? null],
       )
+      await auditService(t, "service.created", q.rows[0].id, {
+        name: input.name,
+        price_cents: input.price_cents,
+        price_by_vehicle_type: input.price_by_vehicle_type ?? {},
+      })
       res.status(201).json(q.rows[0])
     }),
   )
@@ -480,6 +728,7 @@ export function createApiRouter() {
       const t = tenant(req)
       const id = parseId(req.params.id)
       const input = body(catalogValidators.service.partial(), req.body)
+      await assertVehiclePriceKeys(input.price_by_vehicle_type, t.organizationId)
       const oldQ = await db().query("SELECT * FROM services WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       if (!oldQ.rowCount) throw new HttpError(404, "service_not_found", "Prestation introuvable.")
       if (input.category_id) {
@@ -492,6 +741,26 @@ export function createApiRouter() {
          WHERE id=$1::uuid AND organization_id=$2::uuid RETURNING *`,
         [id, t.organizationId, merged.name, merged.description, merged.category_id, merged.price_cents, JSON.stringify(merged.price_by_vehicle_type ?? {}), merged.duration_minutes, merged.is_active],
       )
+      // On ne journalise que ce qui a bougé : une écriture identique ne doit
+      // pas noyer le journal sous des « prestation modifiée » sans effet.
+      const changed: Record<string, unknown> = {}
+      if (Number(oldQ.rows[0].price_cents) !== Number(merged.price_cents)) {
+        changed.price_before_cents = Number(oldQ.rows[0].price_cents)
+        changed.price_after_cents = Number(merged.price_cents)
+      }
+      if (String(oldQ.rows[0].name) !== String(merged.name)) {
+        changed.name_before = oldQ.rows[0].name
+        changed.name_after = merged.name
+      }
+      if (Boolean(oldQ.rows[0].is_active) !== Boolean(merged.is_active)) {
+        changed.is_active = merged.is_active
+      }
+      if (JSON.stringify(oldQ.rows[0].price_by_vehicle_type ?? {}) !== JSON.stringify(merged.price_by_vehicle_type ?? {})) {
+        changed.price_by_vehicle_type = merged.price_by_vehicle_type ?? {}
+      }
+      if (Object.keys(changed).length > 0) {
+        await auditService(t, "service.updated", id, changed)
+      }
       res.json(q.rows[0])
     }),
   )
@@ -666,10 +935,16 @@ export function createApiRouter() {
           if (!siteQ.rowCount) throw new HttpError(400, "invalid_site", "Station invalide.")
 
           const categoryQ = await client.query(
-            "SELECT id FROM vehicle_categories WHERE id=$1::uuid AND organization_id=$2::uuid AND is_active",
+            "SELECT id, family FROM vehicle_categories WHERE id=$1::uuid AND organization_id=$2::uuid AND is_active",
             [input.vehicle_category_id, t.organizationId],
           )
           if (!categoryQ.rowCount) throw new HttpError(400, "invalid_vehicle_category", "Catégorie de véhicule invalide.")
+          // La famille accompagne la catégorie dans tout le calcul : c'est
+          // elle qui porte le tarif quand la station n'a pas saisi 61 prix.
+          const vehicle = {
+            id: input.vehicle_category_id,
+            family: (categoryQ.rows[0].family as string | null) ?? null,
+          }
 
           const serviceIds = input.items.map((item) => item.service_id)
           const servicesQ = await client.query(
@@ -680,13 +955,6 @@ export function createApiRouter() {
             throw new HttpError(400, "invalid_service", "Une prestation sélectionnée est invalide ou inactive.")
           }
           const serviceById = new Map(servicesQ.rows.map((row) => [row.id as string, row]))
-
-          const resolvePrice = (service: { price_cents: number; price_by_vehicle_type: Record<string, number> | null }, vehicleCategoryId: string): number => {
-            if (service.price_by_vehicle_type && service.price_by_vehicle_type[vehicleCategoryId] != null) {
-              return Number(service.price_by_vehicle_type[vehicleCategoryId])
-            }
-            return Number(service.price_cents)
-          }
 
           if (input.worker_ids.length) {
             const workersQ = await client.query(
@@ -700,7 +968,7 @@ export function createApiRouter() {
 
           const totalCents = input.items.reduce((total, item) => {
             const service = serviceById.get(item.service_id)!
-            return total + resolvePrice(service, input.vehicle_category_id) * item.quantity
+            return total + resolveUnitPrice(service, vehicle) * item.quantity
           }, 0)
           if (input.amount_received_cents > totalCents) {
             throw new HttpError(400, "amount_exceeds_total", "Le montant reçu dépasse le total du lavage.")
@@ -780,7 +1048,7 @@ export function createApiRouter() {
 
           for (const item of input.items) {
             const service = serviceById.get(item.service_id)!
-            const unitPrice = resolvePrice(service, input.vehicle_category_id)
+            const unitPrice = resolveUnitPrice(service, vehicle)
             await client.query(
               "INSERT INTO wash_items(wash_id, service_id, service_name, quantity, unit_price_cents, line_total_cents) VALUES($1,$2,$3,$4,$5,$6)",
               [wash.id, item.service_id, service.name, item.quantity, unitPrice, unitPrice * item.quantity],

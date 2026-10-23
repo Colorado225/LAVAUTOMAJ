@@ -169,6 +169,39 @@ CREATE TABLE IF NOT EXISTS vehicle_categories (
  name text NOT NULL, is_active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(),
  UNIQUE(organization_id,name)
 );
+-- Famille et rang d'affichage.
+--
+-- La catégorie reste l'unité que l'on choisit à la caisse, mais c'est la
+-- FAMILLE qui porte le tarif : une station saisit neuf prix (« motos »,
+-- « SUV », « poids lourds »…) et non soixante et un. Sans cette colonne, le
+-- catalogue serait plat et la tarification différenciée ingérable.
+-- Les codes de famille viennent de src/config/vehicle-taxonomy.ts ; la
+-- colonne reste du texte libre pour qu'une station puisse ranger ses propres
+-- catégories dans une famille connue sans migration.
+ALTER TABLE vehicle_categories ADD COLUMN IF NOT EXISTS family text;
+ALTER TABLE vehicle_categories ADD COLUMN IF NOT EXISTS sort_order integer NOT NULL DEFAULT 0;
+-- La table jumelle service_categories avait updated_at, pas celle-ci :
+-- l'API renvoyait created_at AS updated_at, c'est-à-dire une date fausse.
+ALTER TABLE vehicle_categories ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+-- Rétro-remplissage des catégories déjà en base (Berline, SUV / 4x4, Moto…).
+-- L'ordre des règles compte : « Berline compacte » doit rester une berline,
+-- et « SUV électrique » doit basculer côté électrique, pas côté SUV. On
+-- n'écrit que sur les lignes sans famille : une famille choisie à la main
+-- n'est jamais réécrite au démarrage.
+UPDATE vehicle_categories SET family = CASE
+  WHEN lower(name) ~ '(électrique|electrique|hybride)' THEN 'electriques'
+  WHEN lower(name) ~ '(moto|scooter|cyclomoteur|tricycle|quad|deux-roues|deux roues)' THEN 'deux_roues'
+  WHEN lower(name) ~ '(berline|break|monospace)' THEN 'berlines'
+  WHEN lower(name) ~ '(citadine|mini|coupé|coupe|cabriolet|compacte)' THEN 'petites_voitures'
+  WHEN lower(name) ~ '(suv|crossover|4x4|tout-terrain|tout terrain|pick-up|pick up)' THEN 'suv'
+  WHEN lower(name) ~ '(fourgon|utilitaire|fourgonnette)' THEN 'utilitaires'
+  WHEN lower(name) ~ '(camion|semi-remorque|remorque|poids lourd)' THEN 'poids_lourds'
+  WHEN lower(name) ~ '(taxi|vtc|minibus|autocar|bus|car)' THEN 'transport_personnes'
+  WHEN lower(name) ~ '(tracteur|pelle|chargeuse|chariot|ambulance|blindé|blinde|secours|chantier)' THEN 'speciaux'
+  ELSE NULL END
+WHERE family IS NULL;
+CREATE INDEX IF NOT EXISTS idx_vehicle_categories_org_family
+  ON vehicle_categories(organization_id, family);
 CREATE TABLE IF NOT EXISTS services (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
   category_id uuid REFERENCES service_categories(id), name text NOT NULL, description text,
@@ -944,18 +977,25 @@ async function seedDemoData(
   );
   const siteId = siteRes.rows[0].id;
 
+  // Les catégories de démonstration portent leur famille et leur rang, comme
+  // celles créées par l'assistant : la démonstration doit montrer le produit
+  // tel qu'un client le configurera, pas une version plate du catalogue.
   const berlineRes = await queryFn(
-    `INSERT INTO vehicle_categories (organization_id, name, is_active) VALUES ($1, 'Berline', true) RETURNING id`,
+    `INSERT INTO vehicle_categories (organization_id, name, family, sort_order, is_active)
+     VALUES ($1, 'Berline moyenne', 'berlines', 1, true) RETURNING id`,
     [orgId]
   );
   const suvRes = await queryFn(
-    `INSERT INTO vehicle_categories (organization_id, name, is_active) VALUES ($1, 'SUV / 4x4', true) RETURNING id`,
+    `INSERT INTO vehicle_categories (organization_id, name, family, sort_order, is_active)
+     VALUES ($1, 'SUV familial', 'suv', 2, true) RETURNING id`,
     [orgId]
   );
-  await queryFn(
-    `INSERT INTO vehicle_categories (organization_id, name, is_active) VALUES ($1, 'Moto', true) RETURNING id`,
+  const motoRes = await queryFn(
+    `INSERT INTO vehicle_categories (organization_id, name, family, sort_order, is_active)
+     VALUES ($1, 'Moto', 'deux_roues', 0, true) RETURNING id`,
     [orgId]
   );
+  void motoRes;
 
   const catLavage = await queryFn(
     `INSERT INTO service_categories (organization_id, name, is_active) VALUES ($1, 'Lavage classique', true) RETURNING id`,
