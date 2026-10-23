@@ -6,7 +6,12 @@ import { chooseDatabaseTarget } from "./database-target.ts";
 import { env } from "./env.ts";
 import { migrateLegacyPlatformAdmins, syncPlatformOperators } from "./console-auth.ts";
 import { hashPassword } from "./auth.ts";
-import { DEFAULT_VEHICLE_CATEGORIES } from "./default-catalog.ts";
+import {
+  DEFAULT_SERVICE_CATEGORY_NAMES,
+  DEFAULT_VEHICLE_CATEGORIES,
+  SERVICE_CATALOG_TEMPLATES,
+  serviceCategoryName,
+} from "./default-catalog.ts";
 
 const { Pool } = pg;
 
@@ -44,6 +49,51 @@ export function getPool(): pg.Pool | null {
 }
 export function isDatabaseReady(): boolean {
   return ready && pool !== null;
+}
+
+// ---------------------------------------------------------------------------
+// Catalogue des prestations — semis à chaque démarrage
+//
+// La liste vit dans `default-catalog.ts`. Elle est rejouée au démarrage plutôt
+// qu'écrite dans le schéma : corriger un prix ou renommer une prestation doit
+// atteindre les bases déjà créées, pas seulement les neuves.
+//
+// Les prestations retirées de la liste ne sont pas supprimées mais désactivées :
+// une station a pu les sélectionner pendant son assistant, et un
+// `services.template_id` ne doit jamais pointer vers une ligne disparue.
+// ---------------------------------------------------------------------------
+export async function seedServiceCatalog(
+  query: (text: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount: number | null }>,
+): Promise<void> {
+  const kept: string[] = []
+  for (const [index, template] of SERVICE_CATALOG_TEMPLATES.entries()) {
+    kept.push(`${template.category}|${template.name}`)
+    await query(
+      `INSERT INTO service_catalog(category, name, price_cents, duration_minutes, description, sort_order, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, true)
+       ON CONFLICT (category, name) DO UPDATE
+         SET price_cents = EXCLUDED.price_cents,
+             duration_minutes = EXCLUDED.duration_minutes,
+             description = EXCLUDED.description,
+             sort_order = EXCLUDED.sort_order,
+             is_active = true`,
+      [
+        template.category,
+        template.name,
+        template.price_cents,
+        template.duration_minutes,
+        template.description,
+        index + 1,
+      ],
+    )
+  }
+  // Ce qui n'est plus dans la liste sort du catalogue proposé — sans jamais
+  // être effacé, pour ne pas casser une sélection déjà enregistrée.
+  await query(
+    `UPDATE service_catalog SET is_active = false
+      WHERE is_active AND NOT ((category || '|' || name) = ANY($1::text[]))`,
+    [kept],
+  )
 }
 
 /**
@@ -139,6 +189,12 @@ CREATE TABLE IF NOT EXISTS service_catalog (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), category text NOT NULL, name text NOT NULL,
   price_cents integer, sort_order integer NOT NULL DEFAULT 0, is_active boolean NOT NULL DEFAULT true
 );
+-- Durée et description : l'assistant créait des prestations sans durée, donc
+-- tous les lavages recevaient la même heure de fin estimée, quel que soit le
+-- service choisi. Ces deux colonnes viennent du catalogue et suivent la
+-- prestation jusqu'à la station.
+ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS duration_minutes integer;
+ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS description text;
 -- Le catalogue de référence ne doit pas se dupliquer à chaque démarrage.
 -- Sans contrainte d'unicité, l'ancien « ON CONFLICT DO NOTHING » ne pouvait
 -- jamais entrer en conflit : neuf lignes s'ajoutaient à chaque initialisation,
@@ -149,17 +205,9 @@ DELETE FROM service_catalog a USING service_catalog b
  WHERE a.category = b.category AND a.name = b.name AND a.ctid > b.ctid;
 CREATE UNIQUE INDEX IF NOT EXISTS service_catalog_category_name_unique
   ON service_catalog(category, name);
-INSERT INTO service_catalog(category,name,price_cents,sort_order) VALUES
-  ('exterior_wash','Lavage extérieur simple',200000,1),
-  ('exterior_wash','Nettoyage jantes et pneus',100000,2),
-  ('interior_cleaning','Aspiration habitacle',150000,3),
-  ('complete_wash','Lavage intérieur et extérieur',400000,4),
-  ('exterior_wash','Lavage haute pression',100000,5),
-  ('exterior_wash','Mousse active',100000,6),
-  ('exterior_wash','Nettoyage vitres',50000,7),
-  ('exterior_wash','Séchage manuel',50000,8),
-  ('exterior_wash','Lavage express',150000,9)
-ON CONFLICT (category, name) DO NOTHING;
+-- Les prestations du catalogue sont semées par seedServiceCatalog (voir plus
+-- bas) : une seule liste, en TypeScript, partagée avec l'assistant et la
+-- démonstration.
 CREATE TABLE IF NOT EXISTS service_categories (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  name text NOT NULL, is_active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(),
@@ -994,45 +1042,46 @@ async function seedDemoData(
     if (category.family === "suv") suvId = String(inserted.rows[0].id)
   }
 
-  const catLavage = await queryFn(
-    `INSERT INTO service_categories (organization_id, name, is_active) VALUES ($1, 'Lavage classique', true) RETURNING id`,
-    [orgId]
-  );
-  const catDetailing = await queryFn(
-    `INSERT INTO service_categories (organization_id, name, is_active) VALUES ($1, 'Detailing & Soins', true) RETURNING id`,
-    [orgId]
-  );
+  // Catégories de prestations : les mêmes que celles d'une station issue de
+  // l'assistant, pour que la démonstration montre le produit réel.
+  const serviceCategoryIds = new Map<string, string>()
+  for (const name of DEFAULT_SERVICE_CATEGORY_NAMES) {
+    const inserted = await queryFn(
+      `INSERT INTO service_categories (organization_id, name, is_active)
+       VALUES ($1, $2, true) RETURNING id`,
+      [orgId, name]
+    )
+    serviceCategoryIds.set(name.toLowerCase(), String(inserted.rows[0].id))
+  }
 
-  await queryFn(
-    `INSERT INTO services (organization_id, category_id, name, description, price_cents, duration_minutes, is_active)
-     VALUES ($1, $2, 'Lavage Extérieur Rapide', 'Lavage haute pression, mousse active et séchage microfibre.', 300000, 20, true)
-     RETURNING id`,
-    [orgId, catLavage.rows[0].id]
-  );
-  const s2 = await queryFn(
-    `INSERT INTO services (organization_id, category_id, name, description, price_cents, duration_minutes, is_active)
-     VALUES ($1, $2, 'Lavage Complet Intérieur + Extérieur', 'Aspiration intégrale, plastiques, vitres et carrosserie éclatante.', 600000, 45, true)
-     RETURNING id`,
-    [orgId, catLavage.rows[0].id]
-  );
-  const s3 = await queryFn(
-    `INSERT INTO services (organization_id, category_id, name, description, price_cents, duration_minutes, is_active)
-     VALUES ($1, $2, 'Formule VIP Prestige', 'Lavage minutieux, cire protectrice, shampoing sièges et parfum habitacle.', 1200000, 75, true)
-     RETURNING id`,
-    [orgId, catDetailing.rows[0].id]
-  );
-  await queryFn(
-    `INSERT INTO services (organization_id, category_id, name, description, price_cents, duration_minutes, is_active)
-     VALUES ($1, $2, 'Lustrage & Brillance Carrosserie', 'Décontamination et lustrage haute brillance.', 2500000, 120, true)
-     RETURNING id`,
-    [orgId, catDetailing.rows[0].id]
-  );
-  await queryFn(
-    `INSERT INTO services (organization_id, category_id, name, description, price_cents, duration_minutes, is_active)
-     VALUES ($1, $2, 'Lavage Deux-Roues', 'Nettoyage complet moto / scooter avec dégraissage jantes.', 200000, 20, true)
-     RETURNING id`,
-    [orgId, catLavage.rows[0].id]
-  );
+  // Prestations : exactement la liste du catalogue, avec sa catégorie, son prix
+  // et sa durée. Une démonstration qui invente ses propres prestations montre
+  // une station que personne ne peut configurer.
+  const serviceIds = new Map<string, string>()
+  for (const template of SERVICE_CATALOG_TEMPLATES) {
+    const categoryName = serviceCategoryName(template.category)
+    const inserted = await queryFn(
+      `INSERT INTO services (organization_id, category_id, name, description, price_cents, duration_minutes, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, true) RETURNING id`,
+      [
+        orgId,
+        serviceCategoryIds.get(categoryName.toLowerCase()) ?? null,
+        template.name,
+        template.description,
+        template.price_cents,
+        template.duration_minutes,
+      ]
+    )
+    serviceIds.set(template.name, String(inserted.rows[0].id))
+  }
+
+  const completeWash = SERVICE_CATALOG_TEMPLATES.find(
+    (template) => template.name === "Lavage complet (intérieur + extérieur)"
+  )
+  const lustrage = SERVICE_CATALOG_TEMPLATES.find(
+    (template) => template.name === "Lustrage de la carrosserie"
+  )
+  if (!completeWash || !lustrage) throw new Error("catalogue de prestations incomplet")
 
   const w1 = await queryFn(
     `INSERT INTO workers (organization_id, site_id, first_name, last_name, phone, role, status, district)
@@ -1061,16 +1110,23 @@ async function seedDemoData(
   );
   const cashSessionId = cashSessionRes.rows[0].id;
 
+  // Les deux lavages de démonstration prennent leur montant dans le catalogue :
+  // un total saisi à la main finirait par ne plus correspondre au prix affiché.
   const wash1 = await queryFn(
     `INSERT INTO washes (organization_id, site_id, vehicle_category_id, reference, status, total_cents, payment_status, payment_method, created_by)
-     VALUES ($1, $2, $3, 'LAV-2026-0001', 'completed', 600000, 'paid', 'cash', $4)
+     VALUES ($1, $2, $3, 'LAV-2026-0001', 'completed', $4, 'paid', 'cash', $5)
      RETURNING id`,
-    [orgId, siteId, berlineId, userId]
+    [orgId, siteId, berlineId, completeWash.price_cents, userId]
   );
   await queryFn(
     `INSERT INTO wash_items (wash_id, service_id, service_name, quantity, unit_price_cents, line_total_cents)
-     VALUES ($1, $2, 'Lavage Complet Intérieur + Extérieur', 1, 600000, 600000)`,
-    [wash1.rows[0].id, s2.rows[0].id]
+     VALUES ($1, $2, $3, 1, $4, $4)`,
+    [
+      wash1.rows[0].id,
+      serviceIds.get(completeWash.name),
+      completeWash.name,
+      completeWash.price_cents,
+    ]
   );
   await queryFn(
     `INSERT INTO wash_assignments (wash_id, worker_id) VALUES ($1, $2)`,
@@ -1078,25 +1134,25 @@ async function seedDemoData(
   );
   await queryFn(
     `INSERT INTO payments (organization_id, wash_id, method, amount_cents, status)
-     VALUES ($1, $2, 'cash', 600000, 'verified')`,
-    [orgId, wash1.rows[0].id]
+     VALUES ($1, $2, 'cash', $3, 'verified')`,
+    [orgId, wash1.rows[0].id, completeWash.price_cents]
   );
   await queryFn(
     `INSERT INTO cash_movements (organization_id, cash_session_id, type, amount_cents, source, description, wash_id, created_by)
-     VALUES ($1, $2, 'entry', 600000, 'wash_payment', 'Encaissement lavage LAV-2026-0001', $3, $4)`,
-    [orgId, cashSessionId, wash1.rows[0].id, userId]
+     VALUES ($1, $2, 'entry', $3, 'wash_payment', 'Encaissement lavage LAV-2026-0001', $4, $5)`,
+    [orgId, cashSessionId, completeWash.price_cents, wash1.rows[0].id, userId]
   );
 
   const wash2 = await queryFn(
     `INSERT INTO washes (organization_id, site_id, vehicle_category_id, reference, status, total_cents, payment_status, payment_method, created_by)
-     VALUES ($1, $2, $3, 'LAV-2026-0002', 'completed', 1200000, 'paid', 'wave', $4)
+     VALUES ($1, $2, $3, 'LAV-2026-0002', 'completed', $4, 'paid', 'wave', $5)
      RETURNING id`,
-    [orgId, siteId, suvId, userId]
+    [orgId, siteId, suvId, lustrage.price_cents, userId]
   );
   await queryFn(
     `INSERT INTO wash_items (wash_id, service_id, service_name, quantity, unit_price_cents, line_total_cents)
-     VALUES ($1, $2, 'Formule VIP Prestige', 1, 1200000, 1200000)`,
-    [wash2.rows[0].id, s3.rows[0].id]
+     VALUES ($1, $2, $3, 1, $4, $4)`,
+    [wash2.rows[0].id, serviceIds.get(lustrage.name), lustrage.name, lustrage.price_cents]
   );
   await queryFn(
     `INSERT INTO wash_assignments (wash_id, worker_id) VALUES ($1, $2), ($1, $3)`,
@@ -1104,8 +1160,8 @@ async function seedDemoData(
   );
   await queryFn(
     `INSERT INTO payments (organization_id, wash_id, method, amount_cents, status)
-     VALUES ($1, $2, 'wave', 1200000, 'verified')`,
-    [orgId, wash2.rows[0].id]
+     VALUES ($1, $2, 'wave', $3, 'verified')`,
+    [orgId, wash2.rows[0].id, lustrage.price_cents]
   );
 
   await queryFn(
@@ -1295,6 +1351,7 @@ export async function initDatabaseSchema(): Promise<boolean> {
       });
       await externalPool.query("SELECT 1");
       await externalPool.query(schemaSql);
+      await seedServiceCatalog(externalPool.query.bind(externalPool));
       await migrateLegacyPlatformAdmins(externalPool.query.bind(externalPool));
       await syncPlatformOperators(externalPool.query.bind(externalPool));
       await backfillRevenueLedger(externalPool.query.bind(externalPool));
@@ -1335,6 +1392,7 @@ export async function initDatabaseSchema(): Promise<boolean> {
     pgliteInstance = location.dataDir ? new PGlite(location.dataDir) : new PGlite();
     pool = createPglitePool(pgliteInstance);
     await pool.query(schemaSql);
+    await seedServiceCatalog(pool.query.bind(pool));
     await seedDemoData(pool.query.bind(pool));
     await migrateLegacyPlatformAdmins(pool.query.bind(pool));
     await syncPlatformOperators(pool.query.bind(pool));

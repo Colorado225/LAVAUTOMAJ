@@ -122,3 +122,124 @@ export function serviceCategoryName(templateCategory: string | null | undefined)
   if (!templateCategory) return "Autres prestations"
   return SERVICE_CATALOG_CATEGORY_LABELS[templateCategory] ?? "Autres prestations"
 }
+
+// ---------------------------------------------------------------------------
+// Catalogue des prestations
+//
+// La liste des prestations qu'une station de lavage propose réellement, dans
+// l'ordre où elle les présente à ses clients. Elle vit ici et non dans un
+// `INSERT` du schéma : c'est la même liste qui alimente l'assistant
+// d'ouverture, la station de démonstration et les tests, et une liste recopiée
+// en trois endroits finit toujours par diverger.
+//
+// Prix en centimes de franc CFA (`price_cents / 100` = francs), durées en
+// minutes. Ces valeurs sont indicatives : la station les ajuste ensuite depuis
+// l'écran « Prestations ».
+// ---------------------------------------------------------------------------
+
+/** Une prestation du catalogue général, prête à devenir une prestation de station. */
+export interface ServiceCatalogTemplate {
+  /** Nom affiché, tel que le client le lit sur le reçu. */
+  name: string
+  /** Clé de classement (`exterior_wash`, `detailing`…) → catégorie de station. */
+  category: string
+  /** Prix indicatif en centimes. */
+  price_cents: number
+  /** Durée indicative en minutes — c'est elle qui donne l'heure de fin estimée. */
+  duration_minutes: number
+  /** Une phrase pour la fiche de la prestation. */
+  description: string
+}
+
+/**
+ * Les onze prestations d'une station de lavage, dans l'ordre d'affichage.
+ *
+ * L'ordre n'est pas alphabétique : il suit le parcours du client, du plus
+ * courant (extérieur, intérieur, complet) au plus spécialisé (moteur, lustrage,
+ * moquettes de maison). Les trois premières sont celles qu'un gérant choisit
+ * neuf fois sur dix à l'ouverture.
+ */
+export const SERVICE_CATALOG_TEMPLATES: readonly ServiceCatalogTemplate[] = [
+  {
+    name: "Lavage extérieur",
+    category: "exterior_wash",
+    price_cents: 200000,
+    duration_minutes: 20,
+    description: "Carrosserie, vitres et séchage à la microfibre.",
+  },
+  {
+    name: "Lavage intérieur simple",
+    category: "interior_cleaning",
+    price_cents: 150000,
+    duration_minutes: 20,
+    description: "Aspiration, tableau de bord et plastiques.",
+  },
+  {
+    name: "Lavage complet (intérieur + extérieur)",
+    category: "complete_wash",
+    price_cents: 350000,
+    duration_minutes: 45,
+    description: "Intérieur et extérieur, finition à la main.",
+  },
+  {
+    name: "Lavage express",
+    category: "exterior_wash",
+    price_cents: 150000,
+    duration_minutes: 15,
+    description: "Lavage extérieur rapide, sans attente.",
+  },
+  {
+    name: "Nettoyage des tapis et sièges uniquement",
+    category: "interior_cleaning",
+    price_cents: 250000,
+    duration_minutes: 30,
+    description: "Shampoing des sièges et des tapis du véhicule.",
+  },
+  {
+    name: "Lavage des moquettes (maison)",
+    category: "autre",
+    price_cents: 300000,
+    duration_minutes: 45,
+    description: "Moquettes et tapis de maison déposés à la station.",
+  },
+  {
+    name: "Nettoyage des jantes et pneus",
+    category: "exterior_wash",
+    price_cents: 100000,
+    duration_minutes: 15,
+    description: "Dégraissage des jantes et brillance des pneus.",
+  },
+  {
+    name: "Lavage du bas de caisse",
+    category: "exterior_wash",
+    price_cents: 150000,
+    duration_minutes: 20,
+    description: "Berceaux et passages de roues, haute pression.",
+  },
+  {
+    name: "Lavage moteur complet",
+    category: "exterior_wash",
+    price_cents: 300000,
+    duration_minutes: 45,
+    description: "Dégraissage du compartiment moteur, rinçage maîtrisé.",
+  },
+  {
+    name: "Lustrage de la carrosserie",
+    category: "detailing",
+    price_cents: 500000,
+    duration_minutes: 60,
+    description: "Polish puis cire, brillance durable.",
+  },
+  {
+    name: "Lavage de motos",
+    category: "exterior_wash",
+    price_cents: 100000,
+    duration_minutes: 15,
+    description: "Moto ou scooter, jantes et chaîne dégraissées.",
+  },
+]
+
+/** Noms seuls du catalogue, dans l'ordre — pratique pour les tests. */
+export const SERVICE_CATALOG_NAMES: readonly string[] = SERVICE_CATALOG_TEMPLATES.map(
+  (template) => template.name,
+)

@@ -147,7 +147,8 @@ export function createOnboardingRouter() {
     asyncRoute(async (req, res) => {
       tenant(req)
       const q = await db().query(
-        "SELECT id, category, name, price_cents, sort_order FROM service_catalog WHERE is_active = true ORDER BY sort_order, name",
+        `SELECT id, category, name, price_cents, duration_minutes, description, sort_order
+           FROM service_catalog WHERE is_active = true ORDER BY sort_order, name`,
       )
       res.json(q.rows)
     }),
@@ -401,39 +402,62 @@ export function createOnboardingRouter() {
           const templateIds = services.data.selected
             .map((item) => item.template_id)
             .filter((id): id is string => Boolean(id))
-          const templateCategories = new Map<string, string>()
+          // Le modèle fournit plus que sa catégorie : sa durée et sa
+          // description suivent jusqu'à la prestation de la station. Sans la
+          // durée, tous les lavages recevaient la même heure de fin estimée.
+          const templates = new Map<
+            string,
+            { category: string; duration_minutes: number | null; description: string | null }
+          >()
           if (templateIds.length > 0) {
             const catalogQ = await client.query(
-              "SELECT id, category FROM service_catalog WHERE id = ANY($1::uuid[])",
+              "SELECT id, category, duration_minutes, description FROM service_catalog WHERE id = ANY($1::uuid[])",
               [templateIds],
             )
             for (const row of catalogQ.rows) {
-              templateCategories.set(String(row.id), String(row.category))
+              templates.set(String(row.id), {
+                category: String(row.category),
+                duration_minutes:
+                  row.duration_minutes == null ? null : Number(row.duration_minutes),
+                description: row.description == null ? null : String(row.description),
+              })
             }
           }
 
           const allServices = [
-            ...services.data.selected.map((item) => ({
-              name: item.name,
-              price_cents: item.price_cents ?? 0,
-              categoryName: serviceCategoryName(
-                item.template_id ? templateCategories.get(item.template_id) : null,
-              ),
-            })),
+            ...services.data.selected.map((item) => {
+              const template = item.template_id ? templates.get(item.template_id) : undefined
+              return {
+                name: item.name,
+                price_cents: item.price_cents ?? 0,
+                categoryName: serviceCategoryName(template?.category),
+                duration_minutes: template?.duration_minutes ?? null,
+                description: template?.description ?? null,
+              }
+            }),
             ...services.data.custom.map((item) => ({
               name: item.name,
               price_cents: item.price_cents ?? 0,
               categoryName: serviceCategoryName(item.category),
+              duration_minutes: null,
+              description: null,
             })),
           ]
           for (const service of allServices) {
             const categoryId =
               serviceCategoryByName.get(service.categoryName.toLowerCase()) ?? null
             await client.query(
-              `INSERT INTO services(organization_id, name, price_cents, category_id)
-               SELECT $1, $2, $3, $4
+              `INSERT INTO services(organization_id, name, price_cents, category_id, duration_minutes, description)
+               SELECT $1, $2, $3, $4, $5, $6
                WHERE NOT EXISTS (SELECT 1 FROM services WHERE organization_id=$1::uuid AND lower(name)=lower($2))`,
-              [t.organizationId, service.name, service.price_cents, categoryId],
+              [
+                t.organizationId,
+                service.name,
+                service.price_cents,
+                categoryId,
+                service.duration_minutes,
+                service.description,
+              ],
             )
           }
         }

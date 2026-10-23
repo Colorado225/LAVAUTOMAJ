@@ -17,6 +17,8 @@ import {
   DEFAULT_SERVICE_CATEGORY_NAMES,
   DEFAULT_VEHICLE_CATEGORIES,
   DEFAULT_VEHICLE_CATEGORY_NAMES,
+  SERVICE_CATALOG_NAMES,
+  SERVICE_CATALOG_TEMPLATES,
   isConsistentDefault,
   needsDefaultVehicleCategories,
   serviceCategoryName,
@@ -82,15 +84,61 @@ test("les catégories de prestations par défaut sont distinctes", () => {
 })
 
 test("chaque modèle du référentiel tombe dans une catégorie existante", () => {
-  // Les trois familles semées dans `service_catalog` (server/db.ts).
-  for (const template of ["exterior_wash", "interior_cleaning", "complete_wash"]) {
-    const name = serviceCategoryName(template)
+  // Tout modèle du catalogue (server/default-catalog.ts) doit atterrir dans
+  // l'une des catégories créées avec la station : sinon la prestation
+  // s'afficherait « sans catégorie » et le filtre du catalogue serait faux.
+  for (const template of SERVICE_CATALOG_TEMPLATES) {
+    const name = serviceCategoryName(template.category)
     assert.ok(
       (DEFAULT_SERVICE_CATEGORY_NAMES as readonly string[]).includes(name),
-      `« ${template} » tombe dans « ${name} », absent des catégories par défaut`,
+      `« ${template.name} » tombe dans « ${name} », absent des catégories par défaut`,
     )
   }
   // Une catégorie inconnue ou absente n'est jamais laissée sans classement.
   assert.equal(serviceCategoryName(null), "Autres prestations")
   assert.equal(serviceCategoryName("modele_du_futur"), "Autres prestations")
+})
+
+// ---------------------------------------------------------------------------
+// Catalogue des prestations
+// ---------------------------------------------------------------------------
+
+test("le catalogue propose la liste attendue, dans l'ordre", () => {
+  assert.deepEqual([...SERVICE_CATALOG_NAMES], [
+    "Lavage extérieur",
+    "Lavage intérieur simple",
+    "Lavage complet (intérieur + extérieur)",
+    "Lavage express",
+    "Nettoyage des tapis et sièges uniquement",
+    "Lavage des moquettes (maison)",
+    "Nettoyage des jantes et pneus",
+    "Lavage du bas de caisse",
+    "Lavage moteur complet",
+    "Lustrage de la carrosserie",
+    "Lavage de motos",
+  ])
+})
+
+test("aucune prestation n'est proposée deux fois", () => {
+  const names = SERVICE_CATALOG_NAMES.map((name) => name.toLowerCase())
+  assert.equal(new Set(names).size, names.length)
+})
+
+test("chaque prestation a un prix, une durée et une description exploitables", () => {
+  for (const template of SERVICE_CATALOG_TEMPLATES) {
+    // Un prix à zéro ferait un lavage gratuit ; l'écran afficherait « 0 F CFA »
+    // et personne ne verrait l'erreur avant la première recette.
+    assert.ok(template.price_cents > 0, `prix absent : ${template.name}`)
+    assert.ok(
+      Number.isInteger(template.duration_minutes) &&
+        template.duration_minutes >= 1 &&
+        template.duration_minutes <= 1440,
+      `durée hors bornes : ${template.name}`,
+    )
+    assert.ok(template.description.length >= 10, `description trop courte : ${template.name}`)
+    // Contrainte de la table services.
+    assert.ok(template.name.length <= 120, `nom trop long : ${template.name}`)
+    assert.equal(typeof template.category, "string")
+    assert.ok(template.category.length > 0)
+  }
 })

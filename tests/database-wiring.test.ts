@@ -29,7 +29,8 @@ import type { Pool } from "pg"
 import { readFileSync, readdirSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { initDatabaseSchema, getPool, closeDatabase } from "../server/db.ts"
+import { initDatabaseSchema, getPool, closeDatabase, seedServiceCatalog } from "../server/db.ts"
+import { SERVICE_CATALOG_NAMES } from "../server/default-catalog.ts"
 import { createApiApp } from "../server/app.ts"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
@@ -253,6 +254,10 @@ test("la configuration de la station remplit les référentiels métier", async 
   // Chaque prestation est classée dès sa création, et chaque catégorie de
   // véhicule appartient à une famille : c'est la famille qui portera le tarif.
   assert.ok(service.category_id, "la prestation créée n'a pas reçu de catégorie")
+  // La durée et la description voyagent avec le modèle : sans durée, tous les
+  // lavages recevraient la même heure de fin estimée.
+  assert.ok(service.duration_minutes, "la prestation créée n'a pas reçu de durée")
+  assert.ok(service.description, "la prestation créée n'a pas reçu de description")
   assert.ok(category.family, "la catégorie de véhicule n'a pas reçu de famille")
   const families = new Set(
     ((await api("/api/v1/vehicle-categories")).json ?? []).map((row: { family: string | null }) => row.family),
@@ -590,6 +595,35 @@ test("toute table du schéma est utilisée, toute table utilisée existe", async
   ])
   const ghosts = [...referenced].filter((table) => !created.has(table) && !sqlWords.has(table))
   assert.deepEqual(ghosts, [], `tables utilisées mais absentes du schéma : ${ghosts.join(", ")}`)
+})
+
+test("le catalogue des prestations est semé sans doublon, dans l'ordre annoncé", async () => {
+  // Rejoué deux fois : c'est ce qui arrive à chaque redémarrage. Un semis non
+  // idempotent empêcherait l'ancien nettoyage de faire son travail et
+  // l'assistant afficherait la même prestation plusieurs fois.
+  const before = await pool.query("SELECT count(*)::int AS n FROM service_catalog")
+  await seedServiceCatalog(pool.query.bind(pool))
+  await seedServiceCatalog(pool.query.bind(pool))
+  const after = await pool.query("SELECT count(*)::int AS n FROM service_catalog")
+  assert.equal(Number(after.rows[0].n), Number(before.rows[0].n), "le semis a dupliqué le catalogue")
+
+  const rows = await pool.query(
+    "SELECT name, category, price_cents, duration_minutes, description FROM service_catalog WHERE is_active ORDER BY sort_order",
+  )
+  assert.deepEqual(
+    rows.rows.map((row) => row.name),
+    [...SERVICE_CATALOG_NAMES],
+    "le catalogue exposé ne correspond pas à la liste attendue",
+  )
+  for (const row of rows.rows) {
+    assert.ok(Number(row.price_cents) > 0, `prix absent : ${row.name}`)
+    assert.ok(Number(row.duration_minutes) >= 1, `durée absente : ${row.name}`)
+    assert.ok(String(row.description ?? "").length > 0, `description absente : ${row.name}`)
+  }
+
+  // Ce que voit l'assistant : la même liste, lue par la route publique.
+  const catalog = (await api("/api/v1/service-catalog")).json as { name: string; duration_minutes: number }[]
+  assert.deepEqual(catalog.map((row) => row.name), [...SERVICE_CATALOG_NAMES])
 })
 
 test("les lignes écrites sont relues par les écrans qui les affichent", async () => {
