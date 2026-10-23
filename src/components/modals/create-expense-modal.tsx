@@ -229,6 +229,7 @@ export function CreateExpenseModal({
             <div className="space-y-2">
               <Label>Mode de paiement *</Label>
               <Select
+                className="w-full rounded-lg border border-border p-2 focus:ring-2 focus:ring-primary focus-border transition-colors"
                 onValueChange={(value) =>
                   setValue(
                     "payment_method",
