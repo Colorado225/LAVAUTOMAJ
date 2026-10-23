@@ -14,6 +14,7 @@
 
 import type { NextFunction, Request, Response } from "express"
 import { getPool, isDatabaseReady } from "./db.ts"
+import { runWithoutTenant } from "./tenant-context.ts"
 import {
   SLOW_REQUEST_MS,
   normalizeRoute,
@@ -55,9 +56,16 @@ function durationMs(req: Tracked): number {
   return Number(process.hrtime.bigint() - start) / 1_000_000
 }
 
-/** Écriture détachée : la supervision n'a pas le droit de faire tomber l'API. */
-function detach(promise: Promise<unknown>): void {
-  void promise.catch((error) => {
+/**
+ * Écriture détachée : la supervision n'a pas le droit de faire tomber l'API.
+ *
+ * Le travail s'exécute **hors du contexte de locataire** : `finish` et les
+ * erreurs arrivent depuis une requête de station, mais les métriques et
+ * incidents sont des écritures système (multi-stations, tables sans RLS).
+ * Sans cette sortie, elles passeraient — à tort — sous le rôle applicatif.
+ */
+function detach(run: () => Promise<unknown>): void {
+  void runWithoutTenant(run).catch((error) => {
     console.error("[surveillance] enregistrement impossible:", error instanceof Error ? error.message : error)
   })
 }
@@ -80,7 +88,7 @@ export function captureIncident(
   const pool = getPool()
   if (!pool) return
 
-  detach(
+  detach(() =>
     recordErrorEvent(pool, {
       ...observation,
       method: req.method,
@@ -114,7 +122,7 @@ export function monitorRequests() {
       if (!pool) return
 
       const route = routeTemplate(req)
-      detach(
+      detach(() =>
         recordRequest(pool, {
           method: req.method,
           route,

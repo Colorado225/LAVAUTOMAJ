@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { resolvePgliteLocation, describePgliteLocation } from "./pglite-location.ts";
 import { chooseDatabaseTarget } from "./database-target.ts";
-import { bindRlsGuard, setRlsRoleAvailable, type RlsPool } from "./db-rls.ts";
+import { bindRlsGuard, probeRlsRole, type RlsPool } from "./db-rls.ts";
 import { env } from "./env.ts";
 import { migrateLegacyPlatformAdmins, syncPlatformOperators } from "./console-auth.ts";
 import { hashPassword } from "./auth.ts";
@@ -210,6 +210,17 @@ BEGIN
   EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO washpilot_app';
 EXCEPTION WHEN undefined_object OR insufficient_privilege THEN
   RAISE NOTICE '[rls] droits du rôle washpilot_app non accordés.';
+END $rls$;
+
+-- Appartenance du compte de l'application au rôle : sans elle, SET ROLE est
+-- refusé (« permission denied to set role ») et chaque requête échouerait.
+-- Idempotent ; sur une base hébergée qui refuse l'ajout d'appartenance, la
+-- sonde au démarrage indique le GRANT à exécuter à la main.
+DO $rls$
+BEGIN
+  EXECUTE format('GRANT washpilot_app TO %I', current_user);
+EXCEPTION WHEN undefined_object OR insufficient_privilege THEN
+  RAISE NOTICE '[rls] appartenance de % au rôle washpilot_app non accordée (à faire à la main : GRANT washpilot_app TO %;).', current_user, current_user;
 END $rls$;`,
   ]
 
@@ -1465,41 +1476,6 @@ async function backfillRevenueLedger(
  */
 export function embeddedFallbackAllowed(nodeEnv: string): boolean {
   return nodeEnv !== "production"
-}
-
-/**
- * Vérifie que le rôle applicatif RLS existe, puis en informe `db-rls`.
- *
- * Créé par le schéma quand le compte de connexion a le droit ; absent sinon
- * (base hébergée verrouillée). Sans ce rôle, Postgres dispense le
- * propriétaire des politiques : l'isolation repose alors sur les
- * `WHERE organization_id` du code, et l'exploitant est prévenu au démarrage
- * plutôt qu'à la première fuite.
- */
-async function probeRlsRole(queryable: {
-  query: (text: string, values?: unknown[]) => Promise<{ rows: Array<{ available: boolean }> }>;
-}): Promise<void> {
-  try {
-    const q = await queryable.query(
-      "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'washpilot_app') AS available",
-    );
-    const available = Boolean(q.rows[0]?.available);
-    setRlsRoleAvailable(available);
-    if (available) {
-      console.info("[rls] Isolation multi-station active (rôle washpilot_app, politiques org_isolation).");
-    } else {
-      console.warn(
-        "[rls] Rôle washpilot_app indisponible : les politiques existent mais le propriétaire des tables y échappe. " +
-          "Connectez l'application avec un compte autorisé à créer des rôles, ou créez washpilot_app à la main.",
-      );
-    }
-  } catch (error) {
-    setRlsRoleAvailable(false);
-    console.warn(
-      "[rls] Vérification du rôle applicatif impossible:",
-      error instanceof Error ? error.message : error,
-    );
-  }
 }
 
 export async function initDatabaseSchema(): Promise<boolean> {

@@ -33,6 +33,7 @@ export const RLS_ROLE = "washpilot_app"
 export const ORG_SETTING = "app.current_org"
 
 let roleAvailable = false
+let fallbackWarned = false
 
 /** Appelé après l'initialisation du schéma, selon que le rôle existe. */
 export function setRlsRoleAvailable(available: boolean): void {
@@ -41,6 +42,63 @@ export function setRlsRoleAvailable(available: boolean): void {
 
 export function isRlsRoleAvailable(): boolean {
   return roleAvailable
+}
+
+/**
+ * Vérifie que le rôle applicatif existe **et** que le compte de l'application
+ * peut réellement passer sous lui.
+ *
+ * L'existence seule ne suffit pas : `SET ROLE` exige l'appartenance au rôle.
+ * Un rôle créé sans `GRANT washpilot_app TO <compte>` fait échouer chaque
+ * requête derrière « permission denied to set role » — exactement ce que la
+ * sonde doit annoncer au démarrage plutôt qu'à la première requête. Les
+ * tests en superutilisateur (PGlite) masquaient cet angle mort.
+ */
+export async function probeRlsRole(queryable: {
+  query: (text: string, values?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
+}): Promise<void> {
+  try {
+    // Sous-requêtes corrélées et non un CASE : `pg_has_role` refuse les rôles
+    // inexistants, et un CASE n'a pas d'ordre d'évaluation garanti. Ici, la
+    // fonction n'est évaluée que si la ligne du rôle existe.
+    const q = await queryable.query(
+      `SELECT
+         (SELECT rolname FROM pg_roles WHERE rolname = '${RLS_ROLE}') IS NOT NULL AS role_exists,
+         COALESCE(
+           (SELECT pg_has_role(current_user, '${RLS_ROLE}', 'MEMBER')
+              FROM pg_roles WHERE rolname = '${RLS_ROLE}'),
+           false
+         ) AS is_member,
+         current_user AS app_user`,
+    );
+    const row = q.rows[0] ?? {};
+    const roleExists = Boolean(row.role_exists);
+    const isMember = Boolean(row.is_member);
+    const appUser = typeof row.app_user === "string" ? row.app_user : "l'utilisateur de l'application";
+    setRlsRoleAvailable(roleExists && isMember);
+    if (roleExists && isMember) {
+      console.info("[rls] Isolation multi-station active (rôle washpilot_app, politiques org_isolation).");
+    } else if (roleExists) {
+      console.warn(
+        `[rls] Le rôle washpilot_app existe mais le compte « ${appUser} » n'en est pas membre : ` +
+          `SET ROLE serait refusé.\n` +
+          `[rls] Exécutez « GRANT washpilot_app TO ${appUser}; » puis redémarrez. ` +
+          `Jusque-là, l'application tourne sans le rôle applicatif : les politiques protègent ` +
+          `les comptes non propriétaires, mais pas le propriétaire des tables.`,
+      );
+    } else {
+      console.warn(
+        "[rls] Rôle washpilot_app indisponible : les politiques existent mais le propriétaire des tables y échappe. " +
+          "Connectez l'application avec un compte autorisé à créer des rôles, ou créez washpilot_app à la main.",
+      );
+    }
+  } catch (error) {
+    setRlsRoleAvailable(false);
+    console.warn(
+      "[rls] Vérification du rôle applicatif impossible:",
+      error instanceof Error ? error.message : error,
+    );
+  }
 }
 
 /**
@@ -115,13 +173,58 @@ export function bindRlsGuard(raw: RlsPool): RlsPool {
     }
   }
 
+  /**
+   * Une erreur de `SET ROLE` ne doit jamais faire tomber l'API : le compte
+   * peut perdre son appartenance en cours de route (révocation manuelle).
+   * On distingue ce refus des vraies pannes (connexion, syntaxe), qui, elles,
+   * remontent telles quelles.
+   */
+  function isRoleSetupError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error)
+    return /permission denied to set role|must be member|must be superuser|role .* does not exist|not a member/i.test(message)
+  }
+
+  /**
+   * Repli documenté : sans le rôle applicatif, la requête s'exécute comme le
+   * chemin système — les politiques protègent alors les comptes non
+   * propriétaires des tables, mais pas le propriétaire. L'opérateur est
+   * prévenu une fois, avec l'instruction exacte à exécuter.
+   */
+  function disableRoleWithWarning(error: unknown): void {
+    setRlsRoleAvailable(false)
+    if (!fallbackWarned) {
+      fallbackWarned = true
+      console.error(
+        "[rls] SET ROLE washpilot_app refusé à l'exécution : repli sans le rôle applicatif (isolation " +
+          "limitée aux comptes non propriétaires). Vérifiez « GRANT washpilot_app TO <compte>; » :",
+        error instanceof Error ? error.message : error,
+      )
+    }
+  }
+
+  async function applySetup(client: Queryable, organizationId: string): Promise<void> {
+    try {
+      await setup(client, organizationId)
+    } catch (error) {
+      if (!isRoleSetupError(error)) throw error
+      // Session neutre avant de continuer sans le rôle : un `SET ROLE` déjà
+      // appliqué ferait refuser toutes les lignes par la politique.
+      try {
+        await teardown(client)
+      } catch {
+        // Rien à réinitialiser : la mise en place a échoué avant d'agir.
+      }
+      disableRoleWithWarning(error)
+    }
+  }
+
   return {
     async query(sqlOrConfig, params) {
       const scope = currentTenantScope()
       if (!scope) return raw.query(sqlOrConfig, params)
       const client = await raw.connect()
       try {
-        await setup(client, scope.organizationId)
+        await applySetup(client, scope.organizationId)
         return await client.query(sqlOrConfig, params)
       } finally {
         try {
@@ -137,7 +240,7 @@ export function bindRlsGuard(raw: RlsPool): RlsPool {
       const client = await raw.connect()
       if (!scope) return client
       try {
-        await setup(client, scope.organizationId)
+        await applySetup(client, scope.organizationId)
       } catch (error) {
         client.release()
         throw error
