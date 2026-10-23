@@ -1,7 +1,7 @@
 import { randomBytes, createHash } from "node:crypto"
 import { Router } from "express"
 import type { NextFunction, Request, Response } from "express"
-import type { Pool } from "pg"
+import type { Pool, PoolClient } from "pg"
 import { z } from "zod"
 
 import { getPool } from "./db.ts"
@@ -180,7 +180,7 @@ export async function requireOperator(req: Request, _res: Response, next: NextFu
  * journaux, et il survit à la purge d'une organisation.
  */
 export async function logConsoleAction(
-  pool: Pool,
+  pool: Pool | PoolClient,
   operator: OperatorContext,
   action: string,
   organizationId: string | null,

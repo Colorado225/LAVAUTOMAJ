@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { resolvePgliteLocation, describePgliteLocation } from "./pglite-location.ts";
 import { chooseDatabaseTarget } from "./database-target.ts";
+import { bindRlsGuard, setRlsRoleAvailable, type RlsPool } from "./db-rls.ts";
 import { env } from "./env.ts";
 import { migrateLegacyPlatformAdmins, syncPlatformOperators } from "./console-auth.ts";
 import { hashPassword } from "./auth.ts";
@@ -94,6 +95,142 @@ export async function seedServiceCatalog(
       WHERE is_active AND NOT ((category || '|' || name) = ANY($1::text[]))`,
     [kept],
   )
+}
+
+// ---------------------------------------------------------------------------
+// Isolation multi-station au niveau des lignes (RLS)
+//
+// Les `WHERE organization_id` des routes protègent ce que le code a prévu ;
+// ces politiques protègent ce qu'il n'a pas prévu. Chaque table de station
+// n'accepte que les lignes dont `organization_id` vaut la variable
+// `app.current_org`, que la connexion soit celle de la route en cours ou
+// celle d'une tâche qui aurait oublié le filtre.
+//
+// Le mécanique complet (rôle applicatif, propagation de la portée) est
+// décrit dans `server/db-rls.ts`. Trois familles de tables :
+//
+//   • `RLS_DIRECT_TABLES` — portent leur `organization_id` ;
+//   • `RLS_PARENT_TABLES` — tables filles sans colonne d'organisation,
+//     rattachées à leur mère (une ligne de lavage ne se voit qu'à travers
+//     le lavage auquel elle appartient) ;
+//   • `RLS_NULLABLE_ORG_TABLES` — journaux techniques dont les lignes sans
+//     organisation (erreurs publiques, actions de console) restent lisibles
+//     partout, mais dont les lignes d'une station ne quittent pas la station.
+//
+// Sont volontairement **hors RLS** : `users`, `plans`, `service_catalog`,
+// les tables d'authentification et les tables de la console éditeur. Leurs
+// lectures traversent les organisations par conception ; les enfermer
+// casserait la connexion, les invitations par e-mail et la console.
+// `organizations`, la racine du locataire, est protégée par une politique à
+// part (`id = organisation courante`) : `requireTenantContext` la lit avant
+// que la portée ne soit connue — ce passage précis s'exécute hors portée,
+// comme les semis et la console.
+// ---------------------------------------------------------------------------
+
+/** Tables portant leur propre `organization_id`. */
+const RLS_DIRECT_TABLES = [
+  "subscriptions",
+  "organization_members",
+  "sites",
+  "onboarding_progress",
+  "service_categories",
+  "vehicle_categories",
+  "services",
+  "workers",
+  "work_schedules",
+  "attendance_records",
+  "customers",
+  "washes",
+  "receipt_issues",
+  "notifications",
+  "product_categories",
+  "products",
+  "stock_movements",
+  "service_consumables",
+  "payments",
+  "cash_sessions",
+  "cash_movements",
+  "expenses",
+  "suppliers",
+  "purchases",
+  "purchase_items",
+  "idempotency_keys",
+  "member_permissions",
+  "subscription_reminders",
+  "payment_intents",
+  "subscription_payments",
+  "support_requests",
+  "closure_requests",
+  "audit_logs",
+] as const
+
+/** Tables filles : visibles uniquement à travers leur mère, du même client. */
+const RLS_PARENT_TABLES = [
+  { table: "wash_items", parent: "washes", foreignKey: "wash_id" },
+  { table: "wash_assignments", parent: "washes", foreignKey: "wash_id" },
+  { table: "support_messages", parent: "support_requests", foreignKey: "request_id" },
+] as const
+
+/** Journaux techniques : lignes sans organisation visibles de tous les clients. */
+const RLS_NULLABLE_ORG_TABLES = ["error_events", "platform_audit_logs"] as const
+
+const RLS_CURRENT_ORG = "NULLIF(current_setting('app.current_org', true), '')::uuid"
+
+function rlsPolicy(tableName: string, predicate: string): string {
+  return [
+    `ALTER TABLE ${tableName} ENABLE ROW LEVEL SECURITY;`,
+    `DROP POLICY IF EXISTS org_isolation ON ${tableName};`,
+    `CREATE POLICY org_isolation ON ${tableName}`,
+    `  USING (${predicate})`,
+    `  WITH CHECK (${predicate});`,
+  ].join("\n")
+}
+
+function rlsSchemaSql(): string {
+  const blocks: string[] = [
+    `-- Rôle applicatif : droits DML uniquement, ni superutilisateur ni
+-- BYPASSRLS. Les politiques s'appliquent à lui, contrairement au
+-- propriétaire des tables que Postgres en dispense par principe. Créé de
+-- façon idempotente ; sans droits suffisants (base hébergée verrouillée),
+-- les politiques restent posées et protègent les connexions non
+-- propriétaires, et le démarrage continue.
+DO $rls$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'washpilot_app') THEN
+    CREATE ROLE washpilot_app NOLOGIN;
+  END IF;
+EXCEPTION WHEN insufficient_privilege THEN
+  RAISE NOTICE '[rls] rôle washpilot_app non créable (droits insuffisants).';
+END $rls$;
+
+DO $rls$
+BEGIN
+  EXECUTE 'GRANT USAGE ON SCHEMA public TO washpilot_app';
+  EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO washpilot_app';
+  EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO washpilot_app';
+EXCEPTION WHEN undefined_object OR insufficient_privilege THEN
+  RAISE NOTICE '[rls] droits du rôle washpilot_app non accordés.';
+END $rls$;`,
+  ]
+
+  // La racine du locataire : une station ne voit que la sienne.
+  blocks.push(rlsPolicy("organizations", `id = ${RLS_CURRENT_ORG}`))
+
+  for (const table of RLS_DIRECT_TABLES) {
+    blocks.push(rlsPolicy(table, `organization_id = ${RLS_CURRENT_ORG}`))
+  }
+  for (const { table, parent, foreignKey } of RLS_PARENT_TABLES) {
+    blocks.push(
+      rlsPolicy(
+        table,
+        `EXISTS (SELECT 1 FROM ${parent} p WHERE p.id = ${table}.${foreignKey} AND p.organization_id = ${RLS_CURRENT_ORG})`,
+      ),
+    )
+  }
+  for (const table of RLS_NULLABLE_ORG_TABLES) {
+    blocks.push(rlsPolicy(table, `(organization_id IS NULL OR organization_id = ${RLS_CURRENT_ORG})`))
+  }
+  return blocks.join("\n\n")
 }
 
 /**
@@ -940,7 +1077,7 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user ON password_reset_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_expires ON password_reset_tokens(expires_at);
-`;
+` + rlsSchemaSql();
 
 /**
  * Jeu de démonstration (station, équipe, lavages, caisse).
@@ -1175,6 +1312,19 @@ async function seedDemoData(
 function createPglitePool(pglite: PGlite): pg.Pool {
   let transactionLock: Promise<void> = Promise.resolve();
 
+  // NOTE D'ARCHITECTURE — sérialisation.
+  //
+  // Seul `connect()` est sérialisé (verrou de transaction historique) : deux
+  // clients interactifs ne peuvent pas s'entremêler leurs `BEGIN`/`COMMIT`.
+  // `query()` ne l'est PAS, volontairement. Sur Postgres réel, `pool.query`
+  // ouvre de toute façon une connexion distincte — il ne rejoint jamais la
+  // transaction d'un client. Sérialiser `query()` contre les clients ouverts
+  // ne ferait donc rien d'utile en production, et provoquerait des morts
+  // subites dès qu'un code tient un client et interroge le pool dans le même
+  // flux (patron présent dans les tests). Sur PGlite (une seule connexion),
+  // l'entremêlement historique est conservé tel quel ; le chemin système
+  // reste de toute façon explicite (`runWithTenant` absent → pas de
+  // `SET ROLE`, requête exécutée en propriétaire).
   const runQuery = async <R = Record<string, unknown>>(
     sqlOrConfig: string | { text?: string; sql?: string; values?: unknown[] },
     params?: unknown[],
@@ -1317,6 +1467,41 @@ export function embeddedFallbackAllowed(nodeEnv: string): boolean {
   return nodeEnv !== "production"
 }
 
+/**
+ * Vérifie que le rôle applicatif RLS existe, puis en informe `db-rls`.
+ *
+ * Créé par le schéma quand le compte de connexion a le droit ; absent sinon
+ * (base hébergée verrouillée). Sans ce rôle, Postgres dispense le
+ * propriétaire des politiques : l'isolation repose alors sur les
+ * `WHERE organization_id` du code, et l'exploitant est prévenu au démarrage
+ * plutôt qu'à la première fuite.
+ */
+async function probeRlsRole(queryable: {
+  query: (text: string, values?: unknown[]) => Promise<{ rows: Array<{ available: boolean }> }>;
+}): Promise<void> {
+  try {
+    const q = await queryable.query(
+      "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'washpilot_app') AS available",
+    );
+    const available = Boolean(q.rows[0]?.available);
+    setRlsRoleAvailable(available);
+    if (available) {
+      console.info("[rls] Isolation multi-station active (rôle washpilot_app, politiques org_isolation).");
+    } else {
+      console.warn(
+        "[rls] Rôle washpilot_app indisponible : les politiques existent mais le propriétaire des tables y échappe. " +
+          "Connectez l'application avec un compte autorisé à créer des rôles, ou créez washpilot_app à la main.",
+      );
+    }
+  } catch (error) {
+    setRlsRoleAvailable(false);
+    console.warn(
+      "[rls] Vérification du rôle applicatif impossible:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
 export async function initDatabaseSchema(): Promise<boolean> {
   // La base à ouvrir est décidée par une fonction pure, testée à part. En mode
   // test, elle ignore `DATABASE_URL` : une suite qui écrirait dans la base de
@@ -1351,11 +1536,12 @@ export async function initDatabaseSchema(): Promise<boolean> {
       });
       await externalPool.query("SELECT 1");
       await externalPool.query(schemaSql);
+      await probeRlsRole(externalPool);
       await seedServiceCatalog(externalPool.query.bind(externalPool));
       await migrateLegacyPlatformAdmins(externalPool.query.bind(externalPool));
       await syncPlatformOperators(externalPool.query.bind(externalPool));
       await backfillRevenueLedger(externalPool.query.bind(externalPool));
-      pool = externalPool;
+      pool = bindRlsGuard(externalPool as unknown as RlsPool) as unknown as pg.Pool;
       ready = true;
       console.info("[db] Connecté à PostgreSQL via DATABASE_URL");
       return true;
@@ -1390,8 +1576,10 @@ export async function initDatabaseSchema(): Promise<boolean> {
       await mkdir(location.dataDir, { recursive: true });
     }
     pgliteInstance = location.dataDir ? new PGlite(location.dataDir) : new PGlite();
-    pool = createPglitePool(pgliteInstance);
-    await pool.query(schemaSql);
+    const rawPool = createPglitePool(pgliteInstance);
+    await rawPool.query(schemaSql);
+    await probeRlsRole(rawPool);
+    pool = bindRlsGuard(rawPool as unknown as RlsPool) as unknown as pg.Pool;
     await seedServiceCatalog(pool.query.bind(pool));
     await seedDemoData(pool.query.bind(pool));
     await migrateLegacyPlatformAdmins(pool.query.bind(pool));
