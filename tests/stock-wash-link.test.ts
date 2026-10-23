@@ -84,7 +84,7 @@ async function creerPrestation(nom: string) {
   const response = await api("/api/v1/services", {
     as: "demo@washpilot.ci",
     method: "POST",
-    body: { name: nom, price_cents: 200_000, duration_minutes: 30 },
+    body: { name: nom, duration_minutes: 30, vehicle_pricing: [{ vehicle_category_id: vehicleCategoryId, price_cents: 200_000 }] },
   })
   assert.equal(response.status, 201, `création de la prestation ${nom}`)
   return String((await response.json()).id)

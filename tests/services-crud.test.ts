@@ -1,15 +1,21 @@
 /**
- * CRUD d'une prestation : type de service, catégorie de véhicule, prix.
+ * CRUD d'une prestation : type de service, catégories de véhicules autorisées,
+ * tarif par catégorie.
  *
- * C'est le parcours qui manquait : le catalogue permettait de nommer une
- * prestation et de lui donner un prix, mais ni de la rattacher à une catégorie
- * de véhicule précise depuis l'interface, ni de la supprimer. Ce fichier
- * vérifie la chaîne complète, dans l'ordre où elle casse :
+ * Contrat depuis la refonte : l'**éligibilité** (catégorie autorisée) et le
+ * **tarif** sont inséparables — une entrée de `vehicle_pricing` = « cette
+ * catégorie peut bénéficier de la prestation, à ce prix ». Aucun repli vers
+ * un prix de base ou de famille ne peut contourner une interdiction, même
+ * dans une requête HTTP construite à la main. Ce fichier vérifie la chaîne
+ * complète, dans l'ordre où elle casse :
  *
- *   1. la prestation se crée avec sa catégorie de véhicule et son prix ;
- *   2. c'est **ce prix-là** qui part dans le lavage, pas le prix de base ;
- *   3. une modification de tarif s'applique au lavage suivant ;
- *   4. la suppression est propre : refusée si un lavage la référence, les
+ *   1. la prestation se crée avec ses catégories autorisées et leurs prix ;
+ *   2. c'est **le prix configuré pour la catégorie** qui part dans le lavage ;
+ *   3. une modification de tarif s'applique au lavage suivant, jamais aux
+ *      lavages déjà enregistrés (instantanés) ;
+ *   4. les refus métier : sans catégorie, prix manquant ou invalide, catégorie
+ *      inconnue ou d'une autre station ;
+ *   5. la suppression est propre : refusée si un lavage la référence, les
  *      consommables partent avec elle, et rien ne traverse les organisations.
  */
 import test, { after, before } from "node:test"
@@ -28,6 +34,7 @@ let siteId: string
 let vehicleCategoryId: string
 let siblingCategoryId: string
 let serviceId: string
+let firstWashId: string
 
 const PASSWORD = "WashPilot2026!"
 let cookie = ""
@@ -88,10 +95,10 @@ after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 1. Création : type de service + catégorie de véhicule + prix
+// 1. Création : catégories autorisées + tarifs
 // ---------------------------------------------------------------------------
 
-test("créer une prestation avec sa catégorie de véhicule et son prix", async () => {
+test("créer une prestation avec ses catégories autorisées et leurs prix", async () => {
   const first = await api("/api/v1/vehicle-categories", {
     method: "POST",
     body: { name: "SUV clientèle pro", family: "suv" },
@@ -101,8 +108,9 @@ test("créer une prestation avec sa catégorie de véhicule et son prix", async 
   vehicleCategoryId = category.id
   assert.equal(category.family, "suv")
 
-  // Une seconde catégorie de la même famille : elle doit retomber sur le
-  // tarif de famille, et non sur celui de sa voisine.
+  // Une seconde catégorie de la même famille, avec son propre tarif : dans le
+  // nouveau modèle, la famille ne partage plus rien d'implicite — deux
+  // catégories, deux autorisations, deux prix.
   const sibling = await api("/api/v1/vehicle-categories", {
     method: "POST",
     body: { name: "SUV familial test", family: "suv" },
@@ -114,9 +122,11 @@ test("créer une prestation avec sa catégorie de véhicule et son prix", async 
     body: {
       name: "Lavage intérieur simple",
       description: "Aspiration, tableau de bord et plastiques.",
-      price_cents: 150000,
       duration_minutes: 20,
-      price_by_vehicle_type: { suv: 200000, [vehicleCategoryId]: 300000 },
+      vehicle_pricing: [
+        { vehicle_category_id: vehicleCategoryId, price_cents: 300000 },
+        { vehicle_category_id: siblingCategoryId, price_cents: 200000 },
+      ],
     },
   })
   assert.equal(response.status, 201, JSON.stringify(await response.clone().json()))
@@ -124,15 +134,16 @@ test("créer une prestation avec sa catégorie de véhicule et son prix", async 
   serviceId = service.id
   assert.equal(service.name, "Lavage intérieur simple")
   assert.equal(service.duration_minutes, 20)
-  assert.equal(service.price_by_vehicle_type[vehicleCategoryId], 300000)
-  assert.equal(service.price_by_vehicle_type.suv, 200000)
+  assert.equal(service.vehicle_prices[vehicleCategoryId], 300000)
+  assert.equal(service.vehicle_prices[siblingCategoryId], 200000)
+  assert.equal(service.vehicle_pricing.length, 2, "les deux associations sont enregistrées")
 })
 
 // ---------------------------------------------------------------------------
-// 2. Facturation : le prix de la catégorie l'emporte
+// 2. Facturation : le tarif configuré pour la catégorie, uniquement
 // ---------------------------------------------------------------------------
 
-async function washTotal(categoryId: string): Promise<number> {
+async function washTotal(categoryId: string): Promise<{ id: string; total: number }> {
   const response = await api("/api/v1/washes", {
     method: "POST",
     key: `crud-${categoryId}-${Math.random().toString(36).slice(2)}`,
@@ -148,24 +159,44 @@ async function washTotal(categoryId: string): Promise<number> {
     },
   })
   assert.ok([200, 201].includes(response.status), JSON.stringify(await response.clone().json()))
-  return Number((await response.json()).total_cents)
+  const wash = await response.json()
+  return { id: String(wash.id), total: Number(wash.total_cents) }
 }
 
-test("le lavage facture le prix de la catégorie, puis celui de la famille", async () => {
-  // Catégorie nommée dans le tarif : 3 000 F.
-  assert.equal(await washTotal(vehicleCategoryId), 300000)
-  // Catégorie sœur, non nommée : elle hérite du tarif de la famille SUV.
-  assert.equal(await washTotal(siblingCategoryId), 200000)
+test("le lavage facture le prix configuré pour la catégorie du véhicule", async () => {
+  const first = await washTotal(vehicleCategoryId)
+  assert.equal(first.total, 300000)
+  firstWashId = first.id
+  // Catégorie sœur de la même famille, tarif différent : elle paie LE SIEN.
+  // Sous l'ancien modèle, une clé de famille aurait couvert les deux.
+  const sibling = await washTotal(siblingCategoryId)
+  assert.equal(sibling.total, 200000)
 })
 
-test("modifier le prix d'une catégorie s'applique au lavage suivant", async () => {
+test("modifier un tarif s'applique au lavage suivant, jamais aux lavages enregistrés", async () => {
   const response = await api(`/api/v1/services/${serviceId}`, {
     method: "PATCH",
-    body: { price_by_vehicle_type: { suv: 200000, [vehicleCategoryId]: 350000 } },
+    body: {
+      vehicle_pricing: [
+        { vehicle_category_id: vehicleCategoryId, price_cents: 350000 },
+        { vehicle_category_id: siblingCategoryId, price_cents: 200000 },
+      ],
+    },
   })
   assert.equal(response.status, 200, JSON.stringify(await response.clone().json()))
-  assert.equal((await response.json()).price_by_vehicle_type[vehicleCategoryId], 350000)
-  assert.equal(await washTotal(vehicleCategoryId), 350000)
+  assert.equal((await response.json()).vehicle_prices[vehicleCategoryId], 350000)
+  const next = await washTotal(vehicleCategoryId)
+  assert.equal(next.total, 350000, "le nouveau tarif s'applique au lavage suivant")
+
+  // L'historique est figé : le lavage créé avant la modification garde son
+  // prix et son libellé du jour, gravés dans `wash_items`.
+  const items = await pool.query(
+    "SELECT service_name, unit_price_cents, line_total_cents FROM wash_items WHERE wash_id=$1::uuid",
+    [firstWashId],
+  )
+  assert.equal(items.rowCount, 1)
+  assert.equal(Number(items.rows[0].unit_price_cents), 300000, "l'ancien lavage a été réécrit")
+  assert.equal(String(items.rows[0].service_name), "Lavage intérieur simple")
 
   // Le changement est journalisé : un tarif qui bouge sans trace est un
   // litige de caisse qui ne se tranche pas.
@@ -176,7 +207,68 @@ test("modifier le prix d'une catégorie s'applique au lavage suivant", async () 
   assert.ok(audit.rowCount, "aucune trace d'audit pour la modification de prix")
 })
 
-test("un prix de catégorie inconnue de la station est refusé", async () => {
+// ---------------------------------------------------------------------------
+// 3. Les refus métier — jamais de contournement par la requête
+// ---------------------------------------------------------------------------
+
+test("une prestation sans catégorie autorisée est refusée", async () => {
+  const response = await api("/api/v1/services", {
+    method: "POST",
+    body: { name: "Sans catégorie", vehicle_pricing: [] },
+  })
+  assert.equal(response.status, 400)
+})
+
+test("un tarif manquant est refusé, jamais remplacé par zéro", async () => {
+  const response = await api("/api/v1/services", {
+    method: "POST",
+    body: {
+      name: "Prix manquant",
+      vehicle_pricing: [{ vehicle_category_id: vehicleCategoryId, price_cents: undefined }],
+    },
+  })
+  assert.equal(response.status, 400)
+  const body = await response.json()
+  assert.match(String(body.error?.message ?? ""), /Renseignez le prix/i)
+})
+
+test("un tarif invalide est refusé", async () => {
+  const response = await api("/api/v1/services", {
+    method: "POST",
+    body: {
+      name: "Prix invalide",
+      vehicle_pricing: [{ vehicle_category_id: vehicleCategoryId, price_cents: -500 }],
+    },
+  })
+  assert.equal(response.status, 400)
+})
+
+test("une catégorie dupliquée est refusée", async () => {
+  const response = await api("/api/v1/services", {
+    method: "POST",
+    body: {
+      name: "Doublon",
+      vehicle_pricing: [
+        { vehicle_category_id: vehicleCategoryId, price_cents: 100000 },
+        { vehicle_category_id: vehicleCategoryId, price_cents: 200000 },
+      ],
+    },
+  })
+  assert.equal(response.status, 400)
+  assert.equal((await response.json()).error?.code, "duplicate_vehicle_category")
+})
+
+test("une catégorie inexistante ou d'une autre station est refusée", async () => {
+  const unknown = await api("/api/v1/services", {
+    method: "POST",
+    body: {
+      name: "Catégorie inconnue",
+      vehicle_pricing: [{ vehicle_category_id: "11111111-1111-4111-8111-111111111111", price_cents: 100000 }],
+    },
+  })
+  assert.equal(unknown.status, 400)
+  assert.equal((await unknown.json()).error?.code, "invalid_vehicle_category")
+
   const otherOrg = await pool.query("INSERT INTO organizations(name) VALUES('Station voisine CRUD') RETURNING id")
   const foreign = await pool.query(
     "INSERT INTO vehicle_categories(organization_id, name, family) VALUES($1::uuid,'Catégorie voisine','suv') RETURNING id",
@@ -184,28 +276,80 @@ test("un prix de catégorie inconnue de la station est refusé", async () => {
   )
   const response = await api(`/api/v1/services/${serviceId}`, {
     method: "PATCH",
-    body: { price_by_vehicle_type: { [foreign.rows[0].id]: 900000 } },
+    body: {
+      vehicle_pricing: [
+        { vehicle_category_id: vehicleCategoryId, price_cents: 350000 },
+        { vehicle_category_id: foreign.rows[0].id, price_cents: 900000 },
+      ],
+    },
   })
   assert.equal(response.status, 400)
-  assert.equal((await response.json()).error.code, "invalid_vehicle_category")
+  assert.equal((await response.json()).error?.code, "invalid_vehicle_category")
+})
+
+test("décocher une catégorie retire son autorisation, sans la rendre gratuite", async () => {
+  // La catégorie sœur est ôtée de la configuration : un lavage qui la
+  // réclamerait — même avec une requête écrite à la main — est refusé.
+  const response = await api(`/api/v1/services/${serviceId}`, {
+    method: "PATCH",
+    body: {
+      vehicle_pricing: [{ vehicle_category_id: vehicleCategoryId, price_cents: 350000 }],
+    },
+  })
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()))
+  const service = await response.json()
+  assert.equal(service.vehicle_prices[siblingCategoryId], undefined, "l'association décochée survit")
+
+  const bypass = await api("/api/v1/washes", {
+    method: "POST",
+    key: `bypass-${Math.random().toString(36).slice(2)}`,
+    body: {
+      site_id: siteId,
+      vehicle_category_id: siblingCategoryId,
+      plate: "7777 BYPASS 01",
+      customer_name: "Contournement",
+      payment_method: "cash",
+      amount_received_cents: 0,
+      worker_ids: [],
+      items: [{ service_id: serviceId, quantity: 1 }],
+    },
+  })
+  assert.equal(bypass.status, 400, "le contournement par requête manuelle a fonctionné")
+  assert.equal((await bypass.json()).error?.code, "service_not_available_for_vehicle")
+
+  // La catégorie ré-autorisée repart sur son tarif, jamais gratuite.
+  const back = await api(`/api/v1/services/${serviceId}`, {
+    method: "PATCH",
+    body: {
+      vehicle_pricing: [
+        { vehicle_category_id: vehicleCategoryId, price_cents: 350000 },
+        { vehicle_category_id: siblingCategoryId, price_cents: 200000 },
+      ],
+    },
+  })
+  assert.equal(back.status, 200)
 })
 
 // ---------------------------------------------------------------------------
-// 3. Suppression
+// 4. Suppression
 // ---------------------------------------------------------------------------
 
 test("une prestation déjà vendue ne se supprime pas, elle se désactive", async () => {
   const response = await api(`/api/v1/services/${serviceId}`, { method: "DELETE" })
   assert.equal(response.status, 409)
-  assert.equal((await response.json()).error.code, "service_in_use")
+  assert.equal((await response.json()).error?.code, "service_in_use")
   const still = await pool.query("SELECT is_active FROM services WHERE id=$1::uuid", [serviceId])
   assert.equal(still.rowCount, 1, "la prestation a disparu malgré le refus")
 })
 
-test("supprimer une prestation jamais vendue, consommables compris", async () => {
+test("supprimer une prestation jamais vendue, associations et consommables compris", async () => {
   const created = await api("/api/v1/services", {
     method: "POST",
-    body: { name: "Lustrage de la carrosserie", price_cents: 500000, duration_minutes: 60 },
+    body: {
+      name: "Lustrage de la carrosserie",
+      duration_minutes: 60,
+      vehicle_pricing: [{ vehicle_category_id: vehicleCategoryId, price_cents: 500000 }],
+    },
   })
   assert.equal(created.status, 201)
   const service = await created.json()
@@ -229,6 +373,8 @@ test("supprimer une prestation jamais vendue, consommables compris", async () =>
   assert.equal(gone.rowCount, 0, "la prestation est toujours là")
   const consumables = await pool.query("SELECT 1 FROM service_consumables WHERE service_id=$1::uuid", [service.id])
   assert.equal(consumables.rowCount, 0, "le consommable survit à sa prestation")
+  const pricing = await pool.query("SELECT 1 FROM service_vehicle_prices WHERE service_id=$1::uuid", [service.id])
+  assert.equal(pricing.rowCount, 0, "les associations survivent à la prestation")
 
   const audit = await pool.query(
     "SELECT 1 FROM audit_logs WHERE organization_id=$1::uuid AND entity_id=$2::text AND action='service.deleted'",

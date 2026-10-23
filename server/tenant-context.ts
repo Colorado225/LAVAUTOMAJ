@@ -33,6 +33,19 @@ export function runWithTenant<T>(scope: TenantScope, fn: () => T): T {
   return storage.run(scope, fn)
 }
 
+/**
+ * Exécute `fn` hors de toute portée de locataire.
+ *
+ * Pour les écritures qui survivent à la réponse (surveillance, incidents) ou
+ * tout travail système déclenché depuis une requête : sans cette sortie
+ * explicite, le `AsyncLocalStorage` suivrait le `finish` de la réponse et la
+ * rédaction de métriques tenterait — à tort — de passer sous le rôle
+ * applicatif de la station.
+ */
+export function runWithoutTenant<T>(fn: () => T): T {
+  return storage.exit(fn)
+}
+
 /** Portée courante, ou `null` hors d'une requête de station. */
 export function currentTenantScope(): TenantScope | null {
   return storage.getStore() ?? null

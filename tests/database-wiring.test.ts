@@ -593,7 +593,15 @@ test("toute table du schéma est utilisée, toute table utilisée existe", async
     "only", "lateral", "the", "of", "a", "an", "this", "that", "it", "excluded",
     "generate_series", "unnest", "jsonb_array_elements", "pg_catalog",
   ])
-  const ghosts = [...referenced].filter((table) => !created.has(table) && !sqlWords.has(table))
+  // Les catalogues PostgreSQL (`pg_*`, `information_schema`) ne sont jamais
+  // des tables de l'application : la sonde RLS lit `pg_roles`, le schéma y
+  // crée le rôle applicatif. Les exclure par préfixe plutôt qu'à la main —
+  // la prochaine lecture de catalogue ne relèvera pas du bruit non plus.
+  const isSystemCatalog = (table: string) =>
+    table.startsWith("pg_") || table.startsWith("information_schema")
+  const ghosts = [...referenced].filter(
+    (table) => !created.has(table) && !sqlWords.has(table) && !isSystemCatalog(table),
+  )
   assert.deepEqual(ghosts, [], `tables utilisées mais absentes du schéma : ${ghosts.join(", ")}`)
 })
 

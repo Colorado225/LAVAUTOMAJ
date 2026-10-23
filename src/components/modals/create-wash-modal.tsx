@@ -25,7 +25,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { apiFetch, apiErrorMessage } from "@/lib/api"
 import { createIdempotencyKey } from "@/lib/idempotency"
-import { resolveUnitPrice } from "@/lib/service-pricing"
+import { configuredPriceFor, isEligibleFor } from "@/lib/service-pricing"
 import { toastSuccess, toastError } from "@/lib/toast"
 import { RefreshCw, CarFront, Wallet } from "lucide-react"
 
@@ -75,6 +75,8 @@ interface Service {
   name: string
   price_cents: number
   price_by_vehicle_type?: Record<string, number> | null
+  /** Catégories autorisées et leur tarif (clé présente = autorisée). */
+  vehicle_prices?: Record<string, number> | null
   is_active: boolean
 }
 interface Worker {
@@ -208,27 +210,56 @@ export function CreateWashModal({
       ),
     [items]
   )
-  // Le véhicule retenu porte le prix : même règle que le serveur, sans quoi
-  // le total affiché ici divergerait de celui qui sera facturé.
+  // Le véhicule retenu porte l'éligibilité et le prix : même règle que le
+  // serveur, sans quoi le total affiché ici divergerait du montant facturé.
   const selectedVehicle = useMemo(() => {
     const id = form.watch("vehicle_category_id")
     const category = categories.find((item) => item.id === id)
     return category ? { id: category.id, family: category.family ?? null } : null
   }, [categories, form])
 
+  // Seules les prestations autorisées pour le véhicule sont proposées.
+  const eligibleServices = useMemo(
+    () =>
+      selectedVehicle
+        ? activeServices.filter((service) => isEligibleFor(service, selectedVehicle.id))
+        : activeServices,
+    [activeServices, selectedVehicle]
+  )
+
   const totalCents = useMemo(
     () =>
-      activeServices.reduce(
+      eligibleServices.reduce(
         (total, service) =>
-          total + resolveUnitPrice(service, selectedVehicle) * (selectedServices.get(service.id) ?? 0),
+          total +
+          (configuredPriceFor(service, selectedVehicle?.id ?? null) ?? 0) *
+            (selectedServices.get(service.id) ?? 0),
         0
       ),
-    [activeServices, selectedServices, selectedVehicle]
+    [eligibleServices, selectedServices, selectedVehicle]
   )
   const cashNeedsSession =
     paymentMethod === "cash" && amountReceivedCents > 0
   const cashSessionMissing =
     cashNeedsSession && (!cashSession || cashSession.status !== "open")
+
+  /**
+   * Choisir la catégorie du véhicule retire du panier les prestations qui ne
+   * lui sont pas autorisées : l'interdiction s'applique tout de suite, elle
+   * n'attend pas la validation serveur.
+   */
+  function chooseVehicle(value: string) {
+    setValue("vehicle_category_id", value, { shouldValidate: true })
+    const category = categories.find((item) => item.id === value)
+    if (!category) return
+    const currentItems = form.getValues("items") ?? []
+    const doomed: number[] = []
+    currentItems.forEach((item, index) => {
+      const service = services.find((candidate) => candidate.id === item.service_id)
+      if (service && !isEligibleFor(service, category.id)) doomed.push(index)
+    })
+    for (let index = doomed.length - 1; index >= 0; index -= 1) remove(doomed[index])
+  }
 
   function toggleService(serviceId: string, checked: boolean) {
     if (checked) {
@@ -371,7 +402,7 @@ export function CreateWashModal({
               <Select
                 value={watch("vehicle_category_id") || undefined}
                 onValueChange={(value: string | null) =>
-                  setValue("vehicle_category_id", value ?? "", { shouldValidate: true })
+                  chooseVehicle(value ?? "")
                 }
               >
                 <SelectTrigger>
@@ -398,9 +429,13 @@ export function CreateWashModal({
               <p className="text-sm text-muted-foreground">
                 Aucune prestation active disponible.
               </p>
+            ) : eligibleServices.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Aucune prestation n’est autorisée pour cette catégorie de véhicule.
+              </p>
             ) : (
               <div className="grid gap-2 sm:grid-cols-3">
-                {activeServices.map((service) => {
+                {eligibleServices.map((service) => {
                   const quantity = serviceQuantity(service.id)
                   return (
                     <label
@@ -430,10 +465,12 @@ export function CreateWashModal({
                         />
                       )}
                       <span className="ml-auto text-xs text-muted-foreground">
-                        {resolveUnitPrice(service, selectedVehicle) > 0
-                          ? (resolveUnitPrice(service, selectedVehicle) / 100).toLocaleString("fr-CI") +
-                          " F CFA"
-                          : "Gratuit"}
+                        {selectedVehicle
+                          ? (configuredPriceFor(service, selectedVehicle.id) ?? 0) > 0
+                            ? ((configuredPriceFor(service, selectedVehicle.id) ?? 0) / 100).toLocaleString("fr-CI") +
+                              " F CFA"
+                            : "Gratuit"
+                          : "Tarif selon la catégorie"}
                       </span>
                     </label>
                   )

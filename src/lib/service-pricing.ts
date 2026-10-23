@@ -111,3 +111,55 @@ export function effectivePriceForFamily(service: PricedService, family: string):
   const override = service.price_by_vehicle_type?.[family]
   return usable(override) ? override : service.price_cents
 }
+
+// ---------------------------------------------------------------------------
+// Modèle explicite : `service_vehicle_prices` (éligibilité ≠ tarif)
+// ---------------------------------------------------------------------------
+
+/**
+ * Une prestation avec ses associations d'éligibilité : `vehicle_prices` lie
+ * l'identifiant d'une catégorie de véhicule au tarif configuré pour elle.
+ *
+ * La **présence de la clé** est l'autorisation ; sa valeur est le prix.
+ * Une clé absente signifie « interdite », même si un prix de base ou de
+ * famille existe par ailleurs — aucun repli ne contourne une interdiction.
+ * Une map `null`/absente (données anciennes non jointes) est traitée comme
+ * vide : en cas de doute, on refuse plutôt que d'autoriser.
+ */
+export interface EligibleService extends PricedService {
+  vehicle_prices?: Record<string, number> | null
+}
+
+/** La prestation est-elle autorisée pour cette catégorie de véhicule ? */
+export function isEligibleFor(
+  service: EligibleService,
+  vehicleCategoryId: string | null | undefined,
+): boolean {
+  if (!vehicleCategoryId) return false
+  const prices = service.vehicle_prices
+  if (!prices) return false
+  return usable(prices[vehicleCategoryId])
+}
+
+/**
+ * Tarif configuré pour une catégorie autorisée, ou `null` si la prestation
+ * n'est pas autorisée pour elle. Jamais de prix de repli : le montant
+ * facturé est celui que le gérant a enregistré pour cette catégorie.
+ */
+export function configuredPriceFor(
+  service: EligibleService,
+  vehicleCategoryId: string | null | undefined,
+): number | null {
+  if (!vehicleCategoryId) return null
+  const prices = service.vehicle_prices
+  if (!prices) return null
+  const price = prices[vehicleCategoryId]
+  return usable(price) ? price : null
+}
+
+/** Amplitude des tarifs réellement configurés (modèle explicite). */
+export function configuredPriceRange(service: EligibleService): { min: number; max: number } | null {
+  const values = Object.values(service.vehicle_prices ?? {}).filter(usable)
+  if (values.length === 0) return null
+  return { min: Math.min(...values), max: Math.max(...values) }
+}

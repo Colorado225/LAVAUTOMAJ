@@ -1,7 +1,7 @@
 import { Router } from "express"
 import { z } from "zod"
 import type { Pool } from "pg"
-import { getPool } from "./db.ts"
+import { getPool, SERVICE_ELIGIBILITY_TRANSCRIPTION_SQL } from "./db.ts"
 import { asyncRoute, body, tenant, requirePermission } from "./http.ts"
 import { HttpError } from "./auth.ts"
 import { TRIAL_DAYS, invalidateSubscriptionCache } from "./entitlements.ts"
@@ -433,6 +433,7 @@ export function createOnboardingRouter() {
                 categoryName: serviceCategoryName(template?.category),
                 duration_minutes: template?.duration_minutes ?? null,
                 description: template?.description ?? null,
+                template_id: item.template_id ?? null,
               }
             }),
             ...services.data.custom.map((item) => ({
@@ -441,14 +442,15 @@ export function createOnboardingRouter() {
               categoryName: serviceCategoryName(item.category),
               duration_minutes: null,
               description: null,
+              template_id: null,
             })),
           ]
           for (const service of allServices) {
             const categoryId =
               serviceCategoryByName.get(service.categoryName.toLowerCase()) ?? null
             await client.query(
-              `INSERT INTO services(organization_id, name, price_cents, category_id, duration_minutes, description)
-               SELECT $1, $2, $3, $4, $5, $6
+              `INSERT INTO services(organization_id, template_id, name, price_cents, category_id, duration_minutes, description)
+               SELECT $1, $7::uuid, $2, $3, $4, $5, $6
                WHERE NOT EXISTS (SELECT 1 FROM services WHERE organization_id=$1::uuid AND lower(name)=lower($2))`,
               [
                 t.organizationId,
@@ -457,9 +459,15 @@ export function createOnboardingRouter() {
                 categoryId,
                 service.duration_minutes,
                 service.description,
+                service.template_id,
               ],
             )
           }
+          // Éligibilité explicite : l'assistant ne saisit pas de prix par
+          // catégorie, ses prestations sont donc ouvertes aux catégories
+          // connues de la station, au prix annoncé. Le gérant pourra ensuite
+          // restreindre et différencier depuis le formulaire Prestations.
+          await client.query(SERVICE_ELIGIBILITY_TRANSCRIPTION_SQL)
         }
 
         // 3. Workers — same idempotent insert by (first_name, last_name).

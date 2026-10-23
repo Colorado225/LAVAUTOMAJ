@@ -9,13 +9,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 
-import {
-  effectivePriceForFamily,
-  hasVehiclePricing,
-  isFamilyPriceKey,
-  priceRange,
-  resolveUnitPrice,
-} from "../src/lib/service-pricing.ts"
+import { effectivePriceForFamily, hasVehiclePricing, isFamilyPriceKey, priceRange, resolveUnitPrice, isEligibleFor, configuredPriceFor, configuredPriceRange } from "../src/lib/service-pricing.ts"
 
 const SUV = { id: "cat-suv", family: "suv" }
 const MOTO = { id: "cat-moto", family: "deux_roues" }
@@ -92,4 +86,44 @@ test("le formulaire pré-remplit le tarif de famille, pas le prix de base", () =
   const service = { price_cents: 300_000, price_by_vehicle_type: { suv: 500_000 } }
   assert.equal(effectivePriceForFamily(service, "suv"), 500_000)
   assert.equal(effectivePriceForFamily(service, "deux_roues"), 300_000)
+})
+
+// ---------------------------------------------------------------------------
+// Modèle explicite : l'éligibilité est distincte du tarif
+// ---------------------------------------------------------------------------
+
+test("sans association, la prestation n'est pas autorisée — le prix de base ne l'ouvre pas", () => {
+  const service = { price_cents: 300_000, vehicle_prices: { "cat-berline": 500_000 } }
+  assert.equal(isEligibleFor(service, "cat-moto"), false)
+  assert.equal(isEligibleFor(service, null), false)
+  assert.equal(isEligibleFor(service, undefined), false)
+})
+
+test("la présence de la clé autorise, sa valeur fixe le prix", () => {
+  const service = { price_cents: 300_000, vehicle_prices: { "cat-berline": 500_000, "cat-suv": 800_000 } }
+  assert.equal(isEligibleFor(service, "cat-berline"), true)
+  assert.equal(configuredPriceFor(service, "cat-berline"), 500_000)
+  assert.equal(configuredPriceFor(service, "cat-suv"), 800_000)
+})
+
+test("une prestation non configurée est close : aucun repli, aucun prix", () => {
+  const legacy = { price_cents: 300_000 }
+  assert.equal(isEligibleFor(legacy, "cat-berline"), false)
+  assert.equal(configuredPriceFor(legacy, "cat-berline"), null)
+  assert.equal(configuredPriceRange(legacy), null)
+})
+
+test("les valeurs douteuses d'une association n'autorisent rien", () => {
+  const service = {
+    price_cents: 0,
+    vehicle_prices: { "cat-a": Number.NaN, "cat-b": -5, "cat-c": null as unknown as number },
+  }
+  assert.equal(isEligibleFor(service, "cat-a"), false)
+  assert.equal(isEligibleFor(service, "cat-b"), false)
+  assert.equal(isEligibleFor(service, "cat-c"), false)
+})
+
+test("l'amplitude des tarifs configurés reflète les associations, pas la famille", () => {
+  const service = { price_cents: 1, vehicle_prices: { "cat-berline": 500_000, "cat-suv": 800_000 } }
+  assert.deepEqual(configuredPriceRange(service), { min: 500_000, max: 800_000 })
 })
