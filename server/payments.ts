@@ -143,7 +143,7 @@ export function createPaymentsRouter() {
       // d'imprimante n'accepte que du texte brut l'envoie tel quel.
       const text = renderReceiptText(receipt)
       // Si demandé, inclure l'URL WhatsApp dans la réponse
-      const jsonResponse: any = { receipt, text }
+      const jsonResponse: { receipt: typeof receipt; text: string; whatsappUrl?: string } = { receipt, text }
       if (req.query.send_whatsapp === "true") {
         const { sendReceiptViaWhatsApp } = await import("./receipt.ts")
         const result = await sendReceiptViaWhatsApp(db(), t.organizationId, washId, text)

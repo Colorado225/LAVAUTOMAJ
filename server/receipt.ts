@@ -374,9 +374,9 @@ export async function issueReceipt(
 
 /** Send the receipt text via WhatsApp and return the wa.me URL. */
 export async function sendReceiptViaWhatsApp(
-  pool: Pool,
-  organizationId: string,
-  washId: string,
+  _pool: Pool,
+  _organizationId: string,
+  _washId: string,
   receiptText: string
 ) {
   const { normalizeWhatsAppNumber, buildWhatsAppUrl } = await import("./support.ts")

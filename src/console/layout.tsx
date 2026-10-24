@@ -1,5 +1,6 @@
 import * as React from "react"
-import { NavLink, Outlet } from "react-router-dom"
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom"
+import SimpleBar from "simplebar-react"
 import {
   Activity,
   LifeBuoy,
@@ -7,28 +8,45 @@ import {
   Building2,
   FileClock,
   LayoutDashboard,
-  LogOut,
   Tags,
   TrendingUp,
   Wallet,
 } from "lucide-react"
+import {
+  CAvatar,
+  CBreadcrumb,
+  CBreadcrumbItem,
+  CCard,
+  CCardBody,
+  CCardHeader,
+  CCloseButton,
+  CContainer,
+  CDropdown,
+  CDropdownHeader,
+  CDropdownItem,
+  CDropdownMenu,
+  CDropdownToggle,
+  CHeader,
+  CHeaderNav,
+  CHeaderToggler,
+  CNavItem,
+  CNavLink,
+  CNavTitle,
+  CSidebar,
+  CSidebarBrand,
+  CSidebarFooter,
+  CSidebarHeader,
+  CSidebarNav,
+  CSidebarToggler,
+} from "@coreui/react"
+import CIcon from "@coreui/icons-react"
+import { cilAccountLogout, cilMenu, cilUser } from "@coreui/icons"
 
-import { BrandMark } from "@/components/brand"
-import { Button } from "@/components/ui/button"
-
+import { BrandBadge, BrandMark } from "@/components/brand"
+import { CoreUiFrame, type CoreUiSidebarState } from "@/components/coreui/coreui-frame"
+import { CoreUiThemeDropdown } from "@/components/coreui/theme-dropdown"
 import { useConsoleAuth } from "./auth"
 
-/**
- * Coquille de la console.
- *
- * Rien de l'application cliente n'est réutilisé ici : ni `BaseLayout`, ni
- * `AppSidebar`, ni les contextes d'abonnement et d'onboarding. Ce n'est pas
- * du purisme — ces composants supposent tous une station courante, et la
- * console n'en a aucune.
- *
- * Le fond sombre n'est pas qu'esthétique : il signale en permanence qu'on
- * n'est pas dans l'espace d'un client. Agir ici engage tout le parc.
- */
 const NAV = [
   { to: "/console", end: true, label: "Vue d'ensemble", icon: LayoutDashboard },
   { to: "/console/stations", end: false, label: "Stations", icon: Building2 },
@@ -41,64 +59,107 @@ const NAV = [
   { to: "/console/journal", end: false, label: "Journal", icon: FileClock },
 ]
 
-export function ConsoleLayout() {
-  const { operator, signOut } = useConsoleAuth()
+function ConsoleSidebar({ visible, unfoldable, onVisibleChange, onToggleUnfoldable }: CoreUiSidebarState) {
+  const { pathname } = useLocation()
+  React.useEffect(() => {
+    if (window.matchMedia("(max-width: 991.98px)").matches) onVisibleChange(false)
+  }, [pathname, onVisibleChange])
 
   return (
-    <div className="min-h-svh bg-slate-950 text-slate-100">
-      <header className="sticky top-0 z-40 border-b border-white/10 bg-slate-950/85 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3 sm:px-6">
-          <div className="flex items-center gap-3">
+    <CSidebar
+      className="coreui-sidebar border-end"
+      colorScheme="dark"
+      position="fixed"
+      visible={visible}
+      unfoldable={unfoldable}
+      onVisibleChange={onVisibleChange}
+    >
+      <CSidebarHeader className="border-bottom">
+        <CSidebarBrand as={Link} to="/console">
+          <span className="sidebar-brand-full coreui-brand-full">
             <BrandMark height={30} tone="dark" />
-            <div className="hidden sm:block">
-              <p className="text-sm font-semibold leading-none">Console</p>
-              <p className="mt-1 text-[11px] uppercase tracking-wider text-slate-500">
-                Administration du parc
-              </p>
-            </div>
-          </div>
+            <span className="coreui-station-copy">
+              <strong>Console</strong>
+              <small>Administration du parc</small>
+            </span>
+          </span>
+          <span className="sidebar-brand-narrow"><BrandBadge height={32} tone="dark" /></span>
+        </CSidebarBrand>
+        <CCloseButton className="d-lg-none" dark onClick={() => onVisibleChange(false)} aria-label="Fermer la navigation" />
+      </CSidebarHeader>
+      <CSidebarNav as={SimpleBar} aria-label="Sections de la console">
+        <CNavTitle>Administration</CNavTitle>
+        {NAV.map((item) => (
+          <CNavItem as="div" key={item.to}>
+            <CNavLink as={NavLink} to={item.to} end={item.end}>
+              <item.icon className="nav-icon" aria-hidden="true" />
+              <span>{item.label}</span>
+            </CNavLink>
+          </CNavItem>
+        ))}
+      </CSidebarNav>
+      <CSidebarFooter className="border-top d-none d-lg-flex">
+        <CSidebarToggler onClick={onToggleUnfoldable} aria-label="Réduire ou développer la navigation" />
+      </CSidebarFooter>
+    </CSidebar>
+  )
+}
 
-          <nav className="ml-auto flex items-center gap-1 overflow-x-auto" aria-label="Sections de la console">
-            {NAV.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                className={({ isActive }) =>
-                  [
-                    "flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm transition-colors duration-150",
-                    isActive
-                      ? "bg-white/10 font-medium text-white"
-                      : "text-slate-400 hover:bg-white/5 hover:text-slate-200",
-                  ].join(" ")
-                }
-              >
-                <item.icon className="size-4" aria-hidden />
-                <span className="hidden md:inline">{item.label}</span>
-              </NavLink>
-            ))}
-          </nav>
+function ConsoleHeader({ onToggleSidebar }: { onToggleSidebar: () => void }) {
+  const { operator, signOut } = useConsoleAuth()
+  const { pathname } = useLocation()
+  const current = [...NAV].reverse().find((item) => item.end ? pathname === item.to : pathname.startsWith(item.to))
+  const initials = (operator?.email?.slice(0, 2) || "OP").toUpperCase()
 
-          <div className="flex items-center gap-3 border-l border-white/10 pl-3">
-            <span className="hidden text-xs text-slate-400 lg:inline">{operator?.email}</span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => void signOut()}
-              className="text-slate-400 hover:text-white"
-            >
-              <LogOut className="size-4" aria-hidden />
-              <span className="sr-only">Se déconnecter</span>
-            </Button>
-          </div>
-        </div>
-      </header>
+  return (
+    <CHeader position="sticky" className="coreui-header mb-4 p-0">
+      <CContainer className="border-bottom px-4" fluid>
+        <CHeaderToggler onClick={onToggleSidebar} style={{ marginInlineStart: "-14px" }} aria-label="Ouvrir ou fermer la navigation">
+          <CIcon icon={cilMenu} size="lg" />
+        </CHeaderToggler>
+        <CHeaderNav className="ms-auto align-items-center">
+          <CoreUiThemeDropdown />
+          <li className="nav-item py-1"><div className="vr h-100 mx-2 text-body text-opacity-75" /></li>
+          <CDropdown variant="nav-item" placement="bottom-end">
+            <CDropdownToggle className="py-0 pe-0" caret={false} aria-label="Compte opérateur">
+              <CAvatar color="primary" className="text-white" size="md">{initials}</CAvatar>
+            </CDropdownToggle>
+            <CDropdownMenu className="pt-0">
+              <CDropdownHeader className="bg-body-secondary fw-semibold mb-2">
+                <span className="d-block text-truncate small fw-normal">{operator?.email ?? "Opérateur"}</span>
+              </CDropdownHeader>
+              <CDropdownItem as={Link} to="/console/comptes">
+                <CIcon icon={cilUser} className="me-2" />Comptes opérateurs
+              </CDropdownItem>
+              <CDropdownItem as="button" type="button" onClick={() => void signOut()}>
+                <CIcon icon={cilAccountLogout} className="me-2" />Se déconnecter
+              </CDropdownItem>
+            </CDropdownMenu>
+          </CDropdown>
+        </CHeaderNav>
+      </CContainer>
+      <CContainer className="px-4" fluid>
+        <CBreadcrumb className="my-0" aria-label="Fil d'Ariane">
+          <CBreadcrumbItem active={!current || current.to === "/console"}>
+            {current && current.to !== "/console" ? <Link to="/console">Console</Link> : "Console"}
+          </CBreadcrumbItem>
+          {current && current.to !== "/console" && <CBreadcrumbItem active>{current.label}</CBreadcrumbItem>}
+        </CBreadcrumb>
+      </CContainer>
+    </CHeader>
+  )
+}
 
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
-        <Outlet />
-      </main>
-    </div>
+/** Coquille CoreUI de la console, indépendante de toute station courante. */
+export function ConsoleLayout() {
+  return (
+    <CoreUiFrame
+      consoleMode
+      renderSidebar={(state) => <ConsoleSidebar {...state} />}
+      renderHeader={(toggle) => <ConsoleHeader onToggleSidebar={toggle} />}
+    >
+      <Outlet />
+    </CoreUiFrame>
   )
 }
 
@@ -115,18 +176,20 @@ export function StatCard({
   tone?: "default" | "warning" | "danger" | "success"
 }) {
   const toneClass = {
-    default: "text-white",
-    warning: "text-amber-300",
-    danger: "text-red-300",
-    success: "text-emerald-300",
+    default: "text-body",
+    warning: "text-warning",
+    danger: "text-danger",
+    success: "text-success",
   }[tone]
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-      <p className="text-xs uppercase tracking-wide text-slate-400">{label}</p>
-      <p className={`mt-2 text-2xl font-semibold tabular-nums ${toneClass}`}>{value}</p>
-      {hint && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
-    </div>
+    <CCard className="mb-4">
+      <CCardBody>
+        <p className="text-body-secondary small text-uppercase mb-2">{label}</p>
+        <p className={`fs-4 fw-semibold tabular-nums mb-0 ${toneClass}`}>{value}</p>
+        {hint && <p className="mt-1 mb-0 small text-body-secondary">{hint}</p>}
+      </CCardBody>
+    </CCard>
   )
 }
 
@@ -143,15 +206,15 @@ export function Panel({
   children: React.ReactNode
 }) {
   return (
-    <section className="rounded-xl border border-white/10 bg-white/5">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 px-4 py-3">
+    <CCard className="mb-4">
+      <CCardHeader className="d-flex flex-wrap align-items-start justify-content-between gap-2">
         <div>
-          <h2 className="text-sm font-semibold text-white">{title}</h2>
-          {description && <p className="mt-0.5 text-xs text-slate-400">{description}</p>}
+          <h2 className="fs-6 fw-semibold mb-0">{title}</h2>
+          {description && <p className="mt-1 mb-0 small text-body-secondary">{description}</p>}
         </div>
         {action}
-      </div>
-      <div className="p-4">{children}</div>
-    </section>
+      </CCardHeader>
+      <CCardBody>{children}</CCardBody>
+    </CCard>
   )
 }
