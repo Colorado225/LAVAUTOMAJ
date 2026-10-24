@@ -11,10 +11,13 @@ import { consoleRequest, storeConsoleToken } from "./api"
 // ressurgirait dans la console au prochain rendu.
 // ---------------------------------------------------------------------------
 
+export type ConsoleRole = "admin" | "supervisor" | "support"
+
 export interface Operator {
   id: string
   email: string
   full_name: string
+  role: ConsoleRole
 }
 
 interface ConsoleAuthValue {
@@ -84,4 +87,21 @@ export function useConsoleAuth(): ConsoleAuthValue {
   const value = React.useContext(ConsoleAuthContext)
   if (!value) throw new Error("useConsoleAuth doit être utilisé dans ConsoleAuthProvider")
   return value
+}
+
+/** Masque une action d'écriture pour le profil support ; le serveur la refuse aussi. */
+export function ConsoleWrite({ children, fallback = null }: {
+  children: React.ReactNode
+  fallback?: React.ReactNode
+}) {
+  const { operator } = useConsoleAuth()
+  return operator?.role === "support" ? fallback : children
+}
+
+export function ConsoleAdminOnly({ children, fallback = null }: {
+  children: React.ReactNode
+  fallback?: React.ReactNode
+}) {
+  const { operator } = useConsoleAuth()
+  return operator?.role === "admin" ? children : fallback
 }

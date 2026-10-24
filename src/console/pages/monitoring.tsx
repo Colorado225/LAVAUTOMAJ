@@ -7,6 +7,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner"
 import { consoleRequest, formatDateTime } from "../api"
 import { Panel, StatCard } from "../layout"
 import type { ErrorGroup, MonitoringOverview, MonitoringRoute } from "../types"
+import { MonitoringAlerts } from "./monitoring-alerts"
 
 /**
  * La santé du service.
@@ -272,6 +273,8 @@ export function ConsoleMonitoring() {
               tone={data.totals.slow > 0 ? "warning" : "default"}
             />
           </div>
+
+          <MonitoringAlerts />
 
           <Panel
             title="Trafic et erreurs"

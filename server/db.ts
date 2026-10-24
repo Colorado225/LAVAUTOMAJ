@@ -1063,9 +1063,20 @@ CREATE TABLE IF NOT EXISTS platform_operators (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
  email text NOT NULL UNIQUE, password_hash text, full_name text NOT NULL DEFAULT '',
  status text NOT NULL DEFAULT 'active',
+ role text NOT NULL DEFAULT 'admin',
+ managed_by text NOT NULL DEFAULT 'bootstrap',
  last_login_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(),
  updated_at timestamptz NOT NULL DEFAULT now()
 );
+-- Les comptes historiques deviennent administrateurs : ils avaient déjà tous
+-- les droits. Les comptes créés depuis la Console sont marqués « console »
+-- pour ne pas être désactivés par la prochaine synchro PLATFORM_ADMIN_EMAILS.
+ALTER TABLE platform_operators ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'admin';
+ALTER TABLE platform_operators ADD COLUMN IF NOT EXISTS managed_by text NOT NULL DEFAULT 'bootstrap';
+ALTER TABLE platform_operators DROP CONSTRAINT IF EXISTS platform_operators_role_check;
+ALTER TABLE platform_operators ADD CONSTRAINT platform_operators_role_check CHECK(role IN ('admin','supervisor','support'));
+ALTER TABLE platform_operators DROP CONSTRAINT IF EXISTS platform_operators_managed_by_check;
+ALTER TABLE platform_operators ADD CONSTRAINT platform_operators_managed_by_check CHECK(managed_by IN ('bootstrap','console'));
 CREATE TABLE IF NOT EXISTS platform_operator_sessions (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
  operator_id uuid NOT NULL REFERENCES platform_operators(id) ON DELETE CASCADE,
@@ -1090,6 +1101,102 @@ CREATE TABLE IF NOT EXISTS platform_audit_logs (
 );
 CREATE INDEX IF NOT EXISTS platform_audit_logs_created_idx ON platform_audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS platform_audit_logs_org_idx ON platform_audit_logs(organization_id, created_at DESC);
+
+-- Alertes proactives de supervision. Les secrets Resend / WhatsApp restent
+-- dans l'environnement ; la Console ne règle que les seuils et destinataires.
+CREATE TABLE IF NOT EXISTS platform_alert_settings (
+ id integer PRIMARY KEY DEFAULT 1 CHECK(id = 1),
+ enabled boolean NOT NULL DEFAULT false,
+ error_rate_percent numeric(6,2) NOT NULL DEFAULT 5,
+ min_requests integer NOT NULL DEFAULT 20,
+ slow_request_count integer NOT NULL DEFAULT 5,
+ window_minutes integer NOT NULL DEFAULT 15,
+ cooldown_minutes integer NOT NULL DEFAULT 60,
+ email_recipients text[] NOT NULL DEFAULT '{}',
+ whatsapp_recipients text[] NOT NULL DEFAULT '{}',
+ updated_by uuid REFERENCES platform_operators(id) ON DELETE SET NULL,
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO platform_alert_settings(id) VALUES(1) ON CONFLICT(id) DO NOTHING;
+CREATE TABLE IF NOT EXISTS platform_alert_events (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ fingerprint text NOT NULL,
+ kind text NOT NULL,
+ severity text NOT NULL,
+ title text NOT NULL,
+ message text NOT NULL,
+ metrics jsonb NOT NULL DEFAULT '{}'::jsonb,
+ deliveries jsonb NOT NULL DEFAULT '[]'::jsonb,
+ triggered_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS platform_alert_events_fingerprint_idx
+ ON platform_alert_events(fingerprint, triggered_at DESC);
+CREATE INDEX IF NOT EXISTS platform_alert_events_when_idx ON platform_alert_events(triggered_at DESC);
+
+-- Rapprochement avec les relevés d'un agrégateur. Aucun montant comptable
+-- n'est réécrit : le moteur rapproche des références et consigne les écarts.
+CREATE TABLE IF NOT EXISTS reconciliation_batches (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ provider text NOT NULL,
+ source_name text,
+ period_start timestamptz NOT NULL,
+ period_end timestamptz NOT NULL,
+ status text NOT NULL DEFAULT 'completed',
+ total_rows integer NOT NULL DEFAULT 0,
+ matched_rows integer NOT NULL DEFAULT 0,
+ discrepancy_rows integer NOT NULL DEFAULT 0,
+ ignored_rows integer NOT NULL DEFAULT 0,
+ created_by uuid REFERENCES platform_operators(id) ON DELETE SET NULL,
+ created_by_email text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS reconciliation_batches_when_idx ON reconciliation_batches(created_at DESC);
+CREATE TABLE IF NOT EXISTS provider_statement_entries (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ batch_id uuid NOT NULL REFERENCES reconciliation_batches(id) ON DELETE CASCADE,
+ line_number integer NOT NULL,
+ provider_reference text,
+ merchant_reference text,
+ amount_cents bigint NOT NULL,
+ currency text NOT NULL DEFAULT 'XOF',
+ provider_status text NOT NULL,
+ occurred_at timestamptz,
+ raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+ UNIQUE(batch_id, line_number)
+);
+CREATE INDEX IF NOT EXISTS provider_statement_merchant_idx ON provider_statement_entries(merchant_reference);
+CREATE TABLE IF NOT EXISTS reconciliation_discrepancies (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ batch_id uuid NOT NULL REFERENCES reconciliation_batches(id) ON DELETE CASCADE,
+ statement_entry_id uuid REFERENCES provider_statement_entries(id) ON DELETE SET NULL,
+ payment_id uuid,
+ payment_intent_id uuid,
+ kind text NOT NULL,
+ reference text,
+ organization_name text,
+ expected_amount_cents bigint,
+ actual_amount_cents bigint,
+ details text NOT NULL,
+ status text NOT NULL DEFAULT 'open',
+ resolution_note text,
+ resolved_by uuid REFERENCES platform_operators(id) ON DELETE SET NULL,
+ resolved_at timestamptz,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS reconciliation_discrepancies_open_idx ON reconciliation_discrepancies(status, created_at DESC);
+ALTER TABLE subscription_payments ADD COLUMN IF NOT EXISTS reconciled_at timestamptz;
+ALTER TABLE subscription_payments ADD COLUMN IF NOT EXISTS reconciliation_batch_id uuid;
+CREATE TABLE IF NOT EXISTS reconciliation_runs (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ trigger_kind text NOT NULL,
+ status text NOT NULL,
+ error text,
+ batch_id uuid REFERENCES reconciliation_batches(id) ON DELETE SET NULL,
+ started_at timestamptz NOT NULL DEFAULT now(),
+ finished_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS reconciliation_runs_when_idx ON reconciliation_runs(started_at DESC);
+
 
 -- Suppression en deux temps.
 --

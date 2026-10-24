@@ -9,6 +9,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner"
 
 import { consoleRequest, formatDate, formatDateTime, formatFcfa } from "../api"
 import { Panel, StatCard } from "../layout"
+import { ConsoleWrite } from "../auth"
 import { OrganizationDeletionFlow } from "../components/organization-deletion"
 import { ROLE_LABELS, type ConsoleMember, type ConsoleOrganization, type ConsolePlan } from "../types"
 import { StatusPill } from "./stations"
@@ -123,7 +124,7 @@ export function ConsoleStationDetail() {
       )}
 
       {org.pending_deletion && (
-        <OrganizationDeletionFlow organization={org} onChanged={handleDeletionChanged} />
+        <ConsoleWrite><OrganizationDeletionFlow organization={org} onChanged={handleDeletionChanged} /></ConsoleWrite>
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -144,10 +145,12 @@ export function ConsoleStationDetail() {
       </div>
 
       {!org.pending_deletion && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <ActivateCard plans={plans} id={id} onRun={run} />
-          <TrialCard id={id} onRun={run} />
-        </div>
+        <ConsoleWrite>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <ActivateCard plans={plans} id={id} onRun={run} />
+            <TrialCard id={id} onRun={run} />
+          </div>
+        </ConsoleWrite>
       )}
 
       <Panel title="Comptes de la station" description="Dépanner un client sans jamais se connecter à sa place.">
@@ -163,7 +166,7 @@ export function ConsoleStationDetail() {
       </Panel>
 
       {!org.pending_deletion && (
-        <OrganizationDeletionFlow organization={org} onChanged={handleDeletionChanged} />
+        <ConsoleWrite><OrganizationDeletionFlow organization={org} onChanged={handleDeletionChanged} /></ConsoleWrite>
       )}
     </div>
   )
@@ -373,6 +376,7 @@ function MemberRow({
           {member.email} · vu {member.last_seen_at ? formatDateTime(member.last_seen_at) : "jamais"}
         </p>
       </div>
+      <ConsoleWrite>
       <div className="flex flex-wrap items-center gap-2">
         <label className="sr-only" htmlFor={`role-${member.id}`}>
           Rôle de {name}
@@ -457,6 +461,7 @@ function MemberRow({
           {outOfStation ? "Réintégrer" : "Retirer"}
         </Button>
       </div>
+      </ConsoleWrite>
     </li>
   )
 }

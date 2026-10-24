@@ -30,10 +30,11 @@
  */
 
 import type { Router } from "express"
-import { asyncRoute, parseId } from "./http.ts"
+import { z } from "zod"
+import { asyncRoute, body, parseId } from "./http.ts"
 import { HttpError } from "./auth.ts"
 import { adminDb } from "./platform-admin.ts"
-import { logConsoleAction } from "./console-auth.ts"
+import { logConsoleAction, requireConsoleAdmin } from "./console-auth.ts"
 import {
   ERROR_RETENTION_DAYS,
   METRICS_RETENTION_DAYS,
@@ -43,6 +44,13 @@ import {
   listErrorEvents,
   monitoringOverview,
 } from "./monitoring.ts"
+import {
+  getMonitoringAlertSettings,
+  listMonitoringAlertEvents,
+  monitoringAlertChannels,
+  saveMonitoringAlertSettings,
+  sendTestMonitoringAlert,
+} from "./monitoring-alerts.ts"
 
 function hoursParam(value: unknown): number {
   const n = Number(value)
@@ -75,6 +83,79 @@ export function registerMonitoringRoutes(r: Router): void {
           metrics_retention_days: METRICS_RETENTION_DAYS,
         },
       })
+    }),
+  )
+
+  // Alertes proactives : les réglages sont lisibles par le support, mais leur
+  // modification et les envois de test passent par le garde admin global.
+  r.get(
+    "/monitoring/alerts",
+    asyncRoute(async (_req, res) => {
+      const pool = adminDb()
+      const [settings, events] = await Promise.all([
+        getMonitoringAlertSettings(pool),
+        listMonitoringAlertEvents(pool),
+      ])
+      res.json({ settings, events, channels: monitoringAlertChannels() })
+    }),
+  )
+
+  const alertSettingsSchema = z.object({
+    enabled: z.boolean(),
+    error_rate_percent: z.number().min(0.01).max(100),
+    min_requests: z.number().int().min(1).max(1_000_000),
+    slow_request_count: z.number().int().min(1).max(100_000),
+    window_minutes: z.number().int().min(5).max(1440),
+    cooldown_minutes: z.number().int().min(5).max(10_080),
+    email_recipients: z.array(z.string().trim().toLowerCase().email()).max(20),
+    whatsapp_recipients: z.array(
+      z.string().trim().regex(/^\+?[0-9 ()-]{8,24}$/, "Numéro WhatsApp international invalide."),
+    ).max(20),
+  }).strip().refine(
+    (value) => !value.enabled || value.email_recipients.length + value.whatsapp_recipients.length > 0,
+    { message: "Ajoutez au moins un destinataire avant d'activer les alertes." },
+  )
+
+  r.put(
+    "/monitoring/alerts/settings",
+    requireConsoleAdmin,
+    asyncRoute(async (req, res) => {
+      const input = body(alertSettingsSchema, req.body)
+      const pool = adminDb()
+      const settings = await saveMonitoringAlertSettings(pool, {
+        ...input,
+        email_recipients: [...new Set(input.email_recipients)],
+        whatsapp_recipients: [...new Set(input.whatsapp_recipients)],
+      }, req.operator!.operatorId)
+      await logConsoleAction(pool, req.operator!, "monitoring.alerts.configured", null, null, {
+        enabled: settings.enabled,
+        error_rate_percent: settings.error_rate_percent,
+        min_requests: settings.min_requests,
+        slow_request_count: settings.slow_request_count,
+        window_minutes: settings.window_minutes,
+        cooldown_minutes: settings.cooldown_minutes,
+        email_recipients: settings.email_recipients.length,
+        whatsapp_recipients: settings.whatsapp_recipients.length,
+      })
+      res.json({ settings })
+    }),
+  )
+
+  r.post(
+    "/monitoring/alerts/test",
+    requireConsoleAdmin,
+    asyncRoute(async (req, res) => {
+      const pool = adminDb()
+      const settings = await getMonitoringAlertSettings(pool)
+      if (settings.email_recipients.length + settings.whatsapp_recipients.length === 0) {
+        throw new HttpError(400, "alert_recipient_required", "Ajoutez un destinataire avant l'envoi de test.")
+      }
+      const result = await sendTestMonitoringAlert(pool)
+      await logConsoleAction(pool, req.operator!, "monitoring.alerts.tested", null, null, {
+        event_id: result.event_id,
+        deliveries: result.deliveries.map(({ channel, recipient, delivered }) => ({ channel, recipient, delivered })),
+      })
+      res.json(result)
     }),
   )
 

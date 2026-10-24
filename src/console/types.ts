@@ -394,3 +394,103 @@ export interface ErrorEvent {
   request_body?: unknown
   occurred_at: string
 }
+
+export interface ConsoleOperatorAccount {
+  id: string
+  email: string
+  full_name: string
+  role: "admin" | "supervisor" | "support"
+  status: "active" | "disabled"
+  managed_by: "bootstrap" | "console"
+  created_at: string
+  updated_at: string
+  last_login_at: string | null
+  active_sessions: number
+}
+
+export interface AlertSettings {
+  enabled: boolean
+  error_rate_percent: number
+  min_requests: number
+  slow_request_count: number
+  window_minutes: number
+  cooldown_minutes: number
+  email_recipients: string[]
+  whatsapp_recipients: string[]
+  updated_at: string
+}
+
+export interface AlertDelivery {
+  channel: "email" | "whatsapp"
+  recipient: string
+  delivered: boolean
+  error: string | null
+}
+
+export interface AlertEvent {
+  id: string
+  fingerprint: string
+  kind: "error_rate" | "slow_requests" | "test"
+  severity: "info" | "warning" | "critical"
+  title: string
+  message: string
+  metrics: Record<string, unknown>
+  deliveries: AlertDelivery[]
+  triggered_at: string
+}
+
+export interface ReconciliationBatch {
+  id: string
+  provider: string
+  source_name: string | null
+  period_start: string
+  period_end: string
+  status: "matched" | "attention" | "failed"
+  total_rows: number
+  matched_rows: number
+  discrepancy_rows: number
+  ignored_rows: number
+  created_by_email: string | null
+  created_at: string
+  open_discrepancies?: number
+}
+
+export interface ReconciliationRun {
+  id: string
+  trigger_kind: "manual" | "scheduled"
+  status: "running" | "success" | "failed"
+  batch_id: string | null
+  error: string | null
+  started_at: string
+  finished_at: string | null
+}
+
+export interface StatementEntry {
+  id: string
+  line_number: number
+  provider_reference: string | null
+  merchant_reference: string | null
+  amount_cents: number
+  currency: string
+  provider_status: string
+  occurred_at: string | null
+}
+
+export interface ReconciliationDiscrepancy {
+  id: string
+  batch_id: string
+  statement_entry_id: string | null
+  payment_id: string | null
+  payment_intent_id: string | null
+  kind: "amount_mismatch" | "missing_in_register" | "missing_in_statement" | "duplicate_reference"
+  reference: string | null
+  organization_name: string | null
+  expected_amount_cents: number | null
+  actual_amount_cents: number | null
+  details: string
+  status: "open" | "resolved"
+  resolution_note: string | null
+  resolved_by_email: string | null
+  resolved_at: string | null
+  created_at: string
+}

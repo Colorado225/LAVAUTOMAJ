@@ -36,10 +36,14 @@ export const CONSOLE_COOKIE = "washpilot_console"
 // ouvre le parc entier, elle ne doit pas survivre une semaine à un oubli.
 export const CONSOLE_SESSION_TTL_DAYS = 2
 
+export const CONSOLE_OPERATOR_ROLES = ["admin", "supervisor", "support"] as const
+export type ConsoleOperatorRole = (typeof CONSOLE_OPERATOR_ROLES)[number]
+
 export interface OperatorContext {
   operatorId: string
   email: string
   fullName: string
+  role: ConsoleOperatorRole
   sessionId: string
 }
 
@@ -127,7 +131,7 @@ async function resolveOperator(req: Request): Promise<OperatorContext | null> {
   const pool = getPool()
   if (!pool) return null
   const q = await pool.query(
-    `SELECT s.id AS session_id, o.id, o.email, o.full_name, o.status
+    `SELECT s.id AS session_id, o.id, o.email, o.full_name, o.status, o.role
      FROM platform_operator_sessions s
      JOIN platform_operators o ON o.id = s.operator_id
      WHERE s.token_hash = $1 AND s.expires_at > NOW()
@@ -135,7 +139,7 @@ async function resolveOperator(req: Request): Promise<OperatorContext | null> {
     [hashToken(token)],
   )
   const row = q.rows[0] as
-    | { session_id: string; id: string; email: string; full_name: string; status: string }
+    | { session_id: string; id: string; email: string; full_name: string; status: string; role: ConsoleOperatorRole }
     | undefined
   if (!row || row.status !== "active") return null
 
@@ -147,6 +151,7 @@ async function resolveOperator(req: Request): Promise<OperatorContext | null> {
     operatorId: row.id,
     email: row.email,
     fullName: row.full_name,
+    role: row.role,
     sessionId: row.session_id,
   }
 }
@@ -169,6 +174,27 @@ export async function requireOperator(req: Request, _res: Response, next: NextFu
   } catch (error) {
     next(error)
   }
+}
+
+/** Seul un administrateur gère les opérateurs et leurs accès. */
+export function requireConsoleAdmin(req: Request, _res: Response, next: NextFunction) {
+  if (req.operator?.role !== "admin") {
+    next(new HttpError(403, "console_admin_required", "Cette action est réservée à un administrateur de la Console."))
+    return
+  }
+  next()
+}
+
+/**
+ * Profil support : consultation seule, sur toutes les routes de la Console.
+ * Le garde est appliqué côté serveur, pas seulement en masquant les boutons.
+ */
+export function requireConsoleWrite(req: Request, _res: Response, next: NextFunction) {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method) || req.operator?.role !== "support") {
+    next()
+    return
+  }
+  next(new HttpError(403, "console_read_only", "Le profil support est limité à la consultation."))
 }
 
 /**
@@ -226,15 +252,15 @@ export async function syncPlatformOperators(
   }
 
   for (const email of emails) {
-    const found = await query("SELECT id, status FROM platform_operators WHERE email = $1", [email])
-    const row = found.rows[0] as { id: string; status: string } | undefined
+    const found = await query("SELECT id, status, managed_by FROM platform_operators WHERE email = $1", [email])
+    const row = found.rows[0] as { id: string; status: string; managed_by: string } | undefined
 
     if (!row) {
       const generated = !env.PLATFORM_ADMIN_PASSWORD
       const password = env.PLATFORM_ADMIN_PASSWORD || randomBytes(12).toString("base64url")
       await query(
-        `INSERT INTO platform_operators(email, password_hash, full_name, status)
-         VALUES($1, $2, $3, 'active')`,
+        `INSERT INTO platform_operators(email, password_hash, full_name, status, role, managed_by)
+         VALUES($1, $2, $3, 'active', 'admin', 'bootstrap')`,
         [email, await hashPassword(password), email.split("@")[0]],
       )
       if (generated) {
@@ -248,6 +274,10 @@ export async function syncPlatformOperators(
       continue
     }
 
+    // Un compte désormais géré depuis la Console ne dépend plus de la liste
+    // d'amorçage : un redémarrage ne doit ni le réactiver ni changer son rôle.
+    if (row.managed_by === "console") continue
+
     if (row.status !== "active") {
       await query("UPDATE platform_operators SET status = 'active', updated_at = now() WHERE id = $1::uuid", [row.id])
       console.info(`[console] Operateur reactive : ${email}`)
@@ -256,14 +286,14 @@ export async function syncPlatformOperators(
 
   const disabled = await query(
     `UPDATE platform_operators SET status = 'disabled', updated_at = now()
-     WHERE status = 'active' AND email <> ALL($1::text[]) RETURNING email`,
+     WHERE status = 'active' AND managed_by = 'bootstrap' AND email <> ALL($1::text[]) RETURNING email`,
     [emails],
   )
   if (disabled.rowCount) {
     // Une session encore ouverte survivrait à la révocation : on la coupe.
     await query(
       `DELETE FROM platform_operator_sessions
-       WHERE operator_id IN (SELECT id FROM platform_operators WHERE status = 'disabled')`,
+       WHERE operator_id IN (SELECT id FROM platform_operators WHERE status = 'disabled' AND managed_by = 'bootstrap')`,
     )
     console.info(`[console] Operateurs desactives : ${disabled.rowCount}`)
   }
@@ -324,11 +354,11 @@ export function createConsoleAuthRouter() {
 
       const pool = consoleDb()
       const q = await pool.query(
-        "SELECT id, email, full_name, password_hash, status FROM platform_operators WHERE email = $1",
+        "SELECT id, email, full_name, password_hash, status, role FROM platform_operators WHERE email = $1",
         [input.email],
       )
       const row = q.rows[0] as
-        | { id: string; email: string; full_name: string; password_hash: string | null; status: string }
+        | { id: string; email: string; full_name: string; password_hash: string | null; status: string; role: ConsoleOperatorRole }
         | undefined
 
       // Message unique quelle que soit la cause : un compte d'administration
@@ -353,7 +383,7 @@ export function createConsoleAuthRouter() {
       setConsoleCookie(req, res, token)
       res.json({
         token,
-        operator: { id: row!.id, email: row!.email, full_name: row!.full_name },
+        operator: { id: row!.id, email: row!.email, full_name: row!.full_name, role: row!.role },
       })
     }),
   )
@@ -377,7 +407,7 @@ export function createConsoleAuthRouter() {
         return
       }
       res.json({
-        operator: { id: operator.operatorId, email: operator.email, full_name: operator.fullName },
+        operator: { id: operator.operatorId, email: operator.email, full_name: operator.fullName, role: operator.role },
       })
     }),
   )

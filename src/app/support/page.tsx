@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useSearchParams } from "react-router-dom"
 import { Clock, LifeBuoy, Lock, MessageCircle, Send } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -89,6 +90,8 @@ function formatWhen(value: string): string {
 }
 
 export default function SupportPage() {
+  const [searchParams] = useSearchParams()
+  const autoOpened = React.useRef(false)
   const [config, setConfig] = React.useState<SupportConfig | null>(null)
   const [requests, setRequests] = React.useState<SupportRequest[]>([])
   const [openId, setOpenId] = React.useState<string | null>(null)
@@ -140,6 +143,15 @@ export default function SupportPage() {
     )
     setMessages(payload.messages)
   }
+
+  React.useEffect(() => {
+    const requested = searchParams.get("request")
+    if (!requested || loading || autoOpened.current) return
+    autoOpened.current = true
+    void openThread(requested).catch((err) => {
+      setError(err instanceof Error ? err.message : "Impossible d'ouvrir cette demande.")
+    })
+  }, [loading, searchParams])
 
   async function run(fn: () => Promise<string>) {
     setBusy(true)

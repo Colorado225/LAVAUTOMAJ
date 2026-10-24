@@ -1,4 +1,4 @@
-import type { Pool } from "pg"
+import type { Pool, PoolClient } from "pg"
 import { getPool } from "./db.ts"
 import { HttpError } from "./auth.ts"
 
@@ -35,7 +35,7 @@ export function adminDb(): Pool {
  * L'adresse de l'opérateur est donc portée par les métadonnées.
  */
 export async function auditPlatformAction(
-  client: Pool,
+  client: Pool | PoolClient,
   organizationId: string,
   operatorEmail: string,
   action: string,

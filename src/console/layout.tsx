@@ -3,7 +3,9 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom"
 import SimpleBar from "simplebar-react"
 import {
   Activity,
+  ArrowLeftRight,
   LifeBuoy,
+  UserCog,
   Users,
   Building2,
   FileClock,
@@ -11,6 +13,7 @@ import {
   Tags,
   TrendingUp,
   Wallet,
+  type LucideIcon,
 } from "lucide-react"
 import {
   CAvatar,
@@ -47,20 +50,32 @@ import { CoreUiFrame, type CoreUiSidebarState } from "@/components/coreui/coreui
 import { CoreUiThemeDropdown } from "@/components/coreui/theme-dropdown"
 import { useConsoleAuth } from "./auth"
 
-const NAV = [
+interface ConsoleNavItem {
+  to: string
+  end: boolean
+  label: string
+  icon: LucideIcon
+  adminOnly?: boolean
+}
+
+const NAV: ConsoleNavItem[] = [
   { to: "/console", end: true, label: "Vue d'ensemble", icon: LayoutDashboard },
   { to: "/console/stations", end: false, label: "Stations", icon: Building2 },
   { to: "/console/assistance", end: false, label: "Assistance", icon: LifeBuoy },
   { to: "/console/comptes", end: false, label: "Comptes", icon: Users },
   { to: "/console/revenus", end: false, label: "Revenus", icon: TrendingUp },
+  { to: "/console/rapprochement", end: false, label: "Rapprochement", icon: ArrowLeftRight },
   { to: "/console/paiements", end: false, label: "Paiements", icon: Wallet },
   { to: "/console/surveillance", end: false, label: "Surveillance", icon: Activity },
   { to: "/console/tarifs", end: false, label: "Tarifs", icon: Tags },
+  { to: "/console/operateurs", end: false, label: "Opérateurs", icon: UserCog, adminOnly: true },
   { to: "/console/journal", end: false, label: "Journal", icon: FileClock },
 ]
 
 function ConsoleSidebar({ visible, unfoldable, onVisibleChange, onToggleUnfoldable }: CoreUiSidebarState) {
   const { pathname } = useLocation()
+  const { operator } = useConsoleAuth()
+  const navigation = NAV.filter((item) => !item.adminOnly || operator?.role === "admin")
   React.useEffect(() => {
     if (window.matchMedia("(max-width: 991.98px)").matches) onVisibleChange(false)
   }, [pathname, onVisibleChange])
@@ -89,7 +104,7 @@ function ConsoleSidebar({ visible, unfoldable, onVisibleChange, onToggleUnfoldab
       </CSidebarHeader>
       <CSidebarNav as={SimpleBar} aria-label="Sections de la console">
         <CNavTitle>Administration</CNavTitle>
-        {NAV.map((item) => (
+        {navigation.map((item) => (
           <CNavItem as="div" key={item.to}>
             <CNavLink as={NavLink} to={item.to} end={item.end}>
               <item.icon className="nav-icon" aria-hidden="true" />
@@ -128,8 +143,8 @@ function ConsoleHeader({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               <CDropdownHeader className="bg-body-secondary fw-semibold mb-2">
                 <span className="d-block text-truncate small fw-normal">{operator?.email ?? "Opérateur"}</span>
               </CDropdownHeader>
-              <CDropdownItem as={Link} to="/console/comptes">
-                <CIcon icon={cilUser} className="me-2" />Comptes opérateurs
+              <CDropdownItem as={Link} to={operator?.role === "admin" ? "/console/operateurs" : "/console/comptes"}>
+                <CIcon icon={cilUser} className="me-2" />{operator?.role === "admin" ? "Opérateurs" : "Comptes clients"}
               </CDropdownItem>
               <CDropdownItem as="button" type="button" onClick={() => void signOut()}>
                 <CIcon icon={cilAccountLogout} className="me-2" />Se déconnecter

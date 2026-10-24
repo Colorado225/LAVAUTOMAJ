@@ -7,6 +7,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner"
 
 import { consoleRequest, formatDate, formatDateTime } from "../api"
 import { Panel } from "../layout"
+import { ConsoleWrite } from "../auth"
 import { ROLE_LABELS, type ConsoleAccountDetail } from "../types"
 
 /**
@@ -190,6 +191,7 @@ export function ConsoleAccountDetailPage() {
         )}
       </Panel>
 
+      <ConsoleWrite>
       <section className="rounded-xl border border-slate-800 bg-slate-900/40">
         <div className="border-b border-slate-800 px-5 py-4">
           <h2 className="text-sm font-semibold text-white">Interventions sur le compte</h2>
@@ -253,6 +255,7 @@ export function ConsoleAccountDetailPage() {
           </Button>
         </div>
       </section>
+      </ConsoleWrite>
     </div>
   )
 }

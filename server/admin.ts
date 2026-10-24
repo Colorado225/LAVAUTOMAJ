@@ -15,7 +15,9 @@ import {
   monthlyRevenue,
   revenueAtRisk,
 } from "./revenue.ts"
-import { logConsoleAction } from "./console-auth.ts"
+import { logConsoleAction, requireConsoleAdmin, requireConsoleWrite } from "./console-auth.ts"
+import { createConsoleOperatorRouter } from "./console-operators.ts"
+import { registerReconciliationRoutes } from "./console-reconciliation.ts"
 import {
   DEFAULT_GRACE_DAYS,
   cancelDeletion,
@@ -189,6 +191,12 @@ function describe(row: OrganizationRow, now: Date) {
 
 export function createAdminRouter() {
   const r = Router()
+
+  // Gestion des opérateurs : même la liste est réservée aux administrateurs.
+  r.use("/operators", requireConsoleAdmin, createConsoleOperatorRouter())
+  // Le profil support est strictement en lecture sur tout le reste de la Console.
+  r.use(requireConsoleWrite)
+  registerReconciliationRoutes(r)
 
   // -------------------------------------------------------------------------
   // GET /api/v1/admin/metrics — l'état du parc en un coup d'œil.

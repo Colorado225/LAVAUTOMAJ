@@ -269,6 +269,33 @@ export function renewalReminderMessage(
   return { to: context.to, subject: copy.subject, text, html }
 }
 
+/** Prévient le demandeur qu'une réponse publique l'attend dans l'application. */
+export function supportReplyMessage(context: {
+  to: string
+  firstName?: string | null
+  organizationName: string
+  requestSubject: string
+  supportUrl: string
+}): MailMessage {
+  const greeting = context.firstName ? `Bonjour ${context.firstName},` : "Bonjour,"
+  const text = [
+    greeting,
+    "",
+    `L'équipe WashPilot CI a répondu à votre demande « ${context.requestSubject} » pour ${context.organizationName}.`,
+    "",
+    `Lire la réponse : ${context.supportUrl}`,
+    "",
+    "Ce message concerne uniquement une réponse publique de l'assistance.",
+    "",
+    "— L'équipe WashPilot CI",
+  ].join("\n")
+  return {
+    to: context.to,
+    subject: `Réponse de l'assistance — ${context.requestSubject}`,
+    text,
+  }
+}
+
 /** Gabarit envoyé à l'assistance quand une station demande un forfait payant. */
 export function upgradeRequestMessage(context: {
   to: string

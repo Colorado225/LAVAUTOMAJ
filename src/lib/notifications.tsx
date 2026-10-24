@@ -74,6 +74,7 @@ const SERVER_LEVELS: Record<string, NotificationLevel> = {
 /** Écran à ouvrir pour traiter une notification persistée. */
 function serverHref(item: ServerNotification): string | undefined {
   if (item.entity_type === "wash" && item.entity_id) return `/washes/${item.entity_id}`
+  if (item.entity_type === "support_request" && item.entity_id) return `/support?request=${item.entity_id}`
   return undefined
 }
 

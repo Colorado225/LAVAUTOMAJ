@@ -160,7 +160,15 @@ test("une note interne n'atteint jamais le client, par aucun chemin", async () =
     method: "POST",
     body: { body: secret, internal: true },
   })
-  assert.equal(noted.status, 201, await noted.text())
+  const noteResult = await noted.json()
+  assert.equal(noted.status, 201, JSON.stringify(noteResult))
+  assert.equal(noteResult.notification.in_app, false)
+  assert.equal(noteResult.notification.email_delivered, false)
+  const silent = await pool.query(
+    "SELECT count(*)::int AS n FROM notifications WHERE entity_type = 'support_request' AND entity_id = $1::uuid",
+    [request.id],
+  )
+  assert.equal(silent.rows[0].n, 0, "une note interne ne crée aucune notification client")
 
   // Chemin 1 : le fil de la demande.
   const detail = await (await clientReq(owner.token, `/support/requests/${request.id}`)).text()
@@ -261,6 +269,41 @@ test("une réponse publique arrête le compteur et change l'état", async () => 
   assert.equal(payload.request.status, "answered")
   assert.equal(payload.request.sla.responded, true)
   assert.ok(payload.request.first_responded_at, "l'instant de première réponse est posé")
+})
+
+test("une réponse publique notifie le seul demandeur et l'envoie vers son ticket", async () => {
+  const s = await station("pro")
+  const requester = await s.member("owner")
+  const otherOwner = await s.member("owner")
+  const request = await openRequest(requester.token, "Notification de réponse")
+
+  const replied = await consoleReq(`/support/${request.id}/messages`, {
+    method: "POST",
+    body: { body: "La correction est disponible, vous pouvez rouvrir la caisse." },
+  })
+  const result = await replied.json()
+  assert.equal(replied.status, 201, JSON.stringify(result))
+  assert.equal(result.notification.in_app, true)
+  assert.equal(result.notification.email_configured, false)
+  assert.equal(result.notification.email_delivered, false, "l'absence de Resend n'annule pas la réponse")
+
+  const persisted = await pool.query(
+    `SELECT user_id, type, title, message FROM notifications
+     WHERE entity_type = 'support_request' AND entity_id = $1::uuid`,
+    [request.id],
+  )
+  assert.equal(persisted.rowCount, 1)
+  assert.equal(persisted.rows[0].user_id, requester.userId)
+  assert.equal(persisted.rows[0].type, "SUPPORT_REPLY")
+  assert.match(persisted.rows[0].message, /Operateur assistance/)
+
+  const bell = await (await clientReq(requester.token, "/notifications")).json()
+  const mine = bell.notifications.find((item: { entity_id: string }) => item.entity_id === request.id)
+  assert.equal(mine.entity_type, "support_request")
+  assert.ok(bell.unread_count >= 1)
+
+  const otherBell = await (await clientReq(otherOwner.token, "/notifications")).json()
+  assert.ok(!otherBell.notifications.some((item: { entity_id: string }) => item.entity_id === request.id))
 })
 
 test("une relance du client remet la demande en attente", async () => {

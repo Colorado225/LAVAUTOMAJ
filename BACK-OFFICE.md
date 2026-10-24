@@ -102,21 +102,26 @@ PLATFORM_ADMIN_PASSWORD=UnMotDePasseLongEtUnique
 ```
 
 Puis redémarrer. Au démarrage, `syncPlatformOperators()` **crée** les comptes
-manquants, réactive ceux qui reviennent, et **désactive** tout opérateur absent
-de la liste en supprimant ses sessions. Le journal l'indique :
+d'amorçage manquants, réactive ceux qui reviennent, et **désactive** les seuls
+comptes `bootstrap` absents de la liste en supprimant leurs sessions. Les
+comptes créés depuis **Console → Opérateurs** (`managed_by = 'console'`) ne
+sont ni réactivés, ni désactivés, ni rétrogradés par cette liste. Le journal indique :
 
 ```
 [console] Operateur cree : vous@exemple.ci
 ```
 
 Rendez-vous ensuite sur **`/console`** et connectez-vous. Variable vide ⇒
-console entièrement fermée, y compris sa page de connexion.
+aucun nouvel amorçage ; les opérateurs déjà gérés dans la Console conservent
+leur accès. Sans aucun opérateur actif, la Console reste fermée.
 
 ### Changer le mot de passe d'un opérateur
 
 `PLATFORM_ADMIN_PASSWORD` ne sert **qu'à l'amorçage** : il ne réécrit jamais un
-mot de passe existant. Pour en changer, ou pour en donner un à un compte
-d'opérateur créé sans mot de passe :
+mot de passe existant. Le chemin normal est **Console → Opérateurs → Mot de
+passe** : un secret provisoire est affiché une seule fois et toutes les
+sessions du compte sont révoquées. La commande ci-dessous reste un recours de
+secours, notamment si plus aucun administrateur ne peut se connecter :
 
 ```bash
 # Arrêter le serveur si la base est la base embarquée (PGlite : un seul
@@ -145,8 +150,9 @@ et peut être retiré du fichier une fois les comptes en place.
 
 Les installations antérieures sont reprises automatiquement :
 `migrateLegacyPlatformAdmins()` recopie les anciens porteurs du drapeau dans la
-nouvelle table, conserve leur mot de passe, puis éteint la colonne. Personne ne
-perd son accès, mais plus personne ne l'obtient par ce chemin.
+nouvelle table puis éteint la colonne. Le mot de passe de station n'est **pas**
+repris : l'accès est réamorcé avec un secret propre à la Console, ce qui
+préserve la séparation des deux systèmes.
 
 ### Vous n'avez pas besoin d'exploiter une station
 
@@ -684,8 +690,8 @@ viendront quand il y aura des semaines de chiffres à regarder.
 
 ### 8.6 Ce que la surveillance ne fait pas
 
-- **Pas d'alerte, pas d'astreinte.** Il faut ouvrir la console pour voir l'état
-  du service (§8.5).
+- **Pas d'astreinte téléphonique.** Les alertes partent par e-mail et modèle
+  WhatsApp approuvé (§12.3) ; aucun appel vocal ni astreinte n'est simulé.
 - **Pas de trace des requêtes réussies au détail.** Seuls les compteurs
   agrégés les décrivent. Un succès n'a pas besoin d'être reproduit.
 - **Pas de rapprochement entre un incident et une demande d'assistance.** Si un
@@ -710,7 +716,9 @@ Toutes sous `/api/v1/console`, toutes derrière `requireOperator`.
 `GET /support?status=&limit=` · `GET /support/:id` ·
 `GET /organizations/:id/members/:userId/diagnostic` ·
 `GET /monitoring?hours=` · `GET /monitoring/errors?kind=&route=&limit=` ·
-`GET /monitoring/errors/:id`
+`GET /monitoring/errors/:id` · `GET /monitoring/alerts` ·
+`GET /reconciliation` · `GET /reconciliation/batches/:id` ·
+`GET /operators` (admin)
 
 **Écriture** — `POST /organizations/:id/activate {plan_code, months≤36,
 payment_reference?, note?}` · `/suspend {reason}` · `/extend-trial {days≤90,
@@ -724,7 +732,14 @@ reason}` · `/schedule-deletion {reason≥10, grace_days?}` · `/cancel-deletion
 `POST /support/:id/status {status: open|resolved}` ·
 `POST /upgrade-requests/:id/decline {reason 3-300}` ·
 `POST /payment-intents/:reference/confirm {note?, channel?}` ·
-`POST /revenue/:id/reverse {reason≥10}`
+`POST /revenue/:id/reverse {reason≥10}` ·
+`POST /reconciliation/batches` · `POST /reconciliation/run` ·
+`POST /reconciliation/discrepancies/:id/resolve {note}` ·
+`POST /operators` · `PATCH /operators/:id` ·
+`POST /operators/:id/reset-password` · `POST /operators/:id/revoke-sessions` ·
+`PUT /monitoring/alerts/settings` · `POST /monitoring/alerts/test`
+(les cinq dernières familles d'administration sensible sont réservées à l'admin
+pour opérateurs et alertes ; le support est en lecture seule sur toutes).
 
 ### Deux subtilités qui comptent
 
@@ -745,23 +760,23 @@ l'adresse de l'opérateur.
 
 - **Pas d'usurpation d'identité.** Aucun « se connecter en tant que ». Voir
   les données d'un client est une chose, agir en son nom une autre.
-- **Pas d'édition des tarifs.** Les forfaits et leurs limites restent dans le
-  code et les migrations. Un prix modifié à chaud, sans trace ni revue, est
-  une source de litige.
+- **Pas d'édition des limites de forfaits.** Le prix est modifiable avec motif
+  et trace ; les plafonds (`max_users`, `max_workers`, `max_sites`) restent
+  versionnés avec le code et les migrations.
 - **Pas de modification des données d'exploitation.** La console ne corrige
   pas un lavage, ne touche pas une caisse. Elle administre des abonnements et
   des comptes.
 - **Pas de changement d'adresse e-mail.** L'adresse est l'identifiant de
   connexion : la modifier depuis la console permettrait de rediriger un compte
   vers une boîte que l'opérateur contrôle.
-- **Pas de notification d'une réponse d'assistance.** Le client la découvre
-  en revenant dans l'application, ou parce qu'on lui a écrit sur WhatsApp.
-- **Pas de notification automatique au client.** Les gestes de l'éditeur ne
-  déclenchent pas d'e-mail ; seules les relances d'échéance en envoient.
-- **Pas d'alerte quand le service va mal.** La surveillance s'affiche, elle ne
-  réveille personne. Une alerte mal réglée se neutralise toute seule : après
-  la troisième fausse alerte nocturne, on crée un filtre. Les seuils seront
-  posés quand il y aura des semaines de mesures à regarder (§8.5).
+- **Pas de notification pour une note interne.** Seule une réponse publique
+  notifie le demandeur, dans sa cloche et par e-mail si Resend est configuré.
+- **Pas de notification pour chaque geste d'administration.** Suspensions,
+  suppressions et rapprochements restent journalisés sans spammer le client ;
+  les relances d'échéance conservent leur comportement propre.
+- **Pas de message WhatsApp libre.** Une alerte proactive utilise uniquement
+  le modèle Meta approuvé et les destinataires configurés ; un incident ne
+  contourne pas les règles de la Cloud API (§12.3).
 
 ---
 
@@ -840,24 +855,109 @@ lui-même.
 
 ---
 
-## 12. Prochaines marches
+## 12. Rôles, alertes et rapprochement
 
-1. **Brancher un agrégateur** (CinetPay couvre Wave, Orange, MTN et Moov en
-   une intégration) : le webhook appellera `activateSubscription()`, la file de
-   confirmation deviendra le mode dégradé plutôt que le mode normal.
-2. **Réconciliation** entre le registre et le relevé de l'agrégateur, une fois
-   celui-ci branché : comparer chaque jour ce qu'on croit avoir encaissé et ce
-   que le prestataire a réellement versé.
-3. **Prévenir le client qu'on lui a répondu.** La limite la plus gênante de
-   la version actuelle : une réponse d'assistance n'envoie rien. Un e-mail ou
-   un message WhatsApp sortant suffirait, mais c'est la première fois que
-   l'éditeur écrirait au client de sa propre initiative — décision à prendre
-   avant de coder.
-4. **Régler des seuils d'alerte**, maintenant que la mesure existe (§8.5).
-   Il faut d'abord quelques semaines de chiffres pour savoir ce qu'est un
-   comportement normal ; alerter sur un seuil deviné produirait du bruit, et
-   du bruit produit des filtres.
-5. **Second opérateur avec droits restreints** — lecture seule pour une
-   personne au support, écriture réservée au créateur. Aujourd'hui tous les
-   opérateurs sont égaux ; il faudrait ajouter une colonne `role` à
-   `platform_operators` et la lire dans `requireOperator`.
+### 12.1 Déléguer sans partager le compte du créateur
+
+L'écran **Opérateurs** gère les comptes de la Console : création, nom, rôle,
+activation/désactivation, réinitialisation du mot de passe et révocation des
+sessions. Le mot de passe provisoire n'apparaît que dans la réponse de
+création/réinitialisation ; il n'est ni listé, ni journalisé, ni stocké en
+clair. Un changement d'accès exige un motif. Le compte connecté ne peut pas se
+retirer son propre accès admin, et un verrou transactionnel protège aussi le
+dernier administrateur actif.
+
+| Rôle | Lecture | Écriture d'exploitation | Opérateurs et réglages d'alertes |
+|---|---|---|---|
+| `admin` | oui | oui | oui |
+| `supervisor` | oui | oui | non |
+| `support` | oui | **non** | non |
+
+Le garde `requireConsoleWrite` est appliqué dans le routeur Express, pas
+seulement dans la navigation. Les boutons d'écriture sont également masqués au
+support. Les routes `/operators` ainsi que la configuration et le test des
+alertes ont un second garde `requireConsoleAdmin`. Les changements de rôle
+sont relus depuis la base à chaque requête : une session déjà ouverte ne
+conserve pas un ancien droit.
+
+### 12.2 Prévenir le client d'une réponse publique
+
+Une réponse publique d'assistance et sa notification `SUPPORT_REPLY` sont
+validées dans la **même transaction**. Elle cible le demandeur, avec le type
+`support_request` et l'identifiant du ticket : la cloche ouvre directement
+`/support?request=<id>`. L'e-mail est tenté **après** le commit ; une clé
+Resend absente ou un refus du fournisseur ne retire ni la réponse ni la
+notification, et l'opérateur voit l'état de remise.
+
+Une note interne reste invisible du client et ne crée **aucune** notification
+ou e-mail. Elle ne clôt pas non plus l'engagement de première réponse.
+
+### 12.3 Alerter au lieu d'attendre un appel
+
+**Surveillance → Alertes proactives** règle : activation, taux de 5xx, trafic
+minimum, nombre de requêtes lentes, fenêtre, cooldown et destinataires. Le
+minimum de trafic évite « 100 % d'erreurs » sur un seul appel ; le cooldown est
+réservé sous verrou transactionnel pour éviter les doublons entre instances.
+Chaque événement et chaque remise, réussie ou refusée, restent consultables.
+
+Les e-mails utilisent Resend. WhatsApp utilise la Cloud API avec un **modèle
+approuvé à deux variables** (titre, détail), car une alerte proactive sort du
+fenêtrage de 24 h. Les secrets Meta ne sont pas enregistrés en base. Un test
+manuel est disponible sans activer la surveillance automatique.
+
+```dotenv
+RESEND_API_KEY=...
+MAIL_FROM=WashPilot CI <alertes@exemple.ci>
+WHATSAPP_ACCESS_TOKEN=...
+WHATSAPP_PHONE_NUMBER_ID=...
+WHATSAPP_ALERT_TEMPLATE=washpilot_operations_alert
+WHATSAPP_ALERT_TEMPLATE_LANGUAGE=fr
+MONITORING_ALERT_INTERVAL_MINUTES=5
+```
+
+### 12.4 Rapprocher sans réécrire la comptabilité
+
+**Rapprochement** accepte un CSV ou un JSON (2 000 lignes maximum par lot).
+Les alias courants sont normalisés : `reference` / `merchant_reference`,
+`transaction_id` / `provider_reference`, `amount` en francs ou `amount_cents`,
+`status`, `paid_at`. Les montants texte acceptent espaces et virgule décimale.
+Les lignes non payées sont conservées mais ignorées par la correspondance.
+
+Le moteur compare d'abord les références marchand/opérateur, puis les montants.
+Une correspondance exacte pose `reconciled_at` sur le paiement. Les autres cas
+ouvrent un écart : montant différent, ligne absente du registre, encaissement
+absent du relevé ou référence ambiguë. Un opérateur clôt l'écart avec un motif.
+**Aucun écart ne change un montant et aucune ligne de relevé n'active un
+abonnement.** La confirmation manuelle de l'encaissement reste nécessaire.
+
+Le connecteur facultatif appelle une URL qui reçoit `from` et `to` en ISO et
+renvoie CSV ou JSON (`entries`, `data`, ou tableau direct). La cadence suit la
+fenêtre pour ne pas réimporter le même relevé à chaque passage horaire ; le
+bouton de la Console force un contrôle immédiat.
+
+```dotenv
+RECONCILIATION_ENABLED=true
+RECONCILIATION_PROVIDER=wave
+RECONCILIATION_STATEMENT_URL=https://agregateur.exemple/releves
+RECONCILIATION_STATEMENT_TOKEN=...
+RECONCILIATION_LOOKBACK_HOURS=24
+```
+
+Sur un serveur, alertes et rapprochement sont planifiés dans
+`startReminderScheduler()` ; sur Vercel, le cron sécurisé existant appelle les
+deux moteurs en plus des relances. Il ne s'agit toujours **pas** d'une
+intégration d'encaissement en ligne ni d'un webhook d'activation.
+
+---
+
+## 13. Prochaines marches
+
+1. **Brancher un agrégateur de paiement** si le contrat marchand est obtenu :
+   son webhook appellera `activateSubscription()` et la file de confirmation
+   deviendra le mode dégradé. Le rapprochement de relevé livré au §12.4 ne
+   remplace pas cette intégration.
+2. **Rapprocher les versements bancaires nets** en plus des transactions :
+   frais de l'agrégateur, date de valeur et lot de payout demandent un modèle
+   distinct des encaissements de chaque abonnement.
+3. **Ajouter un canal de remise supplémentaire** si l'exploitation en a
+   besoin, en conservant l'historique, le cooldown et les tests de remise.

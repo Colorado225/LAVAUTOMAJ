@@ -16,6 +16,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner"
 
 import { consoleRequest, downloadConsoleFile, formatDate, formatFcfa } from "../api"
 import { Panel, StatCard } from "../layout"
+import { ConsoleWrite } from "../auth"
 import type { RevenueEntry, RevenueResponse } from "../types"
 
 /** `2026-03` → `mars 26`, pour un axe lisible sans le surcharger. */
@@ -364,6 +365,7 @@ export function ConsoleRevenue() {
                     </td>
                     <td className="px-4 py-2 text-right">
                       {!isReversal && r.amount_cents > 0 && (
+                        <ConsoleWrite>
                         <button
                           type="button"
                           onClick={() => {
@@ -375,6 +377,7 @@ export function ConsoleRevenue() {
                           <Undo2 className="size-3" />
                           Contrepasser
                         </button>
+                        </ConsoleWrite>
                       )}
                       {isReversal && <span className="text-xs italic">annulation</span>}
                     </td>

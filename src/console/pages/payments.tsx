@@ -7,6 +7,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner"
 
 import { consoleRequest, formatDateTime, formatFcfa } from "../api"
 import { Panel } from "../layout"
+import { ConsoleWrite } from "../auth"
 import type { ConsolePaymentIntent, ConsoleUpgradeRequest } from "../types"
 
 /**
@@ -138,16 +139,18 @@ export function ConsolePayments() {
                     déclaré {formatDateTime(intent.declared_at)}
                   </p>
                 </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={busy === intent.reference}
-                  aria-busy={busy === intent.reference}
-                  onClick={() => void confirm(intent)}
-                >
-                  <CheckCircle2 className="mr-1.5 size-4" aria-hidden />
-                  Confirmer
-                </Button>
+                <ConsoleWrite>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={busy === intent.reference}
+                    aria-busy={busy === intent.reference}
+                    onClick={() => void confirm(intent)}
+                  >
+                    <CheckCircle2 className="mr-1.5 size-4" aria-hidden />
+                    Confirmer
+                  </Button>
+                </ConsoleWrite>
               </li>
             ))}
           </ul>
@@ -173,16 +176,18 @@ export function ConsolePayments() {
                   </p>
                   {request.note && <p className="mt-1 text-xs italic text-slate-500">« {request.note} »</p>}
                 </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="text-slate-300"
-                  disabled={busy === request.id}
-                  onClick={() => void decline(request)}
-                >
-                  Décliner
-                </Button>
+                <ConsoleWrite>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="text-slate-300"
+                    disabled={busy === request.id}
+                    onClick={() => void decline(request)}
+                  >
+                    Décliner
+                  </Button>
+                </ConsoleWrite>
               </li>
             ))}
           </ul>

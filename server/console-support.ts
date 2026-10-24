@@ -25,6 +25,8 @@ import { asyncRoute, body, parseId } from "./http.ts"
 import { HttpError } from "./auth.ts"
 import { adminDb, auditPlatformAction } from "./platform-admin.ts"
 import { logConsoleAction } from "./console-auth.ts"
+import { isMailerConfigured, sendMail, supportReplyMessage } from "./mailer.ts"
+import { env } from "./env.ts"
 import {
   PERMISSION_LABELS,
   ROLE_LABELS,
@@ -120,36 +122,87 @@ export function registerSupportRoutes(r: Router): void {
       const request = await getRequest(pool, id)
       if (!request) throw new HttpError(404, "not_found", "Cette demande est introuvable.")
 
-      const message = await addMessage(pool, {
-        requestId: id,
-        body: input.body,
-        authorOperatorEmail: operator.email,
-        internal: input.internal,
-      })
+      const client = await pool.connect()
+      let message: Awaited<ReturnType<typeof addMessage>>
+      let notificationId: string | null = null
+      try {
+        await client.query("BEGIN")
+        message = await addMessage(client, {
+          requestId: id,
+          body: input.body,
+          authorOperatorEmail: operator.email,
+          internal: input.internal,
+        })
 
-      // Une note interne ne laisse pas de trace chez le client : elle ne le
-      // concerne pas, et l'inscrire dans son journal reviendrait à la lui
-      // montrer à moitié.
-      if (!input.internal) {
-        await auditPlatformAction(
-          pool,
+        // Une note interne ne laisse pas de trace chez le client et ne
+        // déclenche surtout aucune notification. Une réponse publique crée en
+        // revanche une alerte nominative et persistante dans sa cloche.
+        if (!input.internal) {
+          if (request.created_by) {
+            const notification = await client.query<{ id: string }>(
+              `INSERT INTO notifications
+                 (organization_id, user_id, type, title, message, entity_type, entity_id)
+               VALUES($1::uuid,$2::uuid,'SUPPORT_REPLY','Réponse à votre demande d’assistance',$3,'support_request',$4::uuid)
+               RETURNING id`,
+              [
+                request.organization_id,
+                request.created_by,
+                `${operator.fullName} a répondu à votre demande « ${request.subject} ».`,
+                id,
+              ],
+            )
+            notificationId = notification.rows[0].id
+          }
+          await auditPlatformAction(
+            client,
+            request.organization_id,
+            operator.email,
+            "support.replied",
+            id,
+            { subject: request.subject },
+          )
+        }
+        await logConsoleAction(
+          client,
+          operator,
+          input.internal ? "support.note_added" : "support.replied",
           request.organization_id,
-          operator.email,
-          "support.replied",
-          id,
+          request.organization_name,
           { subject: request.subject },
         )
+        await client.query("COMMIT")
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {})
+        throw error
+      } finally {
+        client.release()
       }
-      await logConsoleAction(
-        pool,
-        operator,
-        input.internal ? "support.note_added" : "support.replied",
-        request.organization_id,
-        request.organization_name,
-        { subject: request.subject },
-      )
 
-      res.status(201).json({ message, request: withSla((await getRequest(pool, id))!) })
+      // Le fournisseur e-mail ne doit jamais décider si la réponse peut être
+      // publiée : elle est déjà enregistrée. Le résultat de remise est simplement
+      // renvoyé à l'opérateur pour qu'il sache s'il doit prévenir autrement.
+      let emailDelivered = false
+      if (!input.internal && request.requester_email) {
+        const base = env.APP_URL.replace(/\/+$/, "")
+        emailDelivered = await sendMail(supportReplyMessage({
+          to: request.requester_email,
+          firstName: request.requester_name,
+          organizationName: request.organization_name,
+          requestSubject: request.subject,
+          supportUrl: `${base ? `${base}/support` : "/support"}?request=${encodeURIComponent(id)}`,
+        }))
+      }
+
+      res.status(201).json({
+        message: message!,
+        request: withSla((await getRequest(pool, id))!),
+        notification: {
+          in_app: notificationId !== null,
+          notification_id: notificationId,
+          email_configured: isMailerConfigured(),
+          email_delivered: emailDelivered,
+        },
+      })
     }),
   )
 

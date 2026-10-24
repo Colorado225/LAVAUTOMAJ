@@ -26,6 +26,8 @@ import express from "express"
 import { apiErrorHandler, mountApi } from "./app.ts"
 import { initDatabaseSchema, getPool, isDatabaseReady } from "./db.ts"
 import { runSubscriptionReminders } from "./reminders.ts"
+import { runMonitoringAlerts } from "./monitoring-alerts.ts"
+import { runScheduledReconciliation } from "./reconciliation.ts"
 import { env } from "./env.ts"
 import { API_PATH_PARAM, restoreApiPath } from "./vercel-url.ts"
 
@@ -150,8 +152,18 @@ function buildApp(): Express {
       return
     }
     try {
-      const outcomes = await runSubscriptionReminders(pool)
-      res.json({ ran_at: new Date().toISOString(), processed: outcomes.length, outcomes })
+      const [outcomes, alerts, reconciliation] = await Promise.all([
+        runSubscriptionReminders(pool),
+        runMonitoringAlerts(pool),
+        runScheduledReconciliation(pool),
+      ])
+      res.json({
+        ran_at: new Date().toISOString(),
+        processed: outcomes.length,
+        outcomes,
+        alerts,
+        reconciliation,
+      })
     } catch (error) {
       console.error("[vercel] Relances échouées :", error instanceof Error ? error.message : error)
       res.status(500).json({ error: { code: "reminders_failed", message: "Les relances n'ont pas pu être exécutées." } })
