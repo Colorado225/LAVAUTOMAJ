@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { apiErrorMessage, apiFetch, useApi } from "@/lib/api"
+import { accessCapacityReason, type AccessCapacity } from "@/lib/access-api"
 import { usePermission, usePermissions, ROLE_LABELS, type Permission, type Role } from "@/lib/permissions"
 import { actionGate } from "@/lib/action-blocking"
 import { BlockedReason } from "@/components/access/blocked-reason"
@@ -65,6 +66,12 @@ export default function AccessSettingsPage() {
     writesImmediately: true,
   })
   const [refreshKey, setRefreshKey] = React.useState(0)
+  const {
+    data: capacity,
+    loading: capacityLoading,
+    error: capacityError,
+  } = useApi<AccessCapacity>(manage.allowed ? `/api/v1/access/capacity?refresh=${refreshKey}` : "")
+  const capacityReason = accessCapacityReason(capacity)
   const { data, loading, error } = useApi<{ members: AccessMember[] }>(
     `/api/v1/access/members?refresh=${refreshKey}`,
   )
@@ -82,12 +89,14 @@ export default function AccessSettingsPage() {
       const response = await apiFetch(path, { method, body: JSON.stringify(payload) })
       if (!response.ok) {
         setActionError(await apiErrorMessage(response))
-        return
+        return false
       }
       setNotice(successMessage)
       setRefreshKey((key) => key + 1)
+      return true
     } catch {
       setActionError("Modification impossible : serveur injoignable.")
+      return false
     } finally {
       setBusy(null)
     }
@@ -153,12 +162,28 @@ export default function AccessSettingsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
+              {capacity && (
+                <p className="mb-3 text-sm text-muted-foreground">
+                  {capacity.active_users} compte{capacity.active_users === 1 ? "" : "s"} actif{capacity.active_users === 1 ? "" : "s"}
+                  {capacity.max_users === null
+                    ? " · nombre illimité"
+                    : ` · ${capacity.remaining_users} place${capacity.remaining_users === 1 ? "" : "s"} disponible${capacity.remaining_users === 1 ? "" : "s"} sur ${capacity.max_users}`}
+                </p>
+              )}
+              <BlockedReason reason={capacityReason} className="mb-3" />
+              {capacityError && <p className="mb-3 text-xs text-destructive">Plafond indisponible : {capacityError}</p>}
               <form
                 className="grid gap-3 sm:grid-cols-2"
-                onSubmit={(event) => {
+                onSubmit={async (event) => {
                   event.preventDefault()
-                  const form = new FormData(event.currentTarget)
-                  void send(
+                  if (busy !== null) return
+                  if (capacityReason) {
+                    setActionError(capacityReason)
+                    return
+                  }
+                  const formElement = event.currentTarget
+                  const form = new FormData(formElement)
+                  const created = await send(
                     "/api/v1/access/members",
                     "POST",
                     {
@@ -171,9 +196,8 @@ export default function AccessSettingsPage() {
                     },
                     "Compte créé. Communiquez le mot de passe initial à votre collaborateur.",
                   )
-                  // Le formulaire se vide uniquement en cas de succès : en
-                  // cas d'erreur, l'utilisateur garde sa saisie.
-                  event.currentTarget.reset()
+                  // En cas de refus, la saisie reste disponible pour correction.
+                  if (created) formElement.reset()
                 }}
               >
                 <label className="flex flex-col gap-1 text-sm font-medium">
@@ -217,7 +241,7 @@ export default function AccessSettingsPage() {
                   />
                 </label>
                 <div className="sm:col-span-2">
-                  <Button type="submit" disabled={busy !== null}>
+                  <Button type="submit" disabled={busy !== null || capacityLoading || Boolean(capacityReason)}>
                     {busy === "/api/v1/access/members" ? "Création…" : "Créer le compte"}
                   </Button>
                 </div>

@@ -5,6 +5,7 @@ import { BaseLayout } from "@/components/layouts/base-layout"
 import { useAccess } from "@/lib/permissions"
 import { actionGate } from "@/lib/action-blocking"
 import { BlockedReason } from "@/components/access/blocked-reason"
+import { AccountAccessCard } from "@/components/team/account-access-card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -34,7 +35,7 @@ import {
 import { useApi } from "@/lib/api"
 import { useMutation } from "@/lib/use-mutation"
 import type { OnboardingSummary } from "@/lib/onboarding-api"
-import type { CurrentMember, OrganizationAccount, WorkerInput, WorkerRecord, WorkerRole } from "@/lib/team-api"
+import type { CurrentMember, WorkerInput, WorkerRecord, WorkerRole } from "@/lib/team-api"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ResponsiveTable } from "@/components/ui/data-table"
@@ -47,12 +48,6 @@ const roleLabels: Record<WorkerRole, string> = {
   versatile_washer: "Laveur polyvalent",
   team_lead: "Chef d’équipe",
   custom: "Fonction personnalisée",
-}
-
-const accountRoleLabels: Record<string, string> = {
-  owner: "Propriétaire",
-  manager: "Responsable",
-  cashier: "Caissier",
 }
 
 const emptyForm = (): WorkerInput => ({
@@ -82,9 +77,8 @@ export default function TeamPage() {
     limit !== null && limit !== undefined && actifs >= limit
   const [refreshKey, setRefreshKey] = useState(0)
   const { data, loading, error } = useApi<WorkerRecord[]>(`/api/v1/workers?refresh=${refreshKey}`)
-  const { data: accounts, loading: accountsLoading, error: accountsError } = useApi<OrganizationAccount[]>(`/api/v1/users?refresh=${refreshKey}`)
   const { data: summary } = useApi<OnboardingSummary>("/api/v1/onboarding/summary")
-  const { data: currentMember } = useApi<CurrentMember>(`/api/v1/auth/me?refresh=${refreshKey}`)
+  const { data: currentMember, loading: currentMemberLoading } = useApi<CurrentMember>(`/api/v1/auth/me?refresh=${refreshKey}`)
   const workers = useMemo(() => data ?? [], [data])
   const activeWorkers = useMemo(() => workers.filter((worker) => worker.status === "active"), [workers])
   const inactiveWorkers = workers.length - activeWorkers.length
@@ -385,36 +379,10 @@ export default function TeamPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Comptes ayant accès à WashPilot</CardTitle>
-            <CardDescription>Utilisateurs disposant d’un compte de connexion dans cette organisation.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {accountsError && <p role="alert" className="mb-3 text-sm text-destructive">{accountsError}</p>}
-            {accountsLoading ? (
-              <TableSkeleton rows={3} cols={3} label="Chargement des comptes" />
-            ) : accounts && accounts.length > 0 ? (
-              <div className="overflow-x-auto rounded-lg border">
-                <Table>
-                  <TableHeader><TableRow><TableHead>Nom</TableHead><TableHead>E-mail</TableHead><TableHead>Rôle</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {accounts.map((account) => (
-                      <TableRow key={account.id}>
-                        <TableCell className="font-medium">{[account.first_name, account.last_name].filter(Boolean).join(" ") || account.email}</TableCell>
-                        <TableCell>{account.email}</TableCell>
-                        <TableCell><Badge variant="outline">{accountRoleLabels[account.role] ?? account.role}</Badge></TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            ) : !accountsError ? (
-              <p className="text-sm text-muted-foreground">Aucun compte d’accès synchronisé.</p>
-            ) : null}
-            <p className="mt-3 text-xs text-muted-foreground">Cette liste est en lecture seule. La gestion des invitations arrive prochainement.</p>
-          </CardContent>
-        </Card>
+        <AccountAccessCard
+          role={currentMember?.role}
+          roleLoading={currentMemberLoading}
+        />
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={handleDialogChange}>
