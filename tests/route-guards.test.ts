@@ -74,6 +74,17 @@ const ALLOWED_UNGUARDED: Record<string, string> = {
   "console-monitoring.ts|GET /monitoring": "console éditeur : montée sous requireOperator",
   "console-monitoring.ts|GET /monitoring/errors": "console éditeur : montée sous requireOperator",
   "console-monitoring.ts|GET /monitoring/errors/:id": "console éditeur : montée sous requireOperator",
+  "console-monitoring.ts|GET /monitoring/alerts": "console éditeur : lecture sous requireOperator ; écritures avec requireConsoleAdmin",
+  "console-operators.ts|GET /": "admin Console : routeur monté sous requireOperator et requireConsoleAdmin",
+  "console-operators.ts|POST /": "admin Console : routeur monté sous requireOperator et requireConsoleAdmin",
+  "console-operators.ts|PATCH /:id": "admin Console : routeur monté sous requireOperator et requireConsoleAdmin",
+  "console-operators.ts|POST /:id/reset-password": "admin Console : routeur monté sous requireOperator et requireConsoleAdmin",
+  "console-operators.ts|POST /:id/revoke-sessions": "admin Console : routeur monté sous requireOperator et requireConsoleAdmin",
+  "console-reconciliation.ts|GET /reconciliation": "console éditeur : requireOperator, support en lecture seule",
+  "console-reconciliation.ts|POST /reconciliation/batches": "console éditeur : requireOperator puis requireConsoleWrite",
+  "console-reconciliation.ts|POST /reconciliation/run": "console éditeur : requireOperator puis requireConsoleWrite",
+  "console-reconciliation.ts|GET /reconciliation/batches/:id": "console éditeur : requireOperator, support en lecture seule",
+  "console-reconciliation.ts|POST /reconciliation/discrepancies/:id/resolve": "console éditeur : requireOperator puis requireConsoleWrite",
   "console-support.ts|GET /support": "console éditeur : montée sous requireOperator",
   "console-support.ts|GET /support/:id": "console éditeur : montée sous requireOperator",
   "console-support.ts|POST /support/:id/messages": "console éditeur : montée sous requireOperator",
@@ -104,7 +115,7 @@ const ALLOWED_UNGUARDED: Record<string, string> = {
 }
 
 /** Marqueurs d'un contrôle d'autorisation dans le corps de la route. */
-const GUARD_MARKERS = /\b(requirePermission|assertPermission|requireCapability|requireOperator)\s*\(/
+const GUARD_MARKERS = /\b(requirePermission|assertPermission|requireCapability|requireOperator)\s*\(|\brequireConsoleAdmin\b/
 
 interface RouteRegistration {
   file: string

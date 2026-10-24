@@ -125,6 +125,36 @@ export function createAccessRouter() {
     }),
   )
 
+  // GET /api/v1/access/capacity — places disponibles sans exposer les comptes.
+  // Un responsable peut créer des agents mais ne peut pas lire la liste des
+  // utilisateurs : ces simples compteurs lui permettent néanmoins de connaître
+  // le plafond du forfait avant d'ouvrir le formulaire.
+  r.get(
+    "/access/capacity",
+    requirePermission("worker:create"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const q = await db().query<{ max_users: number | null; active_count: number }>(
+        `SELECT p.max_users, COUNT(m.id)::int AS active_count FROM organizations o
+         LEFT JOIN subscriptions s ON s.organization_id = o.id
+         LEFT JOIN plans p ON p.id = s.plan_id
+         LEFT JOIN organization_members m ON m.organization_id = o.id AND m.status = 'active'
+         WHERE o.id = $1::uuid GROUP BY p.max_users`,
+        [t.organizationId],
+      )
+      const row = q.rows[0]
+      const maxUsers = row?.max_users == null ? null : Number(row.max_users)
+      const activeUsers = Number(row?.active_count ?? 0)
+      const remainingUsers = maxUsers === null ? null : Math.max(maxUsers - activeUsers, 0)
+      res.json({
+        max_users: maxUsers,
+        active_users: activeUsers,
+        remaining_users: remainingUsers,
+        can_create: maxUsers === null || (remainingUsers ?? 0) > 0,
+      })
+    }),
+  )
+
   // GET /api/v1/access/members — membres de la station et droits effectifs.
   r.get(
     "/access/members",

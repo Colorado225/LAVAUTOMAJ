@@ -53,14 +53,30 @@ const schema = z.object({
     .transform((value) => value === "true"),
   /** Intervalle entre deux passages du planificateur de relances, en minutes. */
   REMINDERS_INTERVAL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
+  /** Fréquence d'évaluation des alertes de supervision (seuils réglés en Console). */
+  MONITORING_ALERT_INTERVAL_MINUTES: z.coerce.number().int().min(1).max(60).default(5),
+  /** WhatsApp Cloud API : les alertes proactives exigent un modèle approuvé. */
+  WHATSAPP_ACCESS_TOKEN: z.string().trim().optional().default(""),
+  WHATSAPP_PHONE_NUMBER_ID: z.string().trim().optional().default(""),
+  WHATSAPP_API_VERSION: z.string().trim().regex(/^v\d+\.\d+$/).default("v22.0"),
+  WHATSAPP_ALERT_TEMPLATE: z.string().trim().optional().default(""),
+  WHATSAPP_ALERT_TEMPLATE_LANGUAGE: z.string().trim().optional().default("fr"),
+  /** Relevé d'agrégateur lu périodiquement, sans activer les paiements en ligne. */
+  RECONCILIATION_ENABLED: z
+    .enum(["true", "false"])
+    .optional()
+    .default("false")
+    .transform((value) => value === "true"),
+  RECONCILIATION_PROVIDER: z.string().trim().toLowerCase().optional().default(""),
+  RECONCILIATION_STATEMENT_URL: z.string().trim().optional().default(""),
+  RECONCILIATION_STATEMENT_TOKEN: z.string().trim().optional().default(""),
+  RECONCILIATION_LOOKBACK_HOURS: z.coerce.number().int().min(1).max(24 * 31).default(24),
   /**
-   * Adresses des administrateurs de plateforme (l'éditeur), séparées par des
-   * virgules. Appliquée au démarrage : les comptes existants portant l'une de
-   * ces adresses reçoivent le drapeau, les autres le perdent.
-   *
-   * C'est volontairement la seule façon d'en nommer un. Aucune route n'accorde
-   * ce droit : il traverse l'isolation entre clients, il ne doit donc jamais
-   * pouvoir être obtenu depuis l'application elle-même.
+   * Adresses d'amorçage des administrateurs de plateforme, séparées par des
+   * virgules. Elles créent/réactivent les comptes `bootstrap` au démarrage.
+   * Les comptes gérés depuis la Console (`managed_by = 'console'`) sont
+   * volontairement ignorés : leur cycle de vie ne dépend plus de cette liste.
+   * Aucun compte de station ne peut obtenir ce droit par ses propres routes.
    */
   PLATFORM_ADMIN_EMAILS: z.string().trim().optional().default(""),
 

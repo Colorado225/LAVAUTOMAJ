@@ -196,12 +196,11 @@ test("sans session, la console répond 404", async () => {
 })
 
 test("aucune route n'accorde la qualité d'opérateur", async () => {
-  // Le compte d'opérateur ne s'obtient que par PLATFORM_ADMIN_EMAILS au
-  // démarrage. S'il devenait délégable depuis l'application, le premier
-  // propriétaire curieux obtiendrait la lecture et l'écriture sur toutes les
-  // autres stations.
+  // Un opérateur peut être amorcé par PLATFORM_ADMIN_EMAILS ou délégué par un
+  // administrateur de la Console. Aucune route de station ne doit toutefois
+  // écrire cette table : ce serait une élévation vers toutes les organisations.
   //
-  // La garantie se vérifie à la source : un seul module écrit cette table.
+  // La garantie se vérifie à la source sur les deux seuls modules autorisés.
   const files = await readdir(new URL("../server/", import.meta.url))
   const writers: string[] = []
   for (const file of files.filter((f) => f.endsWith(".ts"))) {
@@ -215,9 +214,13 @@ test("aucune route n'accorde la qualité d'opérateur", async () => {
   }
   assert.deepEqual(
     [...new Set(writers)],
-    ["console-auth.ts"],
-    "seul console-auth.ts doit écrire platform_operators",
+    ["console-auth.ts", "console-operators.ts"],
+    "seuls l'amorçage et la gestion admin de la Console peuvent écrire platform_operators",
   )
+  const management = await readFile(new URL("../server/console-operators.ts", import.meta.url), "utf8")
+  const adminRouter = await readFile(new URL("../server/admin.ts", import.meta.url), "utf8")
+  assert.match(adminRouter, /r\.use\("\/operators",\s*requireConsoleAdmin,/)
+  assert.doesNotMatch(management, /requireTenantContext|requireSession/)
 
   // Et à l'exécution : une tentative passée par les routes qui touchent aux
   // comptes ne doit créer aucun opérateur.

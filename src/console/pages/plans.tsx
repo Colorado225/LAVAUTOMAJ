@@ -4,6 +4,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner"
 
 import { consoleRequest, formatDateTime } from "../api"
 import { Panel } from "../layout"
+import { ConsoleWrite } from "../auth"
 
 /**
  * Les tarifs, modifiables depuis la console.
@@ -142,17 +143,20 @@ export function ConsolePlans() {
                   tarif personnalisé le {formatDateTime(plan.price_overridden_at)}
                 </span>
               )}
-              <button
-                type="button"
-                onClick={() => startEditing(plan)}
-                className="ml-auto rounded-md border border-white/10 px-3 py-1 text-xs text-slate-200 transition-opacity hover:opacity-80"
-              >
-                Modifier
-              </button>
+              <ConsoleWrite>
+                <button
+                  type="button"
+                  onClick={() => startEditing(plan)}
+                  className="ml-auto rounded-md border border-white/10 px-3 py-1 text-xs text-slate-200 transition-opacity hover:opacity-80"
+                >
+                  Modifier
+                </button>
+              </ConsoleWrite>
             </div>
             <p className="mt-1 text-xs text-slate-500">{HINTS[plan.code]}</p>
 
             {editing === plan.code && (
+              <ConsoleWrite>
               <form onSubmit={submit} className="mt-3 space-y-3 rounded-lg bg-white/5 p-4">
                 <div>
                   <label htmlFor={`price-${plan.code}`} className="block text-xs text-slate-400">
@@ -206,6 +210,7 @@ export function ConsolePlans() {
                   </button>
                 </div>
               </form>
+              </ConsoleWrite>
             )}
           </li>
         ))}

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { LoadingSpinner } from "@/components/ui/loading-spinner"
 
 import { consoleRequest, formatDateTime } from "../api"
+import { ConsoleWrite } from "../auth"
 import {
   SUPPORT_CATEGORY_LABELS,
   SUPPORT_STATUS_LABELS,
@@ -33,6 +34,7 @@ export function ConsoleSupportDetail() {
   const [loading, setLoading] = React.useState(true)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  const [notice, setNotice] = React.useState<string | null>(null)
 
   const load = React.useCallback(async () => {
     const payload = await consoleRequest<{ request: SupportRequest; messages: SupportMessage[] }>(
@@ -63,6 +65,7 @@ export function ConsoleSupportDetail() {
   async function run(fn: () => Promise<void>) {
     setBusy(true)
     setError(null)
+    setNotice(null)
     try {
       await fn()
       await load()
@@ -133,6 +136,11 @@ export function ConsoleSupportDetail() {
         </div>
       </header>
 
+      {notice && (
+        <p role="status" className="rounded-lg bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
+          {notice}
+        </p>
+      )}
       {error && (
         <p role="status" className="rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-300">
           {error}
@@ -175,6 +183,7 @@ export function ConsoleSupportDetail() {
         <label className="sr-only" htmlFor="reponse">
           Votre message
         </label>
+        <ConsoleWrite>
         <textarea
           id="reponse"
           value={draft}
@@ -187,7 +196,9 @@ export function ConsoleSupportDetail() {
           }
           className="w-full resize-y rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600"
         />
+        </ConsoleWrite>
         <div className="mt-3 flex flex-wrap items-center gap-3">
+          <ConsoleWrite>
           <label className="flex items-center gap-2 text-xs text-slate-300">
             <input
               type="checkbox"
@@ -203,10 +214,21 @@ export function ConsoleSupportDetail() {
             disabled={busy || draft.trim().length < 2}
             onClick={() =>
               run(async () => {
-                await consoleRequest(`/support/${id}/messages`, {
+                const result = await consoleRequest<{
+                  notification: { in_app: boolean; email_configured: boolean; email_delivered: boolean }
+                }>(`/support/${id}/messages`, {
                   method: "POST",
                   body: JSON.stringify({ body: draft.trim(), internal }),
                 })
+                if (!internal) {
+                  setNotice(
+                    result.notification.email_delivered
+                      ? "Réponse publiée. Le demandeur a été notifié dans l'application et par e-mail."
+                      : result.notification.in_app
+                        ? "Réponse publiée et notification ajoutée dans l'application. L'e-mail n'a pas été remis."
+                        : "Réponse publiée. Aucun destinataire de notification n'est rattaché à cette demande.",
+                  )
+                }
                 setDraft("")
               })
             }
@@ -219,6 +241,7 @@ export function ConsoleSupportDetail() {
               Une note interne n'arrête pas le compteur d'engagement.
             </p>
           )}
+          </ConsoleWrite>
 
           <div className="ml-auto flex gap-2">
             {request.created_by && (
@@ -242,6 +265,7 @@ export function ConsoleSupportDetail() {
                 Diagnostic
               </Button>
             )}
+            <ConsoleWrite>
             <Button
               type="button"
               size="sm"
@@ -271,6 +295,7 @@ export function ConsoleSupportDetail() {
                 </>
               )}
             </Button>
+            </ConsoleWrite>
           </div>
         </div>
       </section>

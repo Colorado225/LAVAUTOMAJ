@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Activity,
-  CalendarDays,
   CarFront,
   ChartNoAxesCombined,
   Plus,
@@ -27,17 +26,15 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { CButton, CButtonGroup, CCol, CProgress, CRow, CWidgetStatsA } from '@coreui/react'
 
 import { BaseLayout } from '@/components/layouts/base-layout'
 import {
-  ElevatedCard,
   Pressable,
   Stagger,
   StaggerItem,
   Surface,
 } from '@/components/ui/motion'
-import { SPRING } from '@/lib/motion'
-import { motion } from 'framer-motion'
 import { DashboardMetrics } from '@/components/dashboard-metrics'
 import { useOnboardingStatus } from '@/lib/onboarding-api'
 import { useApi } from '@/lib/api'
@@ -94,6 +91,12 @@ const PERIOD_LABELS: Record<Period, string> = {
   '30days': '30 derniers jours',
 }
 
+const PERIOD_SHORT_LABELS: Record<Period, string> = {
+  today: 'Jour',
+  '7days': '7 jours',
+  '30days': '30 jours',
+}
+
 /** Nombre de jours couverts par la période, aujourd'hui inclus. */
 const PERIOD_DAYS: Record<Period, number> = {
   today: 1,
@@ -140,7 +143,7 @@ function SummaryCard({
   description,
   icon: Icon,
   loading = false,
-  index = 0,
+  color,
   trend,
   explanation,
 }: {
@@ -152,61 +155,37 @@ function SummaryCard({
   description: string
   icon: React.ElementType
   loading?: boolean
-  index?: number
-  /** Série pour la mini-courbe révélée au survol. */
+  color: 'primary' | 'info' | 'warning' | 'danger'
+  /** Série journalière réelle de la période. */
   trend?: number[]
   /** Définition de la métrique : ce qui est compté, et ce qui ne l'est pas. */
   explanation?: React.ReactNode
 }) {
   return (
-    <ElevatedCard
-      index={index}
-      readOnly
-      className="group p-5"
+    <CWidgetStatsA
+      color={color}
+      className="mb-4"
       aria-busy={loading || undefined}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+      value={loading
+        ? <Skeleton className="h-7 w-32 bg-white/25" />
+        : <span className="coreui-widget-value"><AnimatedNumber value={value} format={unit} /></span>}
+      title={(
+        <>
           {explanation ? (
-            <MetricLabel
-              label={title}
-              explanation={explanation}
-              className="text-sm font-medium text-muted-foreground"
-            />
-          ) : (
-            <p className="text-sm font-medium text-muted-foreground">{title}</p>
-          )}
-          {loading ? (
-            <Skeleton className="mt-3 h-8 w-36" />
-          ) : (
-            <p className="mt-3 break-words text-2xl font-bold tracking-tight">
-              <AnimatedNumber value={value} format={unit} />
-            </p>
+            <MetricLabel label={title} explanation={explanation} className="text-white/90" />
+          ) : title}
+          <p className="coreui-widget-description">{description}</p>
+        </>
+      )}
+      action={<Icon className="coreui-widget-icon" aria-hidden="true" />}
+      chart={(
+        <div className="coreui-widget-chart" aria-hidden="true">
+          {!loading && trend && trend.length > 1 && (
+            <Sparkline values={trend} width={320} height={70} stroke="rgba(255,255,255,0.9)" />
           )}
         </div>
-        {/* L'icône se détache de la carte au survol : elle avance d'un cran
-            dans la hiérarchie de profondeur, le reste du contenu ne bouge pas. */}
-        <motion.div
-          className="edge-3d rounded-xl bg-muted/50 p-3"
-          whileHover={{ scale: 1.06 }}
-          transition={SPRING.snappy}
-        >
-          <Icon className="size-5 text-muted-foreground" aria-hidden="true" />
-        </motion.div>
-      </div>
-      <div className="mt-3 flex items-end justify-between gap-3">
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          {description}
-        </p>
-        {/* Tendance de la période : apparaît au survol, sans bousculer la mise
-            en page — la hauteur est réservée, seule l'opacité varie. */}
-        {!loading && trend && trend.length > 1 && (
-          <span className="shrink-0 translate-y-1 text-primary opacity-0 transition-all duration-150 ease-out group-hover:translate-y-0 group-hover:opacity-100">
-            <Sparkline values={trend} />
-          </span>
-        )}
-      </div>
-    </ElevatedCard>
+      )}
+    />
   )
 }
 
@@ -305,6 +284,15 @@ export default function DashboardPage() {
   const hasRevenueData = revenueSeries.some(
     (day) => day.revenue > 0 || day.expenses > 0 || day.washes > 0
   )
+  const completionPercent = totals?.total_washes
+    ? Math.round((totals.completed_washes / totals.total_washes) * 100)
+    : 0
+  const paidPercent = totals?.total_washes
+    ? Math.round((totals.paid_washes / totals.total_washes) * 100)
+    : 0
+  const expenseRatio = totals?.revenue_cents
+    ? Math.round((totals.expenses_cents / totals.revenue_cents) * 100)
+    : 0
 
   // Actualise toutes les données du dashboard : ré-instancie les métriques
   // (DashboardMetrics est remonté via key) et re-télécharge les résumés API.
@@ -340,7 +328,7 @@ export default function DashboardPage() {
       title="Tableau de bord"
       description="Pilotez votre station de lavage en un coup d'œil."
     >
-        <div className="flex min-w-0 flex-1 flex-col gap-10 p-4 md:p-6 xl:p-8">
+        <div className="flex min-w-0 flex-1 flex-col gap-6 p-4 md:p-6 xl:p-8">
         {/* Header */}
         <section className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
           <div className="min-w-0 space-y-2">
@@ -396,33 +384,275 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {/* Period selector */}
-        <section className="elev-1 flex flex-col justify-between gap-3 rounded-2xl border bg-card p-4 sm:flex-row sm:items-center">
-          <div className="flex items-center gap-3">
-            <span className="rounded-xl bg-muted p-2.5">
-              <CalendarDays className="size-5" />
-            </span>
-            <div>
-              <p className="text-sm font-semibold">Période d'analyse</p>
-              <p className="text-xs text-muted-foreground">
-                Du {formatDate(range.from, 'day')} au {formatDate(range.to, 'day')}
-              </p>
-            </div>
-          </div>
+        {/* Finance and operations overview */}
+        <section aria-label="Finances et activité" className="space-y-5">
+          {reportError && (
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+            >
+              Impossible de charger les indicateurs financiers : {reportError}
+            </p>
+          )}
 
-          <div className="flex flex-wrap gap-2">
-            {(Object.keys(PERIOD_LABELS) as Period[]).map((key) => (
-              <Button
-                key={key}
-                variant={period === key ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setPeriod(key)}
-                aria-pressed={period === key}
-              >
-                {PERIOD_LABELS[key]}
-              </Button>
-            ))}
-          </div>
+          <CRow>
+            <CCol xs={12} sm={6} xl={3}>
+            <SummaryCard
+              title="Recettes encaissées"
+              value={totals?.revenue_cents}
+              unit={formatFCFA}
+              description="Paiements confirmés, hors opérations annulées."
+              icon={Wallet}
+              loading={reportLoading}
+              color="primary"
+              trend={revenueSeries.map((day) => day.revenue)}
+              explanation="Somme des paiements confirmés sur la période, opérations annulées exclues. Un paiement mobile money en attente n'est pas compté avant confirmation."
+            />
+            </CCol>
+            <CCol xs={12} sm={6} xl={3}>
+            <SummaryCard
+              title="Lavages réalisés"
+              value={totals?.completed_washes}
+              unit={formatCount}
+              description={
+                totals
+                  ? `${formatCount(totals.total_washes)} lavage${totals.total_washes === 1 ? '' : 's'} enregistré${totals.total_washes === 1 ? '' : 's'} au total sur la période.`
+                  : 'Nombre de lavages terminés sur la période.'
+              }
+              icon={CarFront}
+              loading={reportLoading}
+              color="info"
+              trend={revenueSeries.map((day) => day.washes)}
+              explanation="Lavages au statut « terminé » sur la période. Les lavages en cours et annulés ne sont pas inclus."
+            />
+            </CCol>
+            <CCol xs={12} sm={6} xl={3}>
+            <SummaryCard
+              title="Dépenses enregistrées"
+              value={totals?.expenses_cents}
+              unit={formatFCFA}
+              description="Sorties enregistrées dans le module des dépenses."
+              icon={Receipt}
+              loading={reportLoading}
+              color="warning"
+              trend={revenueSeries.map((day) => day.expenses)}
+              explanation="Dépenses saisies dans le module Dépenses sur la période, quel que soit leur mode de règlement."
+            />
+            </CCol>
+            <CCol xs={12} sm={6} xl={3}>
+            <SummaryCard
+              title="Solde opérationnel estimé"
+              value={totals?.net_cents}
+              unit={formatFCFA}
+              description="Recettes moins dépenses enregistrées. Ce n'est pas un bénéfice comptable."
+              icon={ChartNoAxesCombined}
+              loading={reportLoading}
+              color="danger"
+              trend={revenueSeries.map((day) => day.revenue - day.expenses)}
+              explanation="Recettes encaissées moins dépenses enregistrées. Ce n'est pas un bénéfice comptable : salaires, impôts et amortissements n'y figurent pas."
+            />
+            </CCol>
+          </CRow>
+        </section>
+
+        {/* Activity panels */}
+        <section className="grid gap-4 xl:grid-cols-3">
+          <Surface elevation={1} className="p-5 xl:col-span-2">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="font-semibold">Évolution des recettes</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Recettes et dépenses jour par jour · Du {formatDate(range.from, 'day')} au {formatDate(range.to, 'day')}.
+                </p>
+              </div>
+              <div className="d-flex flex-wrap align-items-center gap-2">
+                <CButtonGroup aria-label="Période d'analyse">
+                  {(Object.keys(PERIOD_LABELS) as Period[]).map((key) => (
+                    <CButton
+                      key={key}
+                      type="button"
+                      color={period === key ? 'primary' : 'secondary'}
+                      variant={period === key ? undefined : 'outline'}
+                      active={period === key}
+                      size="sm"
+                      onClick={() => setPeriod(key)}
+                    >
+                      {PERIOD_SHORT_LABELS[key]}
+                    </CButton>
+                  ))}
+                </CButtonGroup>
+                <CButton
+                  type="button"
+                  color="primary"
+                  variant="outline"
+                  size="sm"
+                  className="d-flex align-items-center gap-2"
+                  onClick={handleExport}
+                  disabled={revenueSeries.length === 0}
+                >
+                  <Download className="size-4" />
+                  Exporter
+                </CButton>
+              </div>
+            </div>
+
+            {reportLoading ? (
+              <Skeleton className="mt-6 h-52 w-full rounded-xl" />
+            ) : hasRevenueData ? (
+              <div className="mt-6 h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={revenueSeries} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                    <defs>
+                      <linearGradient id="dashboard-revenue" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#5856d6" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="#5856d6" stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="dashboard-expenses" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#e55353" stopOpacity={0.28} />
+                        <stop offset="95%" stopColor="#e55353" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                    <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={12} />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      fontSize={12}
+                      width={70}
+                      tickFormatter={(value: number) =>
+                        new Intl.NumberFormat('fr-FR', { notation: 'compact' }).format(value)
+                      }
+                    />
+                    <Tooltip
+                      formatter={(value, name) => [
+                        `${new Intl.NumberFormat('fr-FR').format(Number(value))} FCFA`,
+                        name === 'revenue' ? 'Recettes' : 'Dépenses',
+                      ]}
+                      labelFormatter={(label) => `Journée du ${label}`}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="revenue"
+                      stroke="#5856d6"
+                      strokeWidth={2}
+                      fill="url(#dashboard-revenue)"
+                      // Tracé animé au premier affichage seulement : changer de
+                      // période ne redessine pas la courbe depuis zéro.
+                      isAnimationActive={!chartAnimated}
+                      animationDuration={600}
+                      animationEasing="ease-out"
+                      onAnimationEnd={() => setChartAnimated(true)}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="expenses"
+                      stroke="#e55353"
+                      strokeWidth={2}
+                      fill="url(#dashboard-expenses)"
+                      isAnimationActive={!chartAnimated}
+                      animationDuration={600}
+                      animationEasing="ease-out"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="mt-6 flex min-h-52 flex-col items-center justify-center rounded-xl border border-dashed bg-muted/20 p-6 text-center">
+                <ChartNoAxesCombined className="float-soft size-9 text-muted-foreground" />
+                <p className="mt-3 font-medium">Aucune opération sur la période</p>
+                <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                  Enregistrez des lavages ou des dépenses : la courbe se construit
+                  automatiquement à partir de vos données réelles.
+                </p>
+              </div>
+            )}
+
+            <div className="coreui-chart-footer -mx-5 -mb-5 mt-6 border-t px-5 py-3">
+              <CRow className="text-center">
+                <CCol xs={4}>
+                  <div className="text-body-secondary small">Lavages terminés</div>
+                  <div className="fw-semibold text-truncate">
+                    {totals ? `${formatCount(totals.completed_washes)} / ${formatCount(totals.total_washes)}` : '—'}
+                  </div>
+                  <CProgress thin className="mt-2" color="success" value={completionPercent} />
+                </CCol>
+                <CCol xs={4}>
+                  <div className="text-body-secondary small">Lavages encaissés</div>
+                  <div className="fw-semibold text-truncate">
+                    {totals ? `${formatCount(totals.paid_washes)} / ${formatCount(totals.total_washes)}` : '—'}
+                  </div>
+                  <CProgress thin className="mt-2" color="info" value={paidPercent} />
+                </CCol>
+                <CCol xs={4}>
+                  <div className="text-body-secondary small">Dépenses / recettes</div>
+                  <div className="fw-semibold text-truncate">
+                    {totals?.revenue_cents ? `${expenseRatio} %` : '—'}
+                  </div>
+                  <CProgress thin className="mt-2" color="warning" value={Math.min(expenseRatio, 100)} />
+                </CCol>
+              </CRow>
+            </div>
+          </Surface>
+
+          <Surface elevation={1} className="p-5">
+            <div className="flex items-center gap-2">
+              <Activity className="size-5 text-muted-foreground" />
+              <h2 className="font-semibold">État de la station</h2>
+            </div>
+
+            <div className="mt-5 space-y-4">
+              <div className="flex items-start gap-3">
+                <span className="rounded-lg bg-muted p-2">
+                  <Banknote className="size-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">Session de caisse</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {cashSessionLoading
+                      ? 'Vérification en cours…'
+                      : cashSession
+                        ? `Solde théorique ${formatFCFA(cashSession.theoretical_balance_cents)}.`
+                        : 'Aucune caisse ouverte : ouvrez-en une avant les encaissements.'}
+                  </p>
+                </div>
+                {cashSessionLoading ? (
+                  <Skeleton className="h-5 w-16" />
+                ) : (
+                  <Badge variant={cashSession ? 'secondary' : 'outline'}>
+                    {cashSession ? 'Ouverte' : 'Fermée'}
+                  </Badge>
+                )}
+              </div>
+
+              <div className="flex items-start gap-3">
+                <span className="rounded-lg bg-muted p-2">
+                  <Clock3 className="size-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">Activité récente</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {reportLoading
+                      ? 'Chargement des opérations…'
+                      : totals
+                        ? `${formatCount(totals.total_washes)} lavage${totals.total_washes === 1 ? '' : 's'} et ${formatCount(totals.paid_washes)} encaissement${totals.paid_washes === 1 ? '' : 's'} sur la période.`
+                        : "L'historique sera affiché à partir des lavages enregistrés."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3">
+                <span className="rounded-lg bg-muted p-2">
+                  <Settings2 className="size-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">Configuration</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Vérifiez les prestations, les tarifs et les informations de la station.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </Surface>
         </section>
 
         {/* Action-first workspace: les décisions du jour avant les statistiques. */}
@@ -521,233 +751,6 @@ export default function DashboardPage() {
 
           {/* key force le re-chargement des métriques lors de l’actualisation */}
           <DashboardMetrics key={refreshKey} />
-        </section>
-
-        {/* Finance and operations overview */}
-        <section className="space-y-5">
-          <div>
-            <h2 className="text-lg font-semibold tracking-tight">
-              Finances et activité
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              Calculé par l'API sur la période sélectionnée ({PERIOD_LABELS[period].toLowerCase()}).
-            </p>
-          </div>
-
-          {reportError && (
-            <p
-              role="alert"
-              className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
-            >
-              Impossible de charger les indicateurs financiers : {reportError}
-            </p>
-          )}
-
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <SummaryCard
-              title="Recettes encaissées"
-              value={totals?.revenue_cents}
-              unit={formatFCFA}
-              description="Paiements confirmés, hors opérations annulées."
-              icon={Wallet}
-              loading={reportLoading}
-              index={0}
-              trend={revenueSeries.map((day) => day.revenue)}
-              explanation="Somme des paiements confirmés sur la période, opérations annulées exclues. Un paiement mobile money en attente n'est pas compté avant confirmation."
-            />
-            <SummaryCard
-              title="Lavages réalisés"
-              value={totals?.completed_washes}
-              unit={formatCount}
-              description={
-                totals
-                  ? `${formatCount(totals.total_washes)} lavage${totals.total_washes === 1 ? '' : 's'} enregistré${totals.total_washes === 1 ? '' : 's'} au total sur la période.`
-                  : 'Nombre de lavages terminés sur la période.'
-              }
-              icon={CarFront}
-              loading={reportLoading}
-              index={1}
-              trend={revenueSeries.map((day) => day.washes)}
-              explanation="Lavages au statut « terminé » sur la période. Les lavages en cours et annulés ne sont pas inclus."
-            />
-            <SummaryCard
-              title="Dépenses enregistrées"
-              value={totals?.expenses_cents}
-              unit={formatFCFA}
-              description="Sorties enregistrées dans le module des dépenses."
-              icon={Receipt}
-              loading={reportLoading}
-              index={2}
-              trend={revenueSeries.map((day) => day.expenses)}
-              explanation="Dépenses saisies dans le module Dépenses sur la période, quel que soit leur mode de règlement."
-            />
-            <SummaryCard
-              title="Solde opérationnel estimé"
-              value={totals?.net_cents}
-              unit={formatFCFA}
-              description="Recettes moins dépenses enregistrées. Ce n'est pas un bénéfice comptable."
-              icon={ChartNoAxesCombined}
-              loading={reportLoading}
-              index={3}
-              trend={revenueSeries.map((day) => day.revenue - day.expenses)}
-              explanation="Recettes encaissées moins dépenses enregistrées. Ce n'est pas un bénéfice comptable : salaires, impôts et amortissements n'y figurent pas."
-            />
-          </div>
-        </section>
-
-        {/* Activity panels */}
-        <section className="grid gap-4 xl:grid-cols-3">
-          <Surface elevation={1} className="p-5 xl:col-span-2">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="font-semibold">Évolution des recettes</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Recettes et dépenses jour par jour, en FCFA.
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={handleExport}
-                disabled={revenueSeries.length === 0}
-              >
-                <Download className="size-4" />
-                Exporter
-              </Button>
-            </div>
-
-            {reportLoading ? (
-              <Skeleton className="mt-6 h-52 w-full rounded-xl" />
-            ) : hasRevenueData ? (
-              <div className="mt-6 h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={revenueSeries} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                    <defs>
-                      <linearGradient id="dashboard-revenue" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.35} />
-                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                      </linearGradient>
-                      <linearGradient id="dashboard-expenses" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#f97316" stopOpacity={0.28} />
-                        <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                    <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={12} />
-                    <YAxis
-                      tickLine={false}
-                      axisLine={false}
-                      fontSize={12}
-                      width={70}
-                      tickFormatter={(value: number) =>
-                        new Intl.NumberFormat('fr-FR', { notation: 'compact' }).format(value)
-                      }
-                    />
-                    <Tooltip
-                      formatter={(value, name) => [
-                        `${new Intl.NumberFormat('fr-FR').format(Number(value))} FCFA`,
-                        name === 'revenue' ? 'Recettes' : 'Dépenses',
-                      ]}
-                      labelFormatter={(label) => `Journée du ${label}`}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="revenue"
-                      stroke="#3b82f6"
-                      strokeWidth={2}
-                      fill="url(#dashboard-revenue)"
-                      // Tracé animé au premier affichage seulement : changer de
-                      // période ne redessine pas la courbe depuis zéro.
-                      isAnimationActive={!chartAnimated}
-                      animationDuration={600}
-                      animationEasing="ease-out"
-                      onAnimationEnd={() => setChartAnimated(true)}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="expenses"
-                      stroke="#f97316"
-                      strokeWidth={2}
-                      fill="url(#dashboard-expenses)"
-                      isAnimationActive={!chartAnimated}
-                      animationDuration={600}
-                      animationEasing="ease-out"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            ) : (
-              <div className="mt-6 flex min-h-52 flex-col items-center justify-center rounded-xl border border-dashed bg-muted/20 p-6 text-center">
-                <ChartNoAxesCombined className="float-soft size-9 text-muted-foreground" />
-                <p className="mt-3 font-medium">Aucune opération sur la période</p>
-                <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-                  Enregistrez des lavages ou des dépenses : la courbe se construit
-                  automatiquement à partir de vos données réelles.
-                </p>
-              </div>
-            )}
-          </Surface>
-
-          <Surface elevation={1} className="p-5">
-            <div className="flex items-center gap-2">
-              <Activity className="size-5 text-muted-foreground" />
-              <h2 className="font-semibold">État de la station</h2>
-            </div>
-
-            <div className="mt-5 space-y-4">
-              <div className="flex items-start gap-3">
-                <span className="rounded-lg bg-muted p-2">
-                  <Banknote className="size-4" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">Session de caisse</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {cashSessionLoading
-                      ? 'Vérification en cours…'
-                      : cashSession
-                        ? `Solde théorique ${formatFCFA(cashSession.theoretical_balance_cents)}.`
-                        : 'Aucune caisse ouverte : ouvrez-en une avant les encaissements.'}
-                  </p>
-                </div>
-                {cashSessionLoading ? (
-                  <Skeleton className="h-5 w-16" />
-                ) : (
-                  <Badge variant={cashSession ? 'secondary' : 'outline'}>
-                    {cashSession ? 'Ouverte' : 'Fermée'}
-                  </Badge>
-                )}
-              </div>
-
-              <div className="flex items-start gap-3">
-                <span className="rounded-lg bg-muted p-2">
-                  <Clock3 className="size-4" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">Activité récente</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {reportLoading
-                      ? 'Chargement des opérations…'
-                      : totals
-                        ? `${formatCount(totals.total_washes)} lavage${totals.total_washes === 1 ? '' : 's'} et ${formatCount(totals.paid_washes)} encaissement${totals.paid_washes === 1 ? '' : 's'} sur la période.`
-                        : "L'historique sera affiché à partir des lavages enregistrés."}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <span className="rounded-lg bg-muted p-2">
-                  <Settings2 className="size-4" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">Configuration</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Vérifiez les prestations, les tarifs et les informations de la station.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </Surface>
         </section>
 
         {/* Quick actions */}

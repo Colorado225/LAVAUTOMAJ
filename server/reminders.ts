@@ -3,6 +3,8 @@ import { env } from "./env.ts"
 import { runScheduledPurges } from "./organization-deletion.ts"
 import { sendMail, trialReminderMessage, renewalReminderMessage } from "./mailer.ts"
 import { computeSubscriptionState, TRIAL_WARNING_DAYS, type SubscriptionState } from "./entitlements.ts"
+import { runMonitoringAlerts } from "./monitoring-alerts.ts"
+import { runScheduledReconciliation } from "./reconciliation.ts"
 
 // ---------------------------------------------------------------------------
 // Relances d'échéance d'abonnement
@@ -253,10 +255,14 @@ export function billingUrl(): string {
 }
 
 let timer: NodeJS.Timeout | null = null
+let schedulerStarted = false
+let alertTimer: NodeJS.Timeout | null = null
+let alertTickRunning = false
 
 /** Démarre le planificateur horaire (idempotent). */
 export function startReminderScheduler(pool: Pool): void {
-  if (!env.REMINDERS_ENABLED || env.NODE_ENV === "test" || timer) return
+  if (env.NODE_ENV === "test" || schedulerStarted) return
+  schedulerStarted = true
 
   if (!env.APP_URL) {
     console.warn(
@@ -267,15 +273,30 @@ export function startReminderScheduler(pool: Pool): void {
   const intervalMs = env.REMINDERS_INTERVAL_MINUTES * 60_000
   const tick = async () => {
     try {
-      const outcomes = await runSubscriptionReminders(pool)
-      if (outcomes.length) {
-        console.info(`[relances] ${outcomes.length} relance(s) d'abonnement traitée(s).`)
+      if (env.REMINDERS_ENABLED) {
+        const outcomes = await runSubscriptionReminders(pool)
+        if (outcomes.length) {
+          console.info(`[relances] ${outcomes.length} relance(s) d'abonnement traitée(s).`)
+        }
       }
     } catch (error) {
       console.error(
         "[relances] Passage échoué :",
         error instanceof Error ? error.message : "erreur inconnue",
       )
+    }
+
+    // Rapprochement du relevé distant. Isolé des relances : une indisponibilité
+    // de l'agrégateur ne doit empêcher ni les e-mails ni les purges.
+    try {
+      const result = await runScheduledReconciliation(pool)
+      if (result?.status === "success") {
+        console.info(`[rapprochement] Lot ${result.batch_id} : ${result.matched_rows} correspondance(s), ${result.discrepancy_rows} écart(s).`)
+      } else if (result?.status === "failed") {
+        console.error(`[rapprochement] Passage échoué : ${result.error}`)
+      }
+    } catch (error) {
+      console.error("[rapprochement] Passage interrompu :", error instanceof Error ? error.message : "erreur inconnue")
     }
 
     // Purges arrivées à échéance. Dans le même passage que les relances
@@ -298,16 +319,41 @@ export function startReminderScheduler(pool: Pool): void {
     }
   }
 
-  // Premier passage après 30 s pour ne pas ralentir le démarrage.
+  // Premier passage après 30 s pour ne pas ralentir le démarrage. Le passage
+  // exécute aussi rapprochement et purges même si les seuls e-mails sont off.
   const initial = setTimeout(() => void tick(), 30_000)
   initial.unref?.()
   timer = setInterval(() => void tick(), intervalMs)
   timer.unref?.()
+
+  // Les alertes ont leur propre cadence : attendre la relance horaire des
+  // abonnements rendrait un pic de 5xx visible bien trop tard.
+  const alertTick = async () => {
+    if (alertTickRunning) return
+    alertTickRunning = true
+    try {
+      const outcomes = await runMonitoringAlerts(pool)
+      if (outcomes.length) console.info(`[surveillance] ${outcomes.length} alerte(s) proactive(s) déclenchée(s).`)
+    } catch (error) {
+      console.error("[surveillance] Passage des alertes échoué :", error instanceof Error ? error.message : "erreur inconnue")
+    } finally {
+      alertTickRunning = false
+    }
+  }
+  const initialAlerts = setTimeout(() => void alertTick(), 45_000)
+  initialAlerts.unref?.()
+  alertTimer = setInterval(() => void alertTick(), env.MONITORING_ALERT_INTERVAL_MINUTES * 60_000)
+  alertTimer.unref?.()
 }
 
 export function stopReminderScheduler(): void {
+  schedulerStarted = false
   if (timer) {
     clearInterval(timer)
     timer = null
+  }
+  if (alertTimer) {
+    clearInterval(alertTimer)
+    alertTimer = null
   }
 }

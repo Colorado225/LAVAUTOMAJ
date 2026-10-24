@@ -1,6 +1,9 @@
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import "./index.css"
+import "@coreui/coreui/dist/css/coreui.min.css"
+import "simplebar-react/dist/simplebar.min.css"
+import "./coreui.css"
 import App from "./App.tsx"
 import { registerServiceWorker } from "@/lib/register-sw"
 

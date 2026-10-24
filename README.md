@@ -8,7 +8,7 @@ rapports d'activité et onboarding guidé. Montants en **F CFA (XOF)**, stockés
 
 | Couche | Technologies |
 |---|---|
-| Frontend | React 19 · Vite · TypeScript · Tailwind CSS 4 · shadcn/ui · React Router 7 · Recharts |
+| Frontend | React 19 · Vite · TypeScript · CoreUI (Console) · Tailwind CSS 4 · shadcn/ui · React Router 7 · Recharts |
 | Backend | Express 5 (exécuté via `tsx`), API REST `/api/v1` |
 | Authentification | Maison : e-mail + mot de passe (scrypt), sessions httpOnly stockées dans PostgreSQL |
 | Base de données | PostgreSQL ([Neon](https://neon.tech)) — schéma auto-créé au démarrage |
@@ -90,6 +90,14 @@ Variables d'environnement (voir [`.env.example`](.env.example)) :
   démarrage. **Vide = console entièrement fermée.**
 - `PLATFORM_ADMIN_PASSWORD` — mot de passe posé sur les comptes d'opérateur
   **créés** au démarrage. Ne réécrit jamais un mot de passe existant.
+- `MONITORING_ALERT_INTERVAL_MINUTES` — cadence des alertes de surveillance.
+  Leurs seuils et destinataires sont réglés dans la Console.
+- `WHATSAPP_ACCESS_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` /
+  `WHATSAPP_ALERT_TEMPLATE` — alertes WhatsApp Cloud par modèle approuvé.
+- `RECONCILIATION_ENABLED` / `RECONCILIATION_PROVIDER` /
+  `RECONCILIATION_STATEMENT_URL` / `RECONCILIATION_STATEMENT_TOKEN` —
+  connecteur planifié facultatif de relevé d'agrégateur. L'import CSV/JSON
+  manuel dans `/console/rapprochement` fonctionne sans ces variables.
 
 > L'authentification ne dépend d'aucun service externe : les comptes (mot de passe
 > haché scrypt) et les sessions (cookies httpOnly, table `auth_sessions`) vivent
@@ -179,11 +187,11 @@ tests/               # Tests unitaires (node:test via tsx)
 
 ## Console de l'éditeur
 
-Application **séparée** réservée au créateur, servie sous `/console` : suivi du
-parc, registre des encaissements avec exports comptables, recherche de comptes
-dans tout le parc avec rôles et sessions, file d'assistance avec délai de
-réponse mesuré par forfait, surveillance technique du service (taux d'erreur,
-latence, pannes regroupées), suppression d'une organisation en deux temps.
+Application **séparée**, servie sous `/console` dans la coquille CoreUI :
+suivi du parc, registre des encaissements avec exports comptables,
+rapprochement des relevés et file d'écarts, recherche de comptes, assistance
+avec notification du client, alertes sortantes e-mail/WhatsApp et gestion des
+opérateurs avec rôles `admin` / `supervisor` / `support` (lecture seule).
 
 ```bash
 # .env — puis redémarrer le serveur
@@ -194,12 +202,14 @@ PLATFORM_ADMIN_PASSWORD=UnMotDePasseLongEtUnique
 Les comptes sont **créés automatiquement** au démarrage et vivent dans leur
 propre table, `platform_operators`, sans aucun lien avec les comptes de
 station : ni le même mot de passe, ni la même session, ni la même durée (2
-jours contre 30). Retirer une adresse de la liste désactive l'opérateur et
-coupe ses sessions au redémarrage suivant.
+jours contre 30). Retirer une adresse de la liste ne désactive que son compte
+**d'amorçage** et coupe ses sessions au redémarrage suivant.
 
-Le mot de passe posé par `PLATFORM_ADMIN_PASSWORD` ne sert qu'à l'amorçage. Pour
-le changer ensuite : `npm run console:password -- vous@exemple.ci` (serveur
-arrêté si la base est la base embarquée), voir `BACK-OFFICE.md` §2.
+Le mot de passe posé par `PLATFORM_ADMIN_PASSWORD` ne sert qu'à l'amorçage.
+Ensuite, un administrateur crée les comptes, change leurs rôles, réinitialise
+leurs mots de passe et révoque leurs sessions depuis **Console → Opérateurs**.
+Le script `npm run console:password -- vous@exemple.ci` reste un recours de
+secours (serveur arrêté avec PGlite), voir `BACK-OFFICE.md` §2.
 
 **Aucune passerelle depuis le produit** : rien dans l'application station ne
 mentionne la console — pas d'entrée de menu, pas de lien, pas de redirection —
@@ -217,13 +227,18 @@ Détail des décisions, des routes et des tests : [`BACK-OFFICE.md`](BACK-OFFICE
 Le client ouvre une **intention de paiement** depuis son tableau de bord
 (`POST /subscription/checkout`), reçoit une référence courte à mentionner lors
 du transfert mobile money, paie, puis déclare sa transaction. Une déclaration
-n'active rien : vous validez en un clic depuis `/admin`, l'intention portant
+n'active rien : vous validez en un clic depuis `/console/paiements`, l'intention portant
 déjà le forfait, la durée et le montant.
 
 Les trois déclencheurs d'activation prévus — validation manuelle, webhook
 d'agrégateur, rattrapage — convergent tous sur `activateSubscription()`
 (`server/subscription-service.ts`). Brancher CinetPay ou PayDunya revient donc
 à écrire un adaptateur, sans rien réécrire.
+
+Le **rapprochement** est un contrôle distinct de l'encaissement : il compare
+références et montants d'un relevé CSV/JSON (ou du connecteur planifié) aux
+lignes de `subscription_payments`. Une ligne payée mais absente du registre
+ouvre un écart ; elle n'active jamais l'abonnement d'elle-même.
 
 Workflow complet, pièges d'intégration et ordre recommandé :
 [`WORKFLOW-PAIEMENT.md`](WORKFLOW-PAIEMENT.md).
