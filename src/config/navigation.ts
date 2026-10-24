@@ -8,6 +8,7 @@ import {
   CreditCard,
   Database,
   Droplets,
+  Gauge,
   History,
   LayoutPanelLeft,
   List,
@@ -115,6 +116,12 @@ export const ROUTE_META: Record<string, RouteMeta> = {
     section: "Finance",
     icon: Receipt,
     description: "Enregistrer et suivre les dépenses de la station.",
+  },
+  "/compteurs": {
+    label: "Compteurs",
+    section: "Finance",
+    icon: Gauge,
+    description: "Relevés CIE/SODECI, consommations et factures liées.",
   },
   "/reports": {
     label: "Rapports",
@@ -409,8 +416,13 @@ const CONTEXT_COMMANDS: Record<string, ContextCommand[]> = {
     { label: "Lavages non payés", href: "/washes", hint: "À encaisser", icon: Droplets },
   ],
   "/expenses": [
+    { label: "Relever les compteurs", href: "/compteurs", hint: "CIE & SODECI", icon: Gauge },
     { label: "Voir les rapports", href: "/reports", hint: "Dépenses de la période", icon: BarChart3 },
     { label: "Ouvrir la caisse", href: "/cash-drawer", hint: "Solde théorique", icon: Wallet },
+  ],
+  "/compteurs": [
+    { label: "Voir les dépenses", href: "/expenses", hint: "Factures comptabilisées", icon: Receipt },
+    { label: "Voir les rapports", href: "/reports", hint: "Charges mensuelles", icon: BarChart3 },
   ],
   "/equipe": [
     { label: "Modifier les horaires", href: "/horaires", hint: "Planning", icon: Clock },

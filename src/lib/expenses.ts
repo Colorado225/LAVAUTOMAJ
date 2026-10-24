@@ -116,4 +116,6 @@ export interface ExpenseRecord {
   reference: string | null
   /** Renseigné quand la dépense a été écrite par un achat, jamais à la main. */
   purchase_id: string | null
+  /** Renseigné quand la dépense provient d'une facture CIE/SODECI. */
+  utility_reading_id: string | null
 }

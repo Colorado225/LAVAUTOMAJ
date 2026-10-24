@@ -6,6 +6,18 @@ import { asyncRoute, body, tenant, parseId, requirePermission } from "./http.ts"
 import { HttpError } from "./auth.ts"
 import { fingerprint, withIdempotency } from "./idempotency.ts"
 import { assertSiteWritable } from "./plan-limits.ts"
+import { utilityIndexValueSchema } from "./utilities.ts"
+import { analyzeClosingUtilityReadings, recordClosingUtilityReadings } from "./utility-analysis.ts"
+
+const closingUtilityReadingSchema = z.object({
+  meter_id: z.string().uuid(),
+  index_value: utilityIndexValueSchema,
+  anomaly_comment: z.string().trim().max(500).optional(),
+  photo: z.object({
+    mime_type: z.enum(["image/jpeg", "image/webp"]),
+    data_base64: z.string().min(4).max(400004),
+  }).strip().optional(),
+}).strip()
 
 export const operationValidators = {
   openSession: z
@@ -25,7 +37,11 @@ export const operationValidators = {
     .object({
       counted_amount_cents: z.number().int().min(0).max(100000000),
       discrepancy_reason: z.string().trim().max(500).nullable().optional(),
+      utility_readings: z.array(closingUtilityReadingSchema).max(2).optional(),
     })
+    .strip(),
+  utilityPreview: z
+    .object({ utility_readings: z.array(closingUtilityReadingSchema).max(2).optional() })
     .strip(),
   expense: z
     .object({
@@ -79,7 +95,7 @@ const SESSION_SELECT = `
   ) m ON true`
 
 const EXPENSE_FIELDS =
-  "id, site_id, category, amount_cents, payment_method, cash_session_id, description, beneficiary, reference, status, expense_date, purchase_id, created_at"
+  "id, site_id, category, amount_cents, payment_method, cash_session_id, description, beneficiary, reference, status, expense_date, purchase_id, utility_reading_id, created_at"
 
 export function createOperationsRouter() {
   const r = Router()
@@ -225,6 +241,41 @@ export function createOperationsRouter() {
   )
 
   r.post(
+    "/cash-sessions/:id/utility-preview",
+    requirePermission("cash_session:manage"),
+    asyncRoute(async (req, res) => {
+      const t = tenant(req)
+      const id = parseId(req.params.id)
+      const input = body(operationValidators.utilityPreview, req.body)
+      const pool = db()
+      const client = await pool.connect()
+      try {
+        const sessionQ = await client.query(
+          "SELECT id, site_id, status FROM cash_sessions WHERE id=$1::uuid AND organization_id=$2::uuid",
+          [id, t.organizationId],
+        )
+        if (!sessionQ.rowCount) throw new HttpError(404, "cash_session_not_found", "Session introuvable.")
+        if (sessionQ.rows[0].status !== "open") {
+          throw new HttpError(409, "cash_session_closed", "Cette session de caisse est déjà clôturée.")
+        }
+        const dateQ = await client.query("SELECT CURRENT_DATE::text AS reading_date")
+        const readingDate = String(dateQ.rows[0].reading_date).slice(0, 10)
+        const readings = await analyzeClosingUtilityReadings(
+          client,
+          t.organizationId,
+          String(sessionQ.rows[0].site_id),
+          readingDate,
+          input.utility_readings ?? [],
+          { forUpdate: false, requireComments: false },
+        )
+        res.json({ reading_date: readingDate, readings })
+      } finally {
+        client.release()
+      }
+    }),
+  )
+
+  r.post(
     "/cash-sessions/:id/close",
     requirePermission("cash_session:manage"),
     asyncRoute(async (req, res) => {
@@ -252,6 +303,17 @@ export function createOperationsRouter() {
           throw new HttpError(400, "discrepancy_reason_required", "Justifiez l’écart avant de clôturer la session.")
         }
 
+        const dateQ = await client.query("SELECT CURRENT_DATE::text AS reading_date")
+        const closingReadings = await recordClosingUtilityReadings(
+          client,
+          t.organizationId,
+          t.userId,
+          String(session.site_id),
+          id,
+          String(dateQ.rows[0].reading_date).slice(0, 10),
+          input.utility_readings ?? [],
+        )
+
         await client.query(
           `UPDATE cash_sessions SET status='closed', closed_by=$3, closed_at=now(),
              closing_amount_cents=$4, expected_amount_cents=$5, discrepancy_reason=$6
@@ -260,7 +322,12 @@ export function createOperationsRouter() {
         )
         await client.query(
           "INSERT INTO audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, metadata) VALUES($1,$2,'cash_session.closed','cash_session',$3,$4)",
-          [t.organizationId, t.userId, id, JSON.stringify({ counted_amount_cents: input.counted_amount_cents, discrepancy_cents: discrepancy })],
+          [t.organizationId, t.userId, id, JSON.stringify({
+            counted_amount_cents: input.counted_amount_cents,
+            discrepancy_cents: discrepancy,
+            utility_reading_ids: closingReadings.map((reading) => reading.id),
+            utility_readings_created: closingReadings.filter((reading) => reading.created).length,
+          })],
         )
         const closedQ = await client.query(`${SESSION_SELECT} WHERE cs.id=$1::uuid`, [id])
         await client.query("COMMIT")
@@ -395,6 +462,14 @@ export function createOperationsRouter() {
             "expense_from_purchase",
             "Cette dépense provient d'un achat. Pour la corriger, annulez l'achat correspondant : la marchandise sera reprise en même temps.",
           )
+        }
+        // Le montant ou le paiement d'une facture peuvent être corrigés tant
+        // que la caisse est ouverte. En revanche, la déplacer de station ou
+        // la reclasser casserait son rattachement au compteur CIE/SODECI.
+        if (old.utility_reading_id &&
+          ((input.category !== undefined && input.category !== "utilities") ||
+           (input.site_id !== undefined && input.site_id !== old.site_id))) {
+          throw new HttpError(409, "expense_from_utility", "Cette dépense reste rattachée à son relevé CIE/SODECI : sa catégorie et sa station ne peuvent pas être changées ici.")
         }
 
         // A closed cash session is an accounting cut-off: its movements are frozen.

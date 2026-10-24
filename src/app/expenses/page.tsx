@@ -16,7 +16,6 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogTrigger } from "@/components/ui/dialog"
 import { TableSkeleton } from "@/components/ui/table-skeleton"
 import {
   ResponsiveTable,
@@ -98,19 +97,11 @@ export default function ExpensesPage() {
   const [createdExpenseId, setCreatedExpenseId] = useState<string | null>(null)
   const [highlightedExpenseId, setHighlightedExpenseId] = useState<string | null>(null)
 
-  function handleOpenChange(isOpen: boolean, eventDetails?: { reason?: string }) {
-    // Ne pas fermer le modal si l'utilisateur interagit avec un champ de formulaire à l'intérieur
-    // (sélecteur, input, etc.) pour éviter de fermer prématurément la modal
-    const isFormInteraction = eventDetails?.reason === 'form-interaction'
-
-    if (!isOpen && !isFormInteraction && createdExpenseId) {
+  function handleOpenChange(isOpen: boolean) {
+    if (!isOpen && createdExpenseId) {
       setHighlightedExpenseId(createdExpenseId)
       setCreatedExpenseId(null)
       setRefreshKey((key) => key + 1)
-    } else if (!isOpen && isFormInteraction) {
-      // Si c'était une interaction de formulaire, rouvrir le modal
-      setOpen(true)
-      return
     }
     setOpen(isOpen)
   }
@@ -125,16 +116,12 @@ export default function ExpensesPage() {
               Enregistrez et suivez les dépenses de votre station.
             </p>
           </div>
-          <Dialog open={open} onOpenChange={(isOpen, eventDetails) => handleOpenChange(isOpen, eventDetails)}>
-            <div className="flex flex-col items-start gap-1.5">
-            <DialogTrigger
-              render={
-                <Button
-                  disabled={expenseForm.disabled}
-                  aria-busy={expenseForm.busy}
-                  title={expenseForm.reason ?? undefined}
-                />
-              }
+          <div className="flex flex-col items-start gap-1.5">
+            <Button
+              onClick={() => setOpen(true)}
+              disabled={expenseForm.disabled}
+              aria-busy={expenseForm.busy}
+              title={expenseForm.reason ?? undefined}
             >
               {expenseForm.denied ? (
                 <Lock className="mr-2 h-4 w-4" />
@@ -142,10 +129,11 @@ export default function ExpensesPage() {
                 <Plus className="mr-2 h-4 w-4" />
               )}{" "}
               Nouvelle dépense
-            </DialogTrigger>
+            </Button>
             <BlockedReason reason={expenseForm.reason} className="max-w-72" />
-            </div>
-          </Dialog>
+          </div>
+          {/* Le formulaire possède le seul Dialog.Root : un second root contrôlé,
+              sans popup, fermerait celui-ci à chaque clic dans ses champs. */}
           <CreateExpenseModal
             open={open}
             onOpenChange={handleOpenChange}
@@ -257,6 +245,14 @@ export default function ExpensesPage() {
                               className="mt-0.5 block text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
                             >
                               Issue d’un achat — déjà comptée
+                            </Link>
+                          )}
+                          {e.utility_reading_id && (
+                            <Link
+                              to="/compteurs"
+                              className="mt-0.5 block text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                            >
+                              Issue d’un relevé CIE/SODECI — déjà comptée
                             </Link>
                           )}
                         </TableCell>

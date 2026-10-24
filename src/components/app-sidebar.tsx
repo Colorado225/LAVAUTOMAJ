@@ -19,6 +19,7 @@ import {
   TrendingUp,
   Clock,
   Droplets,
+  Gauge,
   RotateCcw,
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
@@ -146,6 +147,12 @@ export const NAV_GROUPS = [
         title: "Dépenses",
         url: "/expenses",
         icon: Receipt,
+        permission: "expense:read" as Permission,
+      },
+      {
+        title: "Compteurs",
+        url: "/compteurs",
+        icon: Gauge,
         permission: "expense:read" as Permission,
       },
     ],
