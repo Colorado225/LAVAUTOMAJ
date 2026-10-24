@@ -67,6 +67,21 @@ before(async () => {
     "INSERT INTO expenses(organization_id, category, amount_cents, payment_method) VALUES($1,'supply',222222,'cash')",
     [orgB],
   )
+  for (const [organizationId, number] of [[orgA, "RLS-CIE-A"], [orgB, "RLS-CIE-B"]] as const) {
+    const site = await pool.query("SELECT id FROM sites WHERE organization_id=$1::uuid ORDER BY created_at LIMIT 1", [organizationId])
+    const meter = await pool.query(
+      "INSERT INTO utility_meters(organization_id,site_id,provider,meter_number) VALUES($1,$2,'cie',$3) RETURNING id",
+      [organizationId, site.rows[0].id, number],
+    )
+    const reading = await pool.query(
+      "INSERT INTO utility_readings(organization_id,meter_id,reading_date,index_milli) VALUES($1,$2,CURRENT_DATE,100000) RETURNING id",
+      [organizationId, meter.rows[0].id],
+    )
+    await pool.query(
+      "INSERT INTO utility_reading_photos(organization_id,reading_id,mime_type,byte_size,photo_data) VALUES($1,$2,'image/jpeg',4,$3)",
+      [organizationId, reading.rows[0].id, Buffer.from([0xff, 0xd8, 0xff, 0xd9])],
+    )
+  }
   await pool.query(
     "INSERT INTO wash_items(wash_id, service_name, quantity, unit_price_cents, line_total_cents) VALUES($1,'Lavage A',1,100,100)",
     [washA],
@@ -113,6 +128,16 @@ test("sans WHERE, une station ne voit que ses propres dépenses", async () => {
     q.rows.some((row) => row.amount_cents === 111111),
     "la dépense de la station A doit être visible",
   )
+})
+
+test("les compteurs, relevés et photos restent cloisonnés même sans WHERE", async () => {
+  for (const table of ["utility_meters", "utility_readings", "utility_reading_photos"]) {
+    const q = await runWithTenant(scopeA(), () =>
+      pool.query<{ organization_id: string }>(`SELECT organization_id FROM ${table}`),
+    )
+    assert.ok(q.rows.length > 0, `${table} doit contenir la ligne de la station A`)
+    for (const row of q.rows) assert.equal(row.organization_id, orgA, `fuite RLS dans ${table}`)
+  }
 })
 
 test("un WHERE explicite vers une autre station ne renvoie rien", async () => {

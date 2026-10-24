@@ -51,8 +51,11 @@ const PURGE_ORDER: { table: string; where: string }[] = [
   { table: "payments", where: "organization_id = $1::uuid" },
   { table: "washes", where: "organization_id = $1::uuid" },
   { table: "notifications", where: "organization_id = $1::uuid" },
-  { table: "cash_sessions", where: "organization_id = $1::uuid" },
   { table: "expenses", where: "organization_id = $1::uuid" },
+  { table: "utility_reading_photos", where: "organization_id = $1::uuid" },
+  { table: "utility_readings", where: "organization_id = $1::uuid" },
+  { table: "utility_meters", where: "organization_id = $1::uuid" },
+  { table: "cash_sessions", where: "organization_id = $1::uuid" },
   // Les achats sont référencés par les mouvements de stock et par les
   // dépenses, tous deux déjà purgés ci-dessus. Les fournisseurs ferment la
   // marche, puisque les achats les désignent.

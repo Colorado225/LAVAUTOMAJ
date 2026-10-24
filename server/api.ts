@@ -489,7 +489,7 @@ export function createApiRouter() {
     }),
   )
 
-  // DELETE /api/v1/sites/:id — refuse when washes, sessions, expenses or workers still reference the site.
+  // DELETE /api/v1/sites/:id — refuse when operations or utility meters still reference the site.
   r.delete(
     "/sites/:id",
     requirePermission("settings:manage"),
@@ -504,11 +504,12 @@ export function createApiRouter() {
            (SELECT COUNT(*) FROM washes WHERE site_id=$1::uuid) +
            (SELECT COUNT(*) FROM cash_sessions WHERE site_id=$1::uuid) +
            (SELECT COUNT(*) FROM expenses WHERE site_id=$1::uuid) +
+           (SELECT COUNT(*) FROM utility_meters WHERE site_id=$1::uuid) +
            (SELECT COUNT(*) FROM workers WHERE site_id=$1::uuid)::int AS ref_count`,
         [id],
       )
       if (Number(refs.rows[0].ref_count) > 0) {
-        throw new HttpError(409, "site_in_use", "Des lavages, caisses, dépenses ou travailleurs référencent cette station. Désactivez-la plutôt.")
+        throw new HttpError(409, "site_in_use", "Des lavages, caisses, dépenses, compteurs ou travailleurs référencent cette station. Désactivez-la plutôt.")
       }
       await pool.query("DELETE FROM sites WHERE id=$1::uuid AND organization_id=$2::uuid", [id, t.organizationId])
       res.status(204).send()

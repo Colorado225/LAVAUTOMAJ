@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Link, useSearchParams } from "react-router-dom"
+import { Link, useLocation, useSearchParams } from "react-router-dom"
 import { Search } from "lucide-react"
 
 import { Input } from "@/components/ui/input"
@@ -19,6 +19,8 @@ const FILTERS = [
 
 export function ConsoleStations() {
   const [params, setParams] = useSearchParams()
+  const location = useLocation()
+  const notice = (location.state as { notice?: string } | null)?.notice
   const [rows, setRows] = React.useState<ConsoleOrganization[]>([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
@@ -101,6 +103,15 @@ export function ConsoleStations() {
           ))}
         </div>
       </div>
+
+      {notice && (
+        <p
+          role="status"
+          className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300"
+        >
+          {notice}
+        </p>
+      )}
 
       {loading ? (
         <div className="flex justify-center py-16" role="status" aria-busy="true">

@@ -80,6 +80,7 @@ const ROUTE_PERMISSION: Record<string, Permission> = {
   "/payments": "payment:read",
   "/cash-drawer": "cash_session:read",
   "/expenses": "expense:read",
+  "/compteurs": "expense:read",
   "/stock": "stock:read",
   "/achats": "purchase:manage",
   "/equipe": "attendance:read",

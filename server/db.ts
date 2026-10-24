@@ -151,6 +151,9 @@ const RLS_DIRECT_TABLES = [
   "cash_sessions",
   "cash_movements",
   "expenses",
+  "utility_meters",
+  "utility_readings",
+  "utility_reading_photos",
   "suppliers",
   "purchases",
   "purchase_items",
@@ -778,6 +781,68 @@ CREATE INDEX IF NOT EXISTS stock_movements_purchase_idx ON stock_movements(purch
 -- double comptage impossible : la depense n'est pas ressaisie a la main.
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS purchase_id uuid REFERENCES purchases(id);
 CREATE UNIQUE INDEX IF NOT EXISTS expenses_purchase_unique ON expenses(purchase_id) WHERE purchase_id IS NOT NULL;
+
+-- Compteurs d'eau et d'électricité : un CIE et un SODECI maximum par site.
+-- Les index sont stockés en millièmes d'unité (kWh ou m³) pour conserver
+-- exactement les relevés décimaux, sans jamais estimer un tarif fournisseur.
+CREATE TABLE IF NOT EXISTS utility_meters (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+ site_id uuid NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+ provider text NOT NULL CHECK (provider IN ('cie','sodeci')),
+ meter_number text NOT NULL,
+ is_active boolean NOT NULL DEFAULT true,
+ created_by uuid REFERENCES users(id),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(site_id, provider)
+);
+CREATE INDEX IF NOT EXISTS utility_meters_org_idx ON utility_meters(organization_id, site_id, provider);
+
+CREATE TABLE IF NOT EXISTS utility_readings (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+ meter_id uuid NOT NULL REFERENCES utility_meters(id) ON DELETE CASCADE,
+ reading_date date NOT NULL,
+ index_milli bigint NOT NULL CHECK (index_milli >= 0),
+ notes text,
+ anomaly_comment text,
+ created_by uuid REFERENCES users(id),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(meter_id, reading_date)
+);
+CREATE INDEX IF NOT EXISTS utility_readings_org_date_idx ON utility_readings(organization_id, reading_date DESC);
+CREATE INDEX IF NOT EXISTS utility_readings_meter_date_idx ON utility_readings(meter_id, reading_date DESC);
+ALTER TABLE utility_readings ADD COLUMN IF NOT EXISTS cash_session_id uuid REFERENCES cash_sessions(id);
+ALTER TABLE utility_readings ADD COLUMN IF NOT EXISTS anomaly_comment text;
+CREATE INDEX IF NOT EXISTS utility_readings_cash_session_idx ON utility_readings(cash_session_id) WHERE cash_session_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS utility_readings_id_org_key ON utility_readings(id, organization_id);
+
+-- Le binaire reste hors des listes de relevés. La clé étrangère composée
+-- garantit qu'une photo ne peut pas viser le relevé d'une autre organisation.
+CREATE TABLE IF NOT EXISTS utility_reading_photos (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ organization_id uuid NOT NULL,
+ reading_id uuid NOT NULL UNIQUE,
+ mime_type text NOT NULL CHECK (mime_type IN ('image/jpeg', 'image/webp')),
+ byte_size integer NOT NULL CHECK (byte_size BETWEEN 1 AND 300000),
+ photo_data bytea NOT NULL,
+ created_by uuid REFERENCES users(id),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ FOREIGN KEY (reading_id, organization_id) REFERENCES utility_readings(id, organization_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS utility_reading_photos_org_idx ON utility_reading_photos(organization_id, created_at DESC);
+
+-- La facture réelle devient une dépense « utilities ». Ce lien unique empêche
+-- qu'un même relevé facturé soit comptabilisé deux fois, même en cas de rejeu.
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS utility_reading_id uuid;
+DO $$ BEGIN
+ ALTER TABLE expenses ADD CONSTRAINT expenses_utility_reading_fk
+  FOREIGN KEY (utility_reading_id) REFERENCES utility_readings(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS expenses_utility_reading_unique
+ ON expenses(utility_reading_id) WHERE utility_reading_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS idempotency_keys (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id),
  key text NOT NULL, fingerprint text NOT NULL, response_status integer, response_body jsonb,

@@ -32,6 +32,11 @@ import { AnimatedNumber } from "@/components/ui/animated-number"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ArrowDownToLine, ArrowUpFromLine, Lock, Plus, WalletCards } from "lucide-react"
+import { currentUtilityMonth, type UtilitiesOverview } from "@/lib/utilities"
+import {
+  ClosingUtilityReadings,
+  type ClosingUtilitySubmission,
+} from "@/components/closing-utility-readings"
 
 interface Site {
   id: string
@@ -87,6 +92,7 @@ export default function CashDrawerPage() {
   const [closeDialogOpen, setCloseDialogOpen] = React.useState(false)
   const [countedAmount, setCountedAmount] = React.useState("")
   const [discrepancyReason, setDiscrepancyReason] = React.useState("")
+  const [closingUtilitySubmission, setClosingUtilitySubmission] = React.useState<ClosingUtilitySubmission>({ readings: [], canClose: false })
   const [refreshKey, setRefreshKey] = React.useState(0)
   // Un contrôleur unique pour les trois écritures de caisse.
   const mutation = useMutation()
@@ -120,6 +126,14 @@ export default function CashDrawerPage() {
     ? `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/movements?refresh=${refreshKey}`
     : ""
   const { data: movements } = useApi<CashMovement[]>(movementPath)
+  const utilitiesPath = siteId
+    ? `/api/v1/utilities?month=${currentUtilityMonth()}&site_id=${encodeURIComponent(siteId)}&refresh=${refreshKey}`
+    : ""
+  const { data: utilityOverview, loading: utilitiesLoading, error: utilitiesError } = useApi<UtilitiesOverview>(utilitiesPath)
+  const utilityMeters = React.useMemo(
+    () => utilityOverview?.meters.filter((meter) => meter.is_active) ?? [],
+    [utilityOverview],
+  )
 
   async function openCashSession() {
     const amountCents = xofToCents(openingAmount)
@@ -200,12 +214,22 @@ export default function CashDrawerPage() {
       return
     }
 
+    if (utilitiesLoading || utilitiesError) {
+      mutation.fail("Les compteurs n'ont pas pu être vérifiés. Rechargez-les avant de clôturer la caisse.")
+      return
+    }
+    if (!closingUtilitySubmission.canClose) {
+      mutation.fail("Calculez l'aperçu des compteurs et ajoutez les commentaires demandés avant de clôturer.")
+      return
+    }
+
     const outcome = await mutation.run({
       url: `/api/v1/cash-sessions/${encodeURIComponent(session.id)}/close`,
       method: "POST",
       body: {
         counted_amount_cents: countedAmountCents,
         discrepancy_reason: discrepancyReason.trim() || null,
+        utility_readings: closingUtilitySubmission.readings,
       },
       failure: "Impossible de clôturer la caisse.",
       busyKey: FORM_KEY,
@@ -214,6 +238,7 @@ export default function CashDrawerPage() {
     setCloseDialogOpen(false)
     setCountedAmount("")
     setDiscrepancyReason("")
+    setClosingUtilitySubmission({ readings: [], canClose: false })
     setRefreshKey((key) => key + 1)
   }
 
@@ -221,7 +246,6 @@ export default function CashDrawerPage() {
   const countHasDiscrepancy =
     session != null && parsedCountedAmount != null &&
     parsedCountedAmount !== session.theoretical_balance_cents
-
   return (
     <BaseLayout title="Caisse" description="Ouverture, clôture et suivi de la caisse." hideHeading>
       <div className="p-4">
@@ -384,6 +408,7 @@ export default function CashDrawerPage() {
                     onClick={() => {
                       setCountedAmount("")
                       setDiscrepancyReason("")
+                      setClosingUtilitySubmission({ readings: [], canClose: false })
                       mutation.reset()
                       setCloseDialogOpen(true)
                     }}
@@ -522,7 +547,7 @@ export default function CashDrawerPage() {
         </Dialog>
 
         <Dialog open={closeDialogOpen} onOpenChange={setCloseDialogOpen}>
-          <DialogContent>
+          <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-xl">
             <DialogHeader>
               <DialogTitle>Clôturer la session de caisse</DialogTitle>
               <DialogDescription>
@@ -543,6 +568,16 @@ export default function CashDrawerPage() {
                 disabled={saving}
               />
             </label>
+
+            <ClosingUtilityReadings
+              sessionId={session?.id ?? ""}
+              meters={utilityMeters}
+              loading={utilitiesLoading}
+              error={utilitiesError}
+              disabled={saving}
+              onChange={setClosingUtilitySubmission}
+            />
+
             {countHasDiscrepancy && (
               /* Apparition en fondu simple : pendant un comptage de caisse,
                  rien ne doit bouger sous les doigts de la personne qui saisit.
@@ -570,7 +605,7 @@ export default function CashDrawerPage() {
               </Button>
               <Button
                 onClick={closeCashSession}
-                disabled={saving || parsedCountedAmount == null || (countHasDiscrepancy && !discrepancyReason.trim())}
+                disabled={saving || parsedCountedAmount == null || !closingUtilitySubmission.canClose || (countHasDiscrepancy && !discrepancyReason.trim())}
               >
                 {saving ? "Clôture…" : "Confirmer la clôture"}
               </Button>
