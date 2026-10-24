@@ -372,6 +372,27 @@ export async function issueReceipt(
   }
 }
 
+/** Send the receipt text via WhatsApp and return the wa.me URL. */
+export async function sendReceiptViaWhatsApp(
+  pool: Pool,
+  organizationId: string,
+  washId: string,
+  receiptText: string
+) {
+  const { normalizeWhatsAppNumber, buildWhatsAppUrl } = await import("./support.ts")
+
+  // Récupérer la configuration WhatsApp depuis les variables d'environnement
+  const { env } = await import("./env.ts")
+  const whatsappNumber = env.SUPPORT_WHATSAPP?.trim() || "+225 07 00 00 00 00"
+  const normalizedNumber = normalizeWhatsAppNumber(whatsappNumber)
+  const whatsappUrl = buildWhatsAppUrl(normalizedNumber, receiptText)
+
+  // Note: L'envoi proprement dit est déclenché côté client via le lien URL.
+  // Ici on retourne simplement l'URL à utiliser.
+
+  return { whatsappUrl, normalizedNumber }
+}
+
 /** Historique des émissions, pour savoir combien de papiers circulent. */
 export async function receiptHistory(pool: Pool, organizationId: string, washId: string) {
   const q = await pool.query(

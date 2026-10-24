@@ -141,7 +141,15 @@ export function createPaymentsRouter() {
       })
       // Le rendu texte accompagne les données : une station dont le pilote
       // d'imprimante n'accepte que du texte brut l'envoie tel quel.
-      res.status(201).json({ receipt, text: renderReceiptText(receipt) })
+      const text = renderReceiptText(receipt)
+      // Si demandé, inclure l'URL WhatsApp dans la réponse
+      const jsonResponse: any = { receipt, text }
+      if (req.query.send_whatsapp === "true") {
+        const { sendReceiptViaWhatsApp } = await import("./receipt.ts")
+        const result = await sendReceiptViaWhatsApp(db(), t.organizationId, washId, text)
+        jsonResponse.whatsappUrl = result.whatsappUrl
+      }
+      res.status(201).json(jsonResponse)
     }),
   )
 

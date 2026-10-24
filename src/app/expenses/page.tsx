@@ -98,11 +98,19 @@ export default function ExpensesPage() {
   const [createdExpenseId, setCreatedExpenseId] = useState<string | null>(null)
   const [highlightedExpenseId, setHighlightedExpenseId] = useState<string | null>(null)
 
-  function handleOpenChange(isOpen: boolean) {
-    if (!isOpen && createdExpenseId) {
+  function handleOpenChange(isOpen: boolean, eventDetails?: { reason?: string }) {
+    // Ne pas fermer le modal si l'utilisateur interagit avec un champ de formulaire à l'intérieur
+    // (sélecteur, input, etc.) pour éviter de fermer prématurément la modal
+    const isFormInteraction = eventDetails?.reason === 'form-interaction'
+
+    if (!isOpen && !isFormInteraction && createdExpenseId) {
       setHighlightedExpenseId(createdExpenseId)
       setCreatedExpenseId(null)
       setRefreshKey((key) => key + 1)
+    } else if (!isOpen && isFormInteraction) {
+      // Si c'était une interaction de formulaire, rouvrir le modal
+      setOpen(true)
+      return
     }
     setOpen(isOpen)
   }
@@ -117,7 +125,7 @@ export default function ExpensesPage() {
               Enregistrez et suivez les dépenses de votre station.
             </p>
           </div>
-          <Dialog open={open} onOpenChange={handleOpenChange}>
+          <Dialog open={open} onOpenChange={(isOpen, eventDetails) => handleOpenChange(isOpen, eventDetails)}>
             <div className="flex flex-col items-start gap-1.5">
             <DialogTrigger
               render={

@@ -1,5 +1,5 @@
 import * as React from "react"
-import { AlertTriangle, Copy, Printer } from "lucide-react"
+import { AlertTriangle, Copy, MessageCircle, Printer } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -158,9 +158,8 @@ export function ReceiptPaper({ receipt }: { receipt: WashReceipt }) {
           {receipt.payments.map((payment, index) => (
             <Row
               key={index}
-              label={`  ${METHOD_LABELS[payment.method] ?? payment.method}${
-                payment.status === "pending" ? " (à vérifier)" : ""
-              }`}
+              label={`  ${METHOD_LABELS[payment.method] ?? payment.method}${payment.status === "pending" ? " (à vérifier)" : ""
+                }`}
               value={amount(payment.amount_cents)}
             />
           ))}
@@ -287,6 +286,15 @@ export function WashReceiptButton({
                 <Button onClick={() => window.print()}>
                   <Printer className="mr-2 size-4" /> Imprimer
                 </Button>
+                {receipt && (
+                  <Button
+                    variant="outline"
+                    onClick={() => window.open(`https://wa.me/${"2250700000000".replace(/[^0-9]/g, "")}?text=${encodeURIComponent(text)}`, "_blank")}
+                    disabled={busy}
+                  >
+                    <MessageCircle className="mr-2 size-4" /> WhatsApp
+                  </Button>
+                )}
                 <Button variant="outline" onClick={copyText}>
                   <Copy className="mr-2 size-4" /> {copied ? "Copié" : "Copier le texte"}
                 </Button>
